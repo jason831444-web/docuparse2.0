@@ -70,6 +70,7 @@ class LocalStorageService:
         name = Path(filename or "upload").name
         name = name.replace("\x00", "")
         name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name)
+        name = re.sub(r"(?:_\s*){2,}", "_", name)
         name = re.sub(r"\s+", " ", name).strip(" ._-")
         return name[:180] or "upload"
 

@@ -10,11 +10,9 @@ import {
   Files,
   FolderKanban,
   LayoutDashboard,
-  LogIn,
   Search,
   Settings,
   Upload,
-  UserPlus
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -29,11 +27,6 @@ const navItems = [
   { href: "/review", label: "Needs Review", icon: BellRing },
   { href: "/favorites", label: "Favorites", icon: FileHeart },
   { href: "/settings", label: "Settings", icon: Settings }
-];
-
-const authItems = [
-  { href: "/login", label: "Login", icon: LogIn },
-  { href: "/signup", label: "Signup", icon: UserPlus }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -68,13 +61,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </span>
               DocuParse
             </Link>
-            <div className="flex items-center gap-2">
-              {authItems.map((item) => (
-                <Link key={item.href} href={item.href} className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-                  {item.label}
-                </Link>
-              ))}
-            </div>
           </div>
         </div>
         {children}
@@ -114,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
           <div className="mt-8 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-            Browse by category or file type, then confirm or correct the AI result when needed.
+            Local-first document understanding with visible provider chains and review-before-trust workflows.
           </div>
         </aside>
         <div className="min-w-0">
@@ -139,8 +125,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   </span>
                 ) : null}
               </Link>
-              <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground">Login</Link>
-              <Link href="/signup" className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground">Start free</Link>
             </div>
           </header>
           {children}

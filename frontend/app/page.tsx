@@ -35,13 +35,13 @@ export default function DashboardPage() {
       <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="space-y-5">
           <div className="rounded-2xl border bg-white/95 p-8 shadow-sm shadow-slate-200/70">
-            <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">Launch-ready workflow workspace</p>
+            <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">Local AI document workspace</p>
             <h1 className="mt-3 max-w-3xl text-4xl font-semibold tracking-normal">
-              Upload documents, let AI organize them, then review, confirm, and find them later.
+              Upload documents, inspect the extraction path, then review, organize, and find them later.
             </h1>
             <p className="mt-4 max-w-2xl text-muted-foreground">
-              DocuParse automatically classifies documents into meaningful folders, preserves extracted text and AI interpretation separately,
-              and keeps review-required work easy to spot.
+              DocuParse classifies documents into meaningful folders, preserves extracted text and interpretation details separately,
+              and keeps review-required work easy to spot before you rely on the result.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Button asChild><Link href="/upload">Upload document</Link></Button>

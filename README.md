@@ -4,6 +4,14 @@ DocuParse is a local-first AI document understanding workspace. It helps users u
 
 The project is built as a portfolio-quality full-stack system rather than a simple OCR demo. It combines a Next.js review UI, FastAPI processing backend, PostgreSQL persistence, Docker local infrastructure, deterministic parsing, quality gates, and optional local GGUF interpretation through llama.cpp.
 
+## Portfolio Snapshot
+
+- **Project type:** full-stack AI document processing workspace
+- **Core engineering focus:** multi-format ingestion, local inference, reviewable AI output, search/category consistency, and Dockerized local infrastructure
+- **Best demo path:** upload a PDF guide and an XLSX implementation tracker, inspect the provider chain, edit a category, then verify search/review/notifications
+- **Architecture docs:** [docs/architecture.md](docs/architecture.md)
+- **Demo script:** [docs/demo.md](docs/demo.md)
+
 ## Problem
 
 Personal and small-team document collections are usually hard to search because files arrive in many formats: receipts, PDFs, spreadsheets, invoices, setup guides, resumes, notices, and notes. OCR alone gives raw text, but users still need category, title, summary, important dates, review status, and a way to correct mistakes.
