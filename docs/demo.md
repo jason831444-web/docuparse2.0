@@ -44,6 +44,39 @@ For the real-world failure cases that motivated recent improvements, use:
 
 The expected behavior is that structure and purpose win over isolated words.
 
+## Screenshot Prep Data
+
+For richer portfolio screenshots, upload a curated set of safe sample documents from the eval corpus:
+
+```bash
+cd /Users/yoonjaeseong/Desktop/projects/DocuParse
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py
+```
+
+Useful options:
+
+```bash
+# Upload a smaller slice if local GGUF processing is slow.
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py --limit 4
+
+# Upload without waiting for processing to finish.
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py --no-wait
+```
+
+This script does not create fake production data. It uploads the existing safe sample corpus through the real API so the Categories, Review, Notifications, and Document Detail screens are populated by the same processing path used in the app.
+
+For the 3rd screenshot, open:
+
+```text
+http://localhost:3001/categories
+```
+
+For the 4th screenshot, open a processed document detail page and crop around the workflow assistant plus correction workspace:
+
+```text
+http://localhost:3001/documents/<document-id>
+```
+
 ## Short Demo Script
 
 1. **Dashboard**

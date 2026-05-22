@@ -22,7 +22,7 @@ export function CategorySelector({
 
   return (
     <div className="space-y-3">
-      <div className="flex min-w-0 flex-wrap gap-2 rounded-lg border bg-white p-2">
+      <div className="flex min-w-0 flex-wrap gap-2 rounded-lg border bg-slate-50 p-2">
         {shownFolders.map((folder) => {
           const selectionValue = folder.category || folder.value;
           const active = normalizedValue === selectionValue || normalizedValue === folder.value;
@@ -32,14 +32,14 @@ export function CategorySelector({
               type="button"
               onClick={() => onChange(selectionValue)}
               className={cn(
-                "flex min-h-9 max-w-full items-center gap-2 rounded-md border px-3 py-2 text-sm transition",
-                active ? "border-primary bg-primary text-primary-foreground" : "bg-muted/40 text-muted-foreground hover:border-primary/40 hover:bg-white hover:text-foreground"
+                "flex min-h-10 max-w-full items-center gap-2 rounded-md border px-3 py-2 text-sm shadow-sm transition",
+                active ? "border-primary bg-primary text-primary-foreground shadow-primary/20" : "bg-white text-muted-foreground hover:border-primary/40 hover:text-foreground"
               )}
               title={folder.label}
             >
               <Folder className="size-4 shrink-0" />
               <span className="truncate">{folder.label}</span>
-              <span className="text-xs opacity-75">{folder.count}</span>
+              <span className={cn("rounded-full px-2 py-0.5 text-xs", active ? "bg-white/20" : "bg-muted")}>{folder.count}</span>
             </button>
           );
         })}
@@ -49,6 +49,7 @@ export function CategorySelector({
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
         <Input
+          className="bg-white"
           value={normalizedValue}
           onChange={(event) => onChange(event.target.value)}
           placeholder="Type a category, e.g. implementation_schedule"

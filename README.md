@@ -206,6 +206,12 @@ See [docs/demo.md](docs/demo.md) for a fuller script. A short portfolio walkthro
 7. Open notifications and the review queue.
 8. Run or show `backend/eval/reports/latest-gemma.md` to demonstrate regression evaluation.
 
+Prepare a richer screenshot dataset with:
+
+```bash
+PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py
+```
+
 ## Portfolio Evidence To Add
 
 Recommended screenshots or GIFs:

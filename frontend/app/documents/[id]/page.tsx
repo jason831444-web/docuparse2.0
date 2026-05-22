@@ -11,9 +11,11 @@ import {
   CheckCheck,
   Download,
   FileText,
+  FolderKanban,
   Loader2,
   RefreshCw,
   Save,
+  ShieldCheck,
   Sparkles,
   Star,
   Tag,
@@ -447,72 +449,102 @@ export default function DocumentDetailPage() {
               />
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Edit document</CardTitle>
+          <Card className="overflow-hidden">
+            <CardHeader className="border-b bg-slate-50/70">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">Correction workspace</p>
+                  <CardTitle className="mt-1 flex items-center gap-2">
+                    <ShieldCheck className="size-5 text-primary" />
+                    Review and edit
+                  </CardTitle>
+                </div>
+                <Badge variant="outline">{categoryLabel}</Badge>
+              </div>
             </CardHeader>
-            <CardContent className="grid gap-4">
-              <label className="grid gap-2 text-sm font-medium">
-                Title
-                <Input {...form.register("title")} />
-              </label>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="grid gap-2 text-sm font-medium">
-                  Extracted date
-                  <Input type="date" {...form.register("extracted_date")} />
-                </label>
-                <label className="grid gap-2 text-sm font-medium">
-                  Amount
-                  <Input type="number" min="0" step="0.01" {...form.register("extracted_amount")} />
-                </label>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="grid gap-2 text-sm font-medium">
-                  Subtotal
-                  <Input type="number" min="0" step="0.01" {...form.register("subtotal")} />
-                </label>
-                <label className="grid gap-2 text-sm font-medium">
-                  Tax
-                  <Input type="number" min="0" step="0.01" {...form.register("tax")} />
-                </label>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="grid gap-2 text-sm font-medium">
-                  Currency
-                  <Input placeholder="USD" {...form.register("currency")} />
-                </label>
-                <label className="grid gap-2 text-sm font-medium">
-                  Merchant / source
-                  <Input {...form.register("merchant_name")} />
-                </label>
-              </div>
-              <div className="grid gap-2 text-sm font-medium">
-                Category folder
+            <CardContent className="grid gap-5 p-5">
+              <section className="rounded-lg border bg-white p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <FolderKanban className="size-4 text-primary" />
+                  <div>
+                    <p className="text-sm font-semibold">Category folder</p>
+                    <p className="text-xs text-muted-foreground">Move this document by meaning; search and filters use the normalized folder value.</p>
+                  </div>
+                </div>
                 <CategorySelector
                   value={selectedCategory}
                   folders={categories}
                   onChange={(value) => form.setValue("category", value, { shouldDirty: true })}
                 />
-              </div>
-              <p className="-mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                <Tag className="size-3.5" />
-                Changing the category moves this document into a different AI-organized folder.
-              </p>
-              <label className="grid gap-2 text-sm font-medium">
-                Tags
-                <Input placeholder="finance, spring-2026, review" {...form.register("tags_text")} />
-              </label>
-              <label className="grid gap-2 text-sm font-medium">
-                Summary
-                <Textarea className="min-h-28" {...form.register("summary")} />
-              </label>
-              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                  <Tag className="size-3.5" />
+                  Changing the category moves this document into a different AI-organized folder.
+                </p>
+              </section>
+
+              <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">
+                <div>
+                  <p className="text-sm font-semibold">Editable extraction</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Correct the user-facing fields while keeping the original extraction available for audit.</p>
+                </div>
+                <label className="grid gap-2 text-sm font-medium">
+                  Title
+                  <Input {...form.register("title")} />
+                </label>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    Extracted date
+                    <Input type="date" {...form.register("extracted_date")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    Amount
+                    <Input type="number" min="0" step="0.01" {...form.register("extracted_amount")} />
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    Subtotal
+                    <Input type="number" min="0" step="0.01" {...form.register("subtotal")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    Tax
+                    <Input type="number" min="0" step="0.01" {...form.register("tax")} />
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    Currency
+                    <Input placeholder="USD" {...form.register("currency")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    Merchant / source
+                    <Input {...form.register("merchant_name")} />
+                  </label>
+                </div>
+              </section>
+
+              <section className="grid gap-4 rounded-lg border bg-white p-4">
+                <div>
+                  <p className="text-sm font-semibold">Review notes</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Tags and summary make the corrected result easier to find later.</p>
+                </div>
+                <label className="grid gap-2 text-sm font-medium">
+                  Tags
+                  <Input placeholder="finance, spring-2026, review" {...form.register("tags_text")} />
+                </label>
+                <label className="grid gap-2 text-sm font-medium">
+                  Summary
+                  <Textarea className="min-h-28" {...form.register("summary")} />
+                </label>
+              </section>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-slate-50 p-3">
                 <Link href="/review" className="text-sm text-muted-foreground underline-offset-4 hover:underline">
                   Open review queue
                 </Link>
                 <Button type="submit" disabled={saving}>
                   {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                  Save changes
+                  Save corrected document
                 </Button>
               </div>
             </CardContent>
