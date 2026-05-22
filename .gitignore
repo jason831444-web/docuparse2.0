@@ -4,18 +4,38 @@
 __pycache__/
 *.py[cod]
 .venv/
+venv/
+*.pyc
+.pytest_cache/
 .env
+.env.*.local
 
 # Node
 node_modules/
 .next/
 out/
+dist/
 .env.local
 
+coverage/
+htmlcov/
+playwright-report/
+test-results/
+
 # Local uploads and database state
+uploads/
+media/uploads/
+generated/
+tmp/
 backend/uploads/*
 !backend/uploads/.gitkeep
 backend/models/
 backend/eval/reports/20*.json
 backend/eval/reports/20*.md
 *.log
+
+*.pt
+*.pth
+*.onnx
+*.gguf
+*.bin
