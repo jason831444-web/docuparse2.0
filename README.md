@@ -42,6 +42,32 @@ DocuParse is designed for a local document workflow: a student, researcher, free
 - Reprocess, confirm, mark needs review, favorite, bulk download, bulk delete, CSV export, and per-document JSON export
 - Evaluation harness for regression-checking title selection, category interpretation, summaries, action items, and provider-chain behavior
 
+## Screenshots
+
+### Dashboard Overview
+
+Upload, track, and review document-processing activity in one workspace.
+
+![Dashboard Overview](docs/screenshots/dashboard-overview.png)
+
+### Document Detail View
+
+Inspect extracted content, interpretation metadata, and provider-chain results.
+
+![Document Detail View](docs/screenshots/document-detail-view.png)
+
+### AI-Organized Category Folders
+
+Browse documents by interpreted purpose rather than raw file type.
+
+![AI-Organized Category Folders](docs/screenshots/ai-organized-category-folders.png)
+
+### Correction Workspace
+
+Review AI-generated results and update category and extracted fields before trust.
+
+![Correction Workspace](docs/screenshots/correction-workspace.png)
+
 ## Supported File Types
 
 | Family | Extensions | Processing path |
