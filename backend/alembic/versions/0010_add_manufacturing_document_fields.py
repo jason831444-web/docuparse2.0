@@ -1,6 +1,6 @@
 """add manufacturing document fields
 
-Revision ID: 0010_add_manufacturing_document_fields
+Revision ID: 0010_mfg_doc_fields
 Revises: 0009_presentation_document_type
 Create Date: 2026-06-03 00:00:00.000000
 """
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "0010_add_manufacturing_document_fields"
+revision: str = "0010_mfg_doc_fields"
 down_revision: Union[str, None] = "0009_presentation_document_type"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
