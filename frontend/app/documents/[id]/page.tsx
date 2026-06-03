@@ -32,7 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
-import { documentSummaryDetailed, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
+import { documentSummaryDetailed, extractionMethodLabel, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
@@ -337,7 +337,7 @@ export default function DocumentDetailPage() {
         <Card>
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">추출 경로</p>
-            <p className="mt-1 break-words text-sm font-semibold">{document.provider_chain || "확인 불가"}</p>
+            <p className="mt-1 break-words text-sm font-semibold">{extractionMethodLabel(document)}</p>
           </CardContent>
         </Card>
       </div>

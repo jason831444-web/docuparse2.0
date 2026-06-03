@@ -56,6 +56,24 @@ export function primaryCategoryLabel(document: { category?: string | null; workf
   return titleCaseLabel(document.category || profile || null);
 }
 
+export function extractionMethodLabel(document: { provider_chain?: string | null; extraction_method?: string | null }) {
+  const chain = `${document.provider_chain || ""}+${document.extraction_method || ""}`.toLowerCase();
+  const parts: string[] = [];
+  if (chain.includes("ocr")) {
+    parts.push("OCR 추출");
+  } else if (chain.includes("pdf_text") || chain.includes("txt_direct") || chain.includes("structured_text") || chain.includes("_direct")) {
+    parts.push("텍스트 직접 추출");
+  } else if (chain.includes("office") || chain.includes("xlsx") || chain.includes("docx")) {
+    parts.push("Office 문서 추출");
+  } else {
+    parts.push("문서 텍스트 추출");
+  }
+  if (chain.includes("ai_") || chain.includes("gemma") || chain.includes("llama") || chain.includes("heuristic_interpretation")) {
+    parts.push("AI 보조 분석");
+  }
+  return Array.from(new Set(parts)).join(" + ");
+}
+
 function workflowSummaryFields(document: { workflow_metadata?: Record<string, unknown> | null }) {
   const summaries = (document.workflow_metadata?.summaries ?? {}) as Record<string, unknown>;
   return {

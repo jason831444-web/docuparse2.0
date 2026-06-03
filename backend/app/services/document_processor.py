@@ -85,19 +85,20 @@ class DocumentProcessor:
             document.field_sources = sanitize_for_postgres(ai_result.field_sources or None)
             document.document_type = ai_result.document_type or parsed.document_type
             document.title = sanitize_for_postgres(ai_result.title or parsed.title)
-            document.extracted_date = ai_result.extracted_date or parsed.extracted_date
-            document.extracted_amount = ai_result.extracted_amount or parsed.extracted_amount
-            document.subtotal = ai_result.subtotal
-            document.tax = ai_result.tax
+            deterministic_first = self._parsed_manufacturing_has_business_data(parsed)
+            document.extracted_date = parsed.extracted_date or ai_result.extracted_date if deterministic_first else ai_result.extracted_date or parsed.extracted_date
+            document.extracted_amount = parsed.extracted_amount or ai_result.extracted_amount if deterministic_first else ai_result.extracted_amount or parsed.extracted_amount
+            document.subtotal = self._sum_line_item_field(parsed.line_items, "supply_amount") if deterministic_first and parsed.line_items else ai_result.subtotal
+            document.tax = self._sum_line_item_field(parsed.line_items, "tax_amount") if deterministic_first and parsed.line_items else ai_result.tax
             document.currency = ai_result.currency or parsed.currency
             document.merchant_name = sanitize_for_postgres(ai_result.merchant_name or parsed.merchant_name)
-            document.vendor_name = sanitize_for_postgres(ai_result.vendor_name or parsed.vendor_name or document.merchant_name)
-            document.customer_name = sanitize_for_postgres(ai_result.customer_name or parsed.customer_name)
-            document.document_number = sanitize_for_postgres(ai_result.document_number or parsed.document_number)
-            document.issue_date = ai_result.issue_date or parsed.issue_date or document.extracted_date
-            document.due_date = ai_result.due_date or parsed.due_date
-            document.line_items = sanitize_for_postgres(ai_result.line_items or parsed.line_items or [])
-            document.low_confidence_fields = sanitize_for_postgres(ai_result.low_confidence_fields or [])
+            document.vendor_name = sanitize_for_postgres((parsed.vendor_name or ai_result.vendor_name) if deterministic_first else (ai_result.vendor_name or parsed.vendor_name) or document.merchant_name)
+            document.customer_name = sanitize_for_postgres((parsed.customer_name or ai_result.customer_name) if deterministic_first else (ai_result.customer_name or parsed.customer_name))
+            document.document_number = sanitize_for_postgres((parsed.document_number or ai_result.document_number) if deterministic_first else (ai_result.document_number or parsed.document_number))
+            document.issue_date = (parsed.issue_date or ai_result.issue_date or document.extracted_date) if deterministic_first else (ai_result.issue_date or parsed.issue_date or document.extracted_date)
+            document.due_date = (parsed.due_date or ai_result.due_date) if deterministic_first else (ai_result.due_date or parsed.due_date)
+            document.line_items = sanitize_for_postgres((parsed.line_items or ai_result.line_items) if deterministic_first else (ai_result.line_items or parsed.line_items or []))
+            document.low_confidence_fields = sanitize_for_postgres([] if deterministic_first and parsed.line_items else ai_result.low_confidence_fields or [])
             document.category = ai_result.category or parsed.category
             document.tags = sanitize_for_postgres(ai_result.tags or parsed.tags)
             interpretation = self.category_interpreter.interpret(document, ai_result.cleaned_raw_text or raw_text)
@@ -129,6 +130,8 @@ class DocumentProcessor:
             ))
             workflow = self.workflow_enrichment.enrich(document, ai_result.cleaned_raw_text or raw_text, interpretation)
             document.workflow_summary = sanitize_for_postgres(workflow.workflow_summary)
+            if self._is_manufacturing_type(document):
+                document.summary = sanitize_for_postgres(workflow.workflow_summary)
             document.action_items = sanitize_for_postgres(workflow.action_items)
             document.warnings = sanitize_for_postgres(workflow.warnings)
             document.key_dates = sanitize_for_postgres(workflow.key_dates)
@@ -236,6 +239,31 @@ class DocumentProcessor:
             return None
         return "\n".join(dict.fromkeys(note for note in notes if note))
 
+    def _parsed_manufacturing_has_business_data(self, parsed: NormalizedDocument | object) -> bool:
+        doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
+        return doc_type in {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+        } and bool(getattr(parsed, "line_items", None))
+
+    def _sum_line_item_field(self, line_items: list[dict], field: str) -> Decimal | None:
+        total = Decimal("0")
+        found = False
+        for item in line_items or []:
+            value = item.get(field)
+            if value in (None, "", []):
+                continue
+            try:
+                total += Decimal(str(value).replace(",", ""))
+                found = True
+            except Exception:
+                continue
+        return total if found else None
+
     def _quality_notes(self, extraction_quality: QualityEvaluation, structured_quality: QualityEvaluation) -> list[str]:
         return [
             f"Quality gate {extraction_quality.stage}: score={extraction_quality.score}, sufficient={extraction_quality.sufficient}.",
@@ -265,11 +293,50 @@ class DocumentProcessor:
             document.low_confidence_fields = sorted(set(low_confidence))
             return True
         for index, item in enumerate(document.line_items, start=1):
-            for field in ["quantity", "unit_price", "line_total"]:
-                if item.get(field) in (None, "", []):
-                    low_confidence.append(f"line_items[{index}].{field}")
+            if item.get("item_name") in (None, "", []):
+                low_confidence.append(f"line_items[{index}].item_name")
+            if item.get("quantity") in (None, "", []):
+                low_confidence.append(f"line_items[{index}].quantity")
+            if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+                low_confidence.append(f"line_items[{index}].unit_price")
+                low_confidence.append(f"line_items[{index}].line_total")
+        if self._manufacturing_total_mismatch(document):
+            low_confidence.append("extracted_amount")
+            low_confidence.append("line_items.line_total")
         document.low_confidence_fields = sorted(set(low_confidence))
         return bool(document.low_confidence_fields)
+
+    def _is_manufacturing_type(self, document: Document) -> bool:
+        return getattr(document.document_type, "value", str(document.document_type or "")) in {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+            "inspection_report",
+            "contract",
+            "general_document",
+        }
+
+    def _manufacturing_total_mismatch(self, document: Document) -> bool:
+        if document.extracted_amount is None or not document.line_items:
+            return False
+        line_total = Decimal("0")
+        found = False
+        for item in document.line_items:
+            value = item.get("line_total")
+            if value in (None, "", []):
+                continue
+            try:
+                line_total += Decimal(str(value).replace(",", ""))
+                found = True
+            except Exception:
+                return True
+        if not found:
+            return False
+        tolerance = max(Decimal("1"), abs(document.extracted_amount) * Decimal("0.02"))
+        return abs(document.extracted_amount - line_total) > tolerance
 
     def _apply_title_hint(self, current_title: str | None, interpretation: CategoryInterpretation) -> str | None:
         if not interpretation.title_hint:

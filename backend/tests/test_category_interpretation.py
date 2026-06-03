@@ -67,3 +67,58 @@ def test_category_normalization_keeps_edit_and_filter_values_consistent():
     assert normalize_category_value("Engineering Planning") == "implementation_schedule"
     assert normalize_category_value("Project Tracker") == "implementation_schedule"
     assert normalize_category_value("parent>Setup Guide") == "installation_guide"
+
+
+def test_purchase_order_key_value_line_item_block_is_extracted():
+    text = """
+    발주서
+
+    공급업체: 대한정밀부품
+    고객사: 한빛제조
+    발주번호: PO-2026-0603
+    발행일: 2026-06-03
+    납기일: 2026-06-10
+
+    품목명: M8 육각 볼트
+    품목코드: BOLT-M8-20
+    규격: M8x20
+    수량: 500
+    단위: EA
+    단가: 120
+    공급가액: 60000
+    세액: 6000
+    합계금액: 66000
+    """
+
+    parsed = DocumentParser().parse(text, "sample_po.txt")
+
+    assert parsed.document_type == DocumentType.purchase_order
+    assert parsed.vendor_name == "대한정밀부품"
+    assert parsed.customer_name == "한빛제조"
+    assert parsed.document_number == "PO-2026-0603"
+    assert len(parsed.line_items) == 1
+    assert parsed.line_items[0]["item_name"] == "M8 육각 볼트"
+    assert parsed.line_items[0]["item_code"] == "BOLT-M8-20"
+    assert parsed.line_items[0]["quantity"] == 500
+    assert parsed.line_items[0]["unit_price"] == 120
+    assert parsed.line_items[0]["line_total"] == 66000
+
+
+def test_purchase_order_table_line_item_row_is_extracted():
+    text = """
+    발주서
+    공급업체: 대한정밀부품
+    고객사: 한빛제조
+    발주번호: PO-2026-0603
+    품목명 | 품목코드 | 규격 | 수량 | 단위 | 단가 | 공급가액 | 세액 | 합계금액
+    M8 육각 볼트 | BOLT-M8-20 | M8x20 | 500 | EA | 120 | 60000 | 6000 | 66000
+    """
+
+    parsed = DocumentParser().parse(text, "sample_po.txt")
+
+    assert parsed.document_type == DocumentType.purchase_order
+    assert len(parsed.line_items) == 1
+    assert parsed.line_items[0]["specification"] == "M8x20"
+    assert parsed.line_items[0]["unit"] == "EA"
+    assert parsed.line_items[0]["supply_amount"] == 60000
+    assert parsed.line_items[0]["tax_amount"] == 6000

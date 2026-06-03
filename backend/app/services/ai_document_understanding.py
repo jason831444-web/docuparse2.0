@@ -220,9 +220,13 @@ class LocalDocumentAIService(DocumentAIService):
             fields.append("line_items")
             return fields
         for index, item in enumerate(line_items, start=1):
-            for key in ["quantity", "unit_price", "line_total"]:
-                if item.get(key) in (None, "", []):
-                    fields.append(f"line_items[{index}].{key}")
+            if item.get("item_name") in (None, "", []):
+                fields.append(f"line_items[{index}].item_name")
+            if item.get("quantity") in (None, "", []):
+                fields.append(f"line_items[{index}].quantity")
+            if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+                fields.append(f"line_items[{index}].unit_price")
+                fields.append(f"line_items[{index}].line_total")
         return fields[:30]
 
     def _clean_lines(self, raw_text: str) -> list[str]:
@@ -509,7 +513,8 @@ class OpenAIVisionDocumentAIService(DocumentAIService):
             "purchase_order, quotation, transaction_statement, delivery_note, invoice, packing_list, "
             "inspection_report, contract, general_document, notice, document, memo, presentation, other. "
             "For Korean manufacturing documents, line_items must include item_name, item_code, specification, "
-            "quantity, unit, unit_price, supply_amount, tax_amount, line_total. OCR text is supplied only "
+            "quantity, unit, unit_price, supply_amount, tax_amount, line_total. "
+            "Write all user-facing summary and extraction_notes in Korean only. OCR text is supplied only "
             f"as auxiliary context. Filename: {filename}. OCR text:\n{raw_text[:6000]}"
         )
         response = self.client.chat.completions.create(
@@ -981,7 +986,8 @@ class Qwen25VLDocumentAIService(DocumentAIService):
             "Use document_type purchase_order, quotation, transaction_statement, delivery_note, invoice, "
             "packing_list, inspection_report, contract, general_document, receipt, notice, document, memo, "
             "presentation, or other. For line_items include item_name, item_code, specification, quantity, "
-            "unit, unit_price, supply_amount, tax_amount, line_total. Fill missing fields only when visible or strongly supported. "
+            "unit, unit_price, supply_amount, tax_amount, line_total. Write all user-facing summary and extraction_notes in Korean only. "
+            "Fill missing fields only when visible or strongly supported. "
             f"Filename: {filename}. Prior parser type: {parsed.document_type.value}. OCR text:\n{raw_text[:6000]}"
         )
 

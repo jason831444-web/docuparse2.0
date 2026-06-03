@@ -37,6 +37,8 @@ class DocumentWorkflowEnrichmentService:
         text = normalized_text or document.raw_text or ""
         mode = self._workflow_mode(document, interpretation)
         profile = interpretation.profile if interpretation and interpretation.profile else self._content_profile(document, text, mode)
+        if self._is_manufacturing_document(document, profile):
+            return self._manufacturing_business_data(document, interpretation)
         if document.document_type == DocumentType.receipt:
             result = self._receipt(document, text, mode)
         elif profile in {"syllabus", "course_guide"}:
@@ -106,6 +108,179 @@ class DocumentWorkflowEnrichmentService:
                 "ai_assisted": interpretation.ai_assisted,
             }
         return result
+
+    def _is_manufacturing_document(self, document: Document, profile: str | None) -> bool:
+        manufacturing_profiles = {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+            "inspection_report",
+            "contract",
+            "general_document",
+        }
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        return doc_type in manufacturing_profiles or (profile or "") in manufacturing_profiles
+
+    def _manufacturing_business_data(
+        self,
+        document: Document,
+        interpretation: CategoryInterpretation | None,
+    ) -> WorkflowEnrichment:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or "general_document"))
+        label = self._manufacturing_label(doc_type)
+        vendor = document.vendor_name or document.merchant_name or "공급업체 미확인"
+        customer = document.customer_name or "고객사 미확인"
+        number = document.document_number or "문서번호 미확인"
+        due_date = self._korean_date(document.due_date)
+        issue_date = self._korean_date(document.issue_date or document.extracted_date)
+        line_item_count = len(document.line_items or [])
+        total = self._korean_money(document.extracted_amount, document.currency or "KRW")
+        warnings = self._manufacturing_validation_warnings(document)
+        review_required = bool(warnings or document.review_required)
+        export_ready = not review_required
+        summary = (
+            f"이 {label}는 {vendor}{self._with_particle(vendor)} {customer} 간의 거래 문서입니다. "
+            f"{self._manufacturing_number_label(doc_type)}는 {number}이며, "
+            f"납기일은 {due_date or '미확인'}입니다. "
+            f"품목 {line_item_count}건과 합계금액 {total or '미확인'}이 추출되었습니다."
+        )
+        action_items = [
+            "품목명, 수량, 단가, 합계금액이 실제 원본 문서와 일치하는지 확인하세요.",
+            "납기일이 실제 요청 일정과 맞는지 확인하세요.",
+        ]
+        if warnings:
+            action_items.insert(0, "검토 필요 항목을 수정한 뒤 확정 처리하세요.")
+        metadata = {
+            "business_summary": summary,
+            "action_items": action_items,
+            "validation_warnings": warnings,
+            "export_ready": export_ready,
+            "review_required": review_required,
+            "line_item_count": line_item_count,
+            "low_confidence_fields": list(document.low_confidence_fields or []),
+            "workflow_mode": doc_type,
+            "content_profile": doc_type,
+            "source": "deterministic_manufacturing_business_data",
+            "summaries": {
+                "short": summary,
+                "detailed": summary,
+            },
+        }
+        if interpretation:
+            metadata["category_interpretation"] = {
+                "category": interpretation.category,
+                "profile": interpretation.profile,
+                "subtype": interpretation.subtype,
+                "title_hint": interpretation.title_hint,
+                "summary_hint": interpretation.summary_hint,
+                "key_fields": interpretation.key_fields,
+                "warnings": interpretation.warnings,
+                "workflow_hints": interpretation.workflow_hints,
+                "reasons": interpretation.reasons,
+                "confidence": interpretation.confidence,
+                "provider": interpretation.provider,
+                "provider_chain": interpretation.provider_chain,
+                "refinement_status": interpretation.refinement_status,
+                "diagnostics": interpretation.diagnostics,
+                "ai_assisted": interpretation.ai_assisted,
+            }
+        return WorkflowEnrichment(
+            workflow_summary=summary,
+            summary_short=summary,
+            summary_detailed=summary,
+            action_items=action_items,
+            warnings=warnings,
+            key_dates=[value for value in [f"발행일: {issue_date}" if issue_date else None, f"납기일: {due_date}" if due_date else None] if value],
+            urgency_level="medium" if review_required else "low",
+            follow_up_required=review_required,
+            workflow_metadata=metadata,
+        )
+
+    def _manufacturing_validation_warnings(self, document: Document) -> list[str]:
+        warnings: list[str] = []
+        if not (document.vendor_name or document.merchant_name):
+            warnings.append("공급업체가 추출되지 않았습니다.")
+        if not document.customer_name:
+            warnings.append("고객사가 추출되지 않았습니다.")
+        if not document.document_number:
+            warnings.append("문서번호가 추출되지 않았습니다.")
+        if not (document.issue_date or document.extracted_date):
+            warnings.append("발행일이 추출되지 않았습니다.")
+        if not document.due_date:
+            warnings.append("납기일이 추출되지 않았습니다.")
+        if not document.line_items:
+            warnings.append("품목 정보가 추출되지 않았습니다.")
+        for index, item in enumerate(document.line_items or [], start=1):
+            if item.get("item_name") in (None, "", []):
+                warnings.append(f"{index}번째 품목의 품목명이 비어 있습니다.")
+            if item.get("quantity") in (None, "", []):
+                warnings.append(f"{index}번째 품목의 수량을 확인해야 합니다.")
+            if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+                warnings.append(f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.")
+        if self._manufacturing_total_mismatch(document):
+            warnings.append("문서 합계금액과 품목 합계금액이 일치하지 않습니다.")
+        return self._dedupe(warnings)
+
+    def _manufacturing_total_mismatch(self, document: Document) -> bool:
+        if document.extracted_amount is None or not document.line_items:
+            return False
+        line_total = Decimal("0")
+        found = False
+        for item in document.line_items:
+            value = item.get("line_total")
+            if value in (None, "", []):
+                continue
+            try:
+                line_total += Decimal(str(value).replace(",", ""))
+                found = True
+            except Exception:
+                return True
+        if not found:
+            return False
+        tolerance = max(Decimal("1"), abs(document.extracted_amount) * Decimal("0.02"))
+        return abs(document.extracted_amount - line_total) > tolerance
+
+    def _manufacturing_label(self, doc_type: str) -> str:
+        return {
+            "purchase_order": "발주서",
+            "quotation": "견적서",
+            "transaction_statement": "거래명세서",
+            "delivery_note": "납품서",
+            "invoice": "인보이스/세금계산서",
+            "packing_list": "포장명세서",
+            "inspection_report": "검사성적서",
+            "contract": "계약서",
+        }.get(doc_type, "제조업 문서")
+
+    def _manufacturing_number_label(self, doc_type: str) -> str:
+        return {
+            "purchase_order": "발주번호",
+            "quotation": "견적번호",
+            "transaction_statement": "거래명세서번호",
+            "delivery_note": "납품번호",
+            "invoice": "문서번호",
+        }.get(doc_type, "문서번호")
+
+    def _korean_date(self, value: date | None) -> str | None:
+        if not value:
+            return None
+        return f"{value.year}년 {value.month}월 {value.day}일"
+
+    def _korean_money(self, value: Decimal | None, currency: str) -> str | None:
+        if value is None:
+            return None
+        amount = f"{int(value):,}" if value == value.to_integral_value() else f"{float(value):,.2f}"
+        suffix = "원" if currency.upper() == "KRW" else f" {currency.upper()}"
+        return f"{amount}{suffix}"
+
+    def _with_particle(self, value: str) -> str:
+        last = value[-1] if value else ""
+        if not ("\uac00" <= last <= "\ud7a3"):
+            return "와"
+        return "과" if (ord(last) - ord("\uac00")) % 28 else "와"
 
     def _finalize_summaries(
         self,

@@ -175,7 +175,11 @@ class DocumentInterpretationService:
         elif refined.title_hint and self._title_quality(refined.title_hint) > self._title_quality(result.title_hint):
             result.title_hint = refined.title_hint
 
-        if refined.summary_hint and self._better_summary(refined.summary_hint, result.summary_hint):
+        if (
+            refined.summary_hint
+            and not self._is_manufacturing_profile(result.profile)
+            and self._better_summary(refined.summary_hint, result.summary_hint)
+        ):
             result.summary_hint = refined.summary_hint
 
         for key, value in refined.key_fields.items():
@@ -248,6 +252,19 @@ class DocumentInterpretationService:
 
     def _is_generic_category(self, category: str | None) -> bool:
         return not category or category in {"other", "document", "generic_document", "notice"}
+
+    def _is_manufacturing_profile(self, profile: str | None) -> bool:
+        return profile in {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+            "inspection_report",
+            "contract",
+            "general_document",
+        }
 
     def _specific_profile_regression(self, base: CategoryInterpretation, refined: CategoryInterpretation) -> bool:
         if refined.profile != "instructional_memo":
@@ -551,11 +568,12 @@ class OpenAITextInterpretationProvider(BaseInterpretationProvider):
         return (
             "You interpret extracted document text after OCR/parsing. "
             "Do not perform OCR. Use only the extracted text and metadata. "
+            "All user-facing summary_hint, warnings, workflow_hints, and reasons must be written in Korean only. "
             "Return only JSON with keys: category, profile, subtype, title_hint, summary_hint, "
             "key_fields, warnings, workflow_hints, confidence, reasons. "
             "Be category-aware and concise. "
             "Use workflow_hints.important_points to list the most important grounded details or takeaways when possible. "
-            "Profiles may include: receipt, repair_service_receipt, utility_bill, invoice, "
+            "Profiles may include: purchase_order, quotation, transaction_statement, delivery_note, invoice, packing_list, inspection_report, contract, general_document, receipt, repair_service_receipt, utility_bill, "
             "syllabus, course_guide, installation_guide, implementation_schedule, meeting_notice, presentation_guide, speaking_notes, "
             "resume_profile, profile_record, instructional_memo, generic_document. "
             "Do not choose profile_record from a single 'profile' token, API endpoint, or person-name line; require multiple labeled identity fields. "
@@ -734,11 +752,12 @@ class LlamaCppGemmaInterpretationProvider(OpenAITextInterpretationProvider):
         instruction = (
             "You are an expert document interpretation assistant. "
             "Use extracted text and metadata only. Do not perform OCR. "
+            "Write all user-facing summary_hint, warnings, workflow_hints, and reasons in Korean only. "
             "Return only valid JSON with keys: category, profile, subtype, title_hint, summary_hint, "
             "key_fields, warnings, workflow_hints, confidence, reasons. "
             "Prefer concise, category-aware summaries and field emphasis. "
             "Use workflow_hints.important_points for the most important grounded facts or takeaways. "
-            "Good profile options: receipt, repair_service_receipt, utility_bill, invoice, syllabus, course_guide, "
+            "Good profile options: purchase_order, quotation, transaction_statement, delivery_note, invoice, packing_list, inspection_report, contract, general_document, receipt, repair_service_receipt, utility_bill, syllabus, course_guide, "
             "installation_guide, implementation_schedule, meeting_notice, presentation_guide, speaking_notes, "
             "resume_profile, profile_record, instructional_memo, generic_document. "
             "Do not use profile_record for an API endpoint, a single profile token, or a person-name line unless the document has multiple labeled identity fields."
@@ -1086,11 +1105,12 @@ class GemmaInterpretationProvider(OpenAITextInterpretationProvider):
         instruction = (
             "You are an expert document interpretation assistant. "
             "Use extracted text and metadata only. Do not perform OCR. "
+            "Write all user-facing summary_hint, warnings, workflow_hints, and reasons in Korean only. "
             "Return only valid JSON with keys: category, profile, subtype, title_hint, summary_hint, "
             "key_fields, warnings, workflow_hints, confidence, reasons. "
             "Prefer concise, category-aware summaries and field emphasis. "
             "Use workflow_hints.important_points for the most important grounded facts or takeaways. "
-            "Good profile options: receipt, repair_service_receipt, utility_bill, invoice, syllabus, course_guide, "
+            "Good profile options: purchase_order, quotation, transaction_statement, delivery_note, invoice, packing_list, inspection_report, contract, general_document, receipt, repair_service_receipt, utility_bill, syllabus, course_guide, "
             "meeting_notice, presentation_guide, speaking_notes, resume_profile, profile_record, instructional_memo, generic_document."
         )
         return f"{instruction}\n\nDocument payload:\n{json.dumps(payload, ensure_ascii=True)}\n\nJSON:"

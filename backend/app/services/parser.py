@@ -3,7 +3,15 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
-from rapidfuzz import fuzz
+try:
+    from rapidfuzz import fuzz
+except ImportError:
+    class _FuzzFallback:
+        @staticmethod
+        def partial_ratio(needle: str, haystack: str) -> int:
+            return 100 if needle.lower() in haystack.lower() else 0
+
+    fuzz = _FuzzFallback()
 
 from app.models.document import DocumentType
 
@@ -40,6 +48,33 @@ CATEGORY_KEYWORDS = {
     "notice": ["notice", "announcement", "meeting", "deadline", "reminder"],
 }
 
+LINE_ITEM_LABELS = {
+    "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "item"],
+    "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "part no", "part number", "item code"],
+    "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification"],
+    "quantity": ["수량", "주문수량", "납품수량", "qty", "quantity"],
+    "unit": ["단위", "unit"],
+    "unit_price": ["단가", "개당가격", "unit price"],
+    "supply_amount": ["공급가액", "공급액", "supply amount"],
+    "tax_amount": ["세액", "부가세", "vat", "tax"],
+    "line_total": ["합계금액", "총액", "금액", "합계", "line total", "amount"],
+}
+
+LINE_ITEM_LABEL_LOOKUP = {
+    re.sub(r"[\s_/-]+", "", label.lower()): field
+    for field, labels in LINE_ITEM_LABELS.items()
+    for label in labels
+}
+
+MANUFACTURING_TYPES = {
+    DocumentType.purchase_order,
+    DocumentType.quotation,
+    DocumentType.transaction_statement,
+    DocumentType.delivery_note,
+    DocumentType.invoice,
+    DocumentType.packing_list,
+}
+
 
 @dataclass
 class ParsedDocument:
@@ -66,7 +101,8 @@ class DocumentParser:
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
-        amount = self._extract_amount(joined)
+        line_items = self._extract_line_items(lines)
+        amount = self._extract_amount(joined) or self._line_items_total(line_items)
         category = self._guess_category(joined)
         issue_date = self._extract_labeled_date(joined, ["발행일", "작성일", "발주일", "견적일", "납품일", "거래일자", "일자"])
         due_date = self._extract_labeled_date(joined, ["납기일", "납품예정일", "납품 예정일", "due date", "delivery date"])
@@ -84,7 +120,7 @@ class DocumentParser:
             document_number=self._extract_document_number(joined),
             issue_date=issue_date,
             due_date=due_date,
-            line_items=self._extract_line_items(lines),
+            line_items=line_items,
             category=category,
             tags=self._guess_tags(joined, category, doc_type),
         )
@@ -183,7 +219,8 @@ class DocumentParser:
         return match.group(1).strip()[:80] if match else None
 
     def _extract_line_items(self, lines: list[str]) -> list[dict]:
-        items: list[dict] = []
+        items = self._extract_key_value_line_items(lines)
+        items.extend(self._extract_table_line_items(lines))
         for line in lines:
             normalized = re.sub(r"\s+", " ", line).strip()
             if not normalized or not self._looks_like_item_line(normalized):
@@ -194,8 +231,127 @@ class DocumentParser:
             else:
                 item = self._line_item_from_free_text(normalized)
             if item and item.get("item_name"):
-                items.append(item)
-        return items[:80]
+                items.append(self._normalize_line_item(item))
+        return self._dedupe_line_items(items)[:80]
+
+    def _extract_key_value_line_items(self, lines: list[str]) -> list[dict]:
+        current: dict = {}
+        items: list[dict] = []
+        seen_item_field = False
+        for line in lines:
+            parsed = self._parse_labeled_line(line)
+            if not parsed:
+                continue
+            field, value = parsed
+            if field not in LINE_ITEM_LABELS:
+                continue
+            if field == "item_name" and seen_item_field and self._line_item_has_identity(current):
+                items.append(self._normalize_line_item(current))
+                current = {}
+            seen_item_field = True
+            if field == "quantity":
+                quantity, unit = self._parse_quantity_and_unit(value)
+                current[field] = quantity
+                if unit and not current.get("unit"):
+                    current["unit"] = unit
+            elif field in {"unit_price", "supply_amount", "tax_amount", "line_total"}:
+                current[field] = self._normalize_number(value)
+            else:
+                current[field] = self._clean_value(value)
+        if self._line_item_has_identity(current):
+            items.append(self._normalize_line_item(current))
+        return items
+
+    def _extract_table_line_items(self, lines: list[str]) -> list[dict]:
+        items: list[dict] = []
+        for index, line in enumerate(lines):
+            headers = self._split_table_line(line)
+            mapped_headers = [self._line_item_field_for_label(header) for header in headers]
+            if len(headers) < 3 or sum(bool(header) for header in mapped_headers) < 3:
+                continue
+            for row in lines[index + 1:]:
+                cells = self._split_table_line(row)
+                if len(cells) < 3:
+                    break
+                if sum(bool(self._line_item_field_for_label(cell)) for cell in cells) >= 3:
+                    break
+                item: dict = {}
+                for field, cell in zip(mapped_headers, cells):
+                    if not field:
+                        continue
+                    item[field] = cell
+                normalized = self._normalize_line_item(item)
+                if normalized.get("item_name"):
+                    items.append(normalized)
+            if items:
+                break
+        return items
+
+    def _split_table_line(self, line: str) -> list[str]:
+        stripped = line.strip()
+        if "|" in stripped:
+            return [part.strip() for part in stripped.split("|") if part.strip()]
+        if "\t" in stripped:
+            return [part.strip() for part in stripped.split("\t") if part.strip()]
+        if "," in stripped and len(stripped.split(",")) >= 4:
+            return [part.strip() for part in stripped.split(",") if part.strip()]
+        return [part.strip() for part in re.split(r"\s{2,}", stripped) if part.strip()]
+
+    def _parse_labeled_line(self, line: str) -> tuple[str, str] | None:
+        match = re.match(r"\s*([^:：|]+?)\s*[:：]\s*(.+?)\s*$", line)
+        if not match:
+            return None
+        field = self._line_item_field_for_label(match.group(1))
+        if not field:
+            return None
+        return field, match.group(2).strip()
+
+    def _line_item_field_for_label(self, label: str) -> str | None:
+        key = re.sub(r"[\s_/-]+", "", label.strip().lower())
+        return LINE_ITEM_LABEL_LOOKUP.get(key)
+
+    def _line_item_has_identity(self, item: dict) -> bool:
+        return bool(item.get("item_name") or item.get("item_code"))
+
+    def _normalize_line_item(self, item: dict) -> dict:
+        normalized = {
+            "item_name": self._clean_value(item.get("item_name")),
+            "item_code": self._clean_value(item.get("item_code")),
+            "specification": self._clean_value(item.get("specification")),
+            "quantity": item.get("quantity"),
+            "unit": self._clean_value(item.get("unit")),
+            "unit_price": item.get("unit_price"),
+            "supply_amount": item.get("supply_amount"),
+            "tax_amount": item.get("tax_amount"),
+            "line_total": item.get("line_total"),
+        }
+        if isinstance(normalized["quantity"], str):
+            quantity, unit = self._parse_quantity_and_unit(normalized["quantity"])
+            normalized["quantity"] = quantity
+            normalized["unit"] = normalized["unit"] or unit
+        for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
+            if isinstance(normalized[field], str):
+                normalized[field] = self._normalize_number(normalized[field])
+        if normalized["quantity"] is None and normalized["unit"]:
+            normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
+        return {key: value for key, value in normalized.items() if value not in (None, "")}
+
+    def _dedupe_line_items(self, items: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: set[tuple] = set()
+        for item in items:
+            key = (
+                item.get("item_name"),
+                item.get("item_code"),
+                item.get("specification"),
+                item.get("quantity"),
+                item.get("line_total"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     def _looks_like_item_line(self, line: str) -> bool:
         lowered = line.lower()
@@ -212,12 +368,12 @@ class DocumentParser:
             "item_name": text_parts[0] if text_parts else parts[0],
             "item_code": text_parts[1] if len(text_parts) > 1 and re.search(r"\d", text_parts[1]) else None,
             "specification": text_parts[2] if len(text_parts) > 2 else None,
-            "quantity": str(amounts[0]) if len(amounts) >= 4 else None,
+            "quantity": self._number_value(amounts[0]) if len(amounts) >= 4 else None,
             "unit": self._extract_unit(" ".join(parts)),
-            "unit_price": str(amounts[-4]) if len(amounts) >= 4 else None,
-            "supply_amount": str(amounts[-3]) if len(amounts) >= 3 else None,
-            "tax_amount": str(amounts[-2]) if len(amounts) >= 2 else None,
-            "line_total": str(amounts[-1]) if amounts else None,
+            "unit_price": self._number_value(amounts[-4]) if len(amounts) >= 4 else None,
+            "supply_amount": self._number_value(amounts[-3]) if len(amounts) >= 3 else None,
+            "tax_amount": self._number_value(amounts[-2]) if len(amounts) >= 2 else None,
+            "line_total": self._number_value(amounts[-1]) if amounts else None,
         }
 
     def _line_item_from_free_text(self, line: str) -> dict | None:
@@ -230,19 +386,57 @@ class DocumentParser:
             "item_name": name[:120] if name else None,
             "item_code": self._extract_item_code(line),
             "specification": None,
-            "quantity": str(amounts[0]) if len(amounts) >= 4 else None,
+            "quantity": self._number_value(amounts[0]) if len(amounts) >= 4 else None,
             "unit": self._extract_unit(line),
-            "unit_price": str(amounts[-4]) if len(amounts) >= 4 else None,
-            "supply_amount": str(amounts[-3]),
-            "tax_amount": str(amounts[-2]),
-            "line_total": str(amounts[-1]),
+            "unit_price": self._number_value(amounts[-4]) if len(amounts) >= 4 else None,
+            "supply_amount": self._number_value(amounts[-3]),
+            "tax_amount": self._number_value(amounts[-2]),
+            "line_total": self._number_value(amounts[-1]),
         }
 
     def _to_decimal(self, value: str) -> Decimal | None:
         try:
-            return Decimal(str(value).replace(",", "").strip())
+            normalized = re.sub(r"[^0-9.\-]", "", str(value).replace(",", ""))
+            if normalized in {"", "-", "."}:
+                return None
+            return Decimal(normalized)
         except Exception:
             return None
+
+    def _normalize_number(self, value: object) -> int | float | None:
+        decimal = self._to_decimal(str(value))
+        return self._number_value(decimal) if decimal is not None else None
+
+    def _number_value(self, value: Decimal | None) -> int | float | None:
+        if value is None:
+            return None
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+
+    def _parse_quantity_and_unit(self, value: object) -> tuple[int | float | None, str | None]:
+        text = str(value or "").strip()
+        match = re.search(r"([-+]?\d[\d,]*(?:\.\d+)?)\s*([A-Za-z가-힣]+)?", text)
+        if not match:
+            return None, self._extract_unit(text)
+        return self._normalize_number(match.group(1)), (match.group(2) or self._extract_unit(text))
+
+    def _clean_value(self, value: object) -> str | None:
+        if value is None:
+            return None
+        cleaned = re.sub(r"\s+", " ", str(value)).strip(" \t\r\n:：|")
+        return cleaned or None
+
+    def _line_items_total(self, line_items: list[dict]) -> Decimal | None:
+        total = Decimal("0")
+        found = False
+        for item in line_items:
+            value = item.get("line_total")
+            decimal = self._to_decimal(str(value)) if value is not None else None
+            if decimal is not None:
+                total += decimal
+                found = True
+        return total if found else None
 
     def _extract_unit(self, line: str) -> str | None:
         match = re.search(r"\b(ea|pcs|set|kg|box|m)\b|(?<=\d)\s*(개|식|대|매|박스|세트)", line, flags=re.IGNORECASE)

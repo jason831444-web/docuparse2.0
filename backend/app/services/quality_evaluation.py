@@ -76,8 +76,11 @@ class DocumentQualityEvaluator:
                 score -= 0.18
             incomplete_items = self._incomplete_line_items(parsed.line_items)
             if incomplete_items:
-                reasons.append("Some line items are missing quantity, unit price, or line total.")
+                reasons.append("Some line items are missing item name, quantity, or both unit price and line total.")
                 score -= 0.12
+            if self._total_mismatch(parsed.extracted_amount, parsed.line_items):
+                reasons.append("Document total and line item totals do not match.")
+                score -= 0.14
         if parsed.document_type == DocumentType.receipt and parsed.extracted_amount:
             score += 0.08
             merchant_present = bool(parsed.merchant_name)
@@ -108,7 +111,10 @@ class DocumentQualityEvaluator:
             stage="post_ingestion",
             score=score,
             sufficient=sufficient,
-            review_required=score < 0.62 or normalized.partial_support or (parsed.document_type in MANUFACTURING_TYPES and (not parsed.line_items or self._incomplete_line_items(parsed.line_items))),
+            review_required=score < 0.62 or normalized.partial_support or (
+                parsed.document_type in MANUFACTURING_TYPES
+                and (not parsed.line_items or self._incomplete_line_items(parsed.line_items) or self._total_mismatch(parsed.extracted_amount, parsed.line_items))
+            ),
             escalation_recommended=escalation,
             reasons=reasons or ["Extracted content passed the first quality gate."],
         )
@@ -139,8 +145,11 @@ class DocumentQualityEvaluator:
                 reasons.append("Line items are missing.")
                 score -= 0.22
             if self._incomplete_line_items(ai_result.line_items):
-                reasons.append("Line item quantity, unit price, or line total is uncertain.")
+                reasons.append("Line item item name, quantity, or amount is uncertain.")
                 score -= 0.16
+            if self._total_mismatch(ai_result.extracted_amount, ai_result.line_items):
+                reasons.append("Document total and line item totals do not match.")
+                score -= 0.14
         elif ai_result.document_type == DocumentType.receipt:
             if not ai_result.extracted_amount:
                 reasons.append("Receipt amount is missing.")
@@ -162,7 +171,7 @@ class DocumentQualityEvaluator:
         score = self._clamp(score)
         review_required = score < 0.64 or bool(reasons and ai_result.review_required) or (
             ai_result.document_type in MANUFACTURING_TYPES
-            and (not ai_result.line_items or self._incomplete_line_items(ai_result.line_items))
+            and (not ai_result.line_items or self._incomplete_line_items(ai_result.line_items) or self._total_mismatch(ai_result.extracted_amount, ai_result.line_items))
         )
         return QualityEvaluation(
             stage="post_structured_extraction",
@@ -183,6 +192,29 @@ class DocumentQualityEvaluator:
 
     def _incomplete_line_items(self, line_items: list[dict] | None) -> bool:
         for item in line_items or []:
-            if any(item.get(field) in (None, "", []) for field in ["quantity", "unit_price", "line_total"]):
+            if item.get("item_name") in (None, "", []):
+                return True
+            if item.get("quantity") in (None, "", []):
+                return True
+            if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 return True
         return False
+
+    def _total_mismatch(self, total_amount: Decimal | None, line_items: list[dict] | None) -> bool:
+        if total_amount is None or not line_items:
+            return False
+        line_total = Decimal("0")
+        found = False
+        for item in line_items:
+            value = item.get("line_total")
+            if value in (None, "", []):
+                continue
+            try:
+                line_total += Decimal(str(value).replace(",", ""))
+                found = True
+            except Exception:
+                return True
+        if not found:
+            return False
+        tolerance = max(Decimal("1"), abs(total_amount) * Decimal("0.02"))
+        return abs(total_amount - line_total) > tolerance
