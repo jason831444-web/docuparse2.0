@@ -30,12 +30,12 @@ export default function FileTypeFolderPage() {
     <main className="shell py-8">
       <div className="mb-6">
         <h1 className="text-3xl font-semibold tracking-normal">{titleCaseLabel(type)}</h1>
-        <p className="mt-2 text-muted-foreground">Documents grouped by source file type and extraction path.</p>
+        <p className="mt-2 text-muted-foreground">원본 파일 형식과 추출 경로 기준으로 묶인 문서입니다.</p>
       </div>
       {data?.items.length ? (
         <DocumentList documents={data.items} onChanged={load} returnTo={`/file-types/${encodeURIComponent(type)}`} />
       ) : (
-        <Card><CardContent className="p-10 text-center text-muted-foreground">No documents for this file type yet.</CardContent></Card>
+        <Card><CardContent className="p-10 text-center text-muted-foreground">이 파일 형식의 문서가 아직 없습니다.</CardContent></Card>
       )}
     </main>
   );

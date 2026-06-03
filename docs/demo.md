@@ -1,10 +1,10 @@
-# DocuParse Demo Guide
+# DocuParse 제조업 문서 자동화 데모 가이드
 
-Use this guide to record a short portfolio demo or walk an interviewer through the project.
+이 문서는 DocuParse를 한국 중소 제조업체의 구매/납품 문서 처리 MVP로 시연하기 위한 가이드입니다.
 
 ## Demo Setup
 
-Start the local stack:
+로컬 스택 실행:
 
 ```bash
 docker compose --profile backend up --build
@@ -15,168 +15,106 @@ Open:
 - Frontend: http://localhost:3001
 - API docs: http://localhost:8001/docs
 
-For local GGUF interpretation, make sure this file exists before starting the backend:
+로컬 GGUF 해석을 사용할 경우 시작 전에 모델 파일을 준비합니다.
 
 ```text
 models/gguf/gemma-3-4b-it-q4_0.gguf
 ```
 
-## Suggested Sample Documents
+## 추천 샘플 문서
 
-Safe sample documents live in:
+데모에는 현실적인 한국 제조업 문서 샘플이 가장 좋습니다.
 
-```text
-backend/eval/corpus/
-```
+- 발주서 PDF 또는 이미지
+- 견적서 엑셀 또는 PDF
+- 거래명세서 PDF
+- 납품서 이미지 또는 PDF
 
-Good demo cases:
+샘플 문서에는 다음 정보가 들어가면 좋습니다.
 
-- `syllabus_system_fundamentals.pdf`: PDF course guide/category extraction.
-- `east_repair_receipt.png`: image OCR and receipt extraction.
-- `studio_services_invoice.xlsx`: spreadsheet/Office extraction.
-- `lab_access_policy_memo.md`: workflow summary and action-item generation.
-- `student_profile_note.txt`: profile-record classification.
+- 공급업체: 대한정밀부품 주식회사
+- 고객사: 한빛모터스
+- 발주번호: PO-2026-0603-001
+- 발주일: 2026-06-03
+- 납기일: 2026-06-17
+- 품목: 브라켓 ASSY, SHAFT-2040, 알루미늄 하우징
+- 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 합계금액
 
-For the real-world failure cases that motivated recent improvements, use:
+## 핵심 데모 흐름
 
-- an installation/setup guide PDF with a person-name-like line
-- an implementation schedule spreadsheet containing an endpoint like `/students/{id}` or a task title containing `profile`
+1. 사용자가 발주서 PDF 또는 이미지 파일을 업로드한다.
+2. 시스템이 문서 유형을 발주서로 분류한다.
+3. 공급업체, 고객사, 발주번호, 발주일, 납기일을 추출한다.
+4. 품목 테이블에서 품목명, 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 총액을 추출한다.
+5. 신뢰도 낮은 필드는 “검토 필요”로 표시한다.
+6. 사용자가 틀린 수량이나 단가를 수정한다.
+7. 문서를 “확정 완료” 상태로 변경한다.
+8. 최종 결과를 CSV, Excel, JSON 중 하나로 내보낸다.
 
-The expected behavior is that structure and purpose win over isolated words.
+## 화면별 시연 포인트
 
-## Screenshot Prep Data
+### 대시보드
 
-For richer portfolio screenshots, upload a curated set of safe sample documents from the eval corpus:
+- 총 문서 수
+- 처리 중
+- 검토 필요
+- 확정 완료
+- 처리 실패
+- 최근 업로드 문서
+- 제조업 문서 자동화 현황
 
-```bash
-cd /Users/yoonjaeseong/Desktop/projects/DocuParse
-PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py
-```
+### 업로드
 
-Useful options:
+- “제조업 문서 업로드” 영역에서 파일을 업로드한다.
+- PDF, 이미지, 엑셀, 워드 문서 지원을 설명한다.
+- 업로드 후 AI가 문서 유형과 핵심 업무 데이터를 자동 추출한다고 설명한다.
 
-```bash
-# Upload a smaller slice if local GGUF processing is slow.
-PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py --limit 4
+### 문서 상세/검토
 
-# Upload without waiting for processing to finish.
-PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py --no-wait
-```
+다음 정보를 보여준다.
 
-This script does not create fake production data. It uploads the existing safe sample corpus through the real API so the Categories, Review, Notifications, and Document Detail screens are populated by the same processing path used in the app.
+- 원본 문서
+- 원문 텍스트
+- AI 추출 결과
+- 추출 경로 `provider_chain`
+- 문서 유형
+- 공급업체
+- 고객사
+- 문서번호
+- 발행일
+- 납기일
+- 품목 정보
+- 신뢰도 낮은 항목
 
-For the 3rd screenshot, open:
+품목 테이블에서 수량 또는 단가를 일부 수정한 뒤 “수정 저장”을 누른다.
 
-```text
-http://localhost:3001/categories
-```
+### 검토 필요
 
-For the 4th screenshot, open a processed document detail page and crop around the workflow assistant plus correction workspace:
+- 품목 정보가 없거나 수량/단가/합계금액이 불확실한 문서가 `needs_review`로 이동하는 것을 보여준다.
+- 사용자가 확인 후 “확정 처리”를 누르면 “확정 완료” 상태가 된다.
 
-```text
-http://localhost:3001/documents/<document-id>
-```
+### 내보내기
 
-## Short Demo Script
+- 문서 목록에서 CSV 또는 Excel로 내보낸다.
+- 상세 화면에서 JSON으로 내보낸다.
+- 확정된 데이터를 ERP나 엑셀 입력용으로 사용할 수 있다는 점을 설명한다.
 
-1. **Dashboard**
-   Show the upload dropzone, status cards, recent documents, review queue, and category folders.
+## 기술 설명 포인트
 
-2. **Upload**
-   Upload a sample PDF, image receipt, or spreadsheet.
+짧은 설명:
 
-3. **Processing Result**
-   Open the document detail page. Point out:
-   - original document preview/link
-   - extracted text
-   - AI result tab
-   - provider chain
-   - workflow panel
-   - review-required warning if present
+> DocuParse는 제조업 구매/납품 문서를 업로드하면 ingestion, OCR/text extraction, document routing, deterministic parser, optional local GGUF interpretation, quality gate를 거쳐 ERP/Excel-ready data로 변환합니다. AI 결과를 그대로 믿지 않고 provider_chain, field_sources, low_confidence_fields, needs_review 상태를 통해 사람이 검토할 수 있게 했습니다.
 
-4. **Category Workflow**
-   Change the category with the selector and save. Return to the document list or category page and show that category filtering/search still finds the document.
+좋은 후속 질문:
 
-5. **Review Flow**
-   Mark a document as needs review, open the review queue, then confirm it.
+- 왜 품목 행 `line_items`가 품질 게이트의 핵심인지
+- OCR 결과가 약할 때 왜 `needs_review`로 보내는지
+- `provider_chain`이 모델/OCR 회귀 디버깅에 어떻게 도움 되는지
+- 실제 운영에서는 background job, auth, object storage, ERP API 연동을 어떻게 추가할지
 
-6. **Notifications**
-   Open notifications and show processed/review/failed/processing events.
+## Demo Caveats
 
-7. **Evaluation Evidence**
-   Open an evaluation report:
-
-   ```text
-   backend/eval/reports/latest-gemma.md
-   ```
-
-   Explain that the harness is used to catch regressions in title selection, category interpretation, summaries, action items, and provider-chain visibility.
-
-## Screenshot Checklist
-
-Add screenshots to a portfolio page or GitHub README later:
-
-- Dashboard after several sample uploads
-- Upload in progress or processed result
-- Document detail page with provider chain visible
-- Extracted text tab
-- AI result tab
-- Category selector
-- Category folders page
-- Review queue
-- Notifications page
-- Evaluation report snippet
-
-Suggested screenshot folder:
-
-```text
-docs/screenshots/
-```
-
-## Example Outcomes To Highlight
-
-### Installation Guide PDF
-
-Expected:
-
-- category: `installation_guide`
-- title: setup/installation/manual title, not a person-name line
-- workflow: review prerequisites, configuration, commands, environment values
-- provider chain: shows PDF extraction and interpretation path
-
-Why it matters:
-
-This demonstrates that the classifier looks at document purpose and structure, not just isolated profile/name tokens.
-
-### Implementation Schedule Spreadsheet
-
-Expected:
-
-- category: `implementation_schedule`
-- title: sheet name, filename, or schedule/tracker heading
-- action items: review open tasks, ownership, testing, coverage, pipeline status
-- filtering/search: still works after category edits
-
-Why it matters:
-
-This demonstrates spreadsheet-aware interpretation and category normalization consistency.
-
-## What To Say In An Interview
-
-Short version:
-
-> I built DocuParse as a local-first AI document workspace. The interesting part is the pipeline: it normalizes many file types, routes documents through lightweight or heavier extraction paths, combines deterministic parsing with optional local GGUF interpretation, records provider-chain provenance, and gives users a review loop instead of blindly trusting AI output.
-
-Good follow-up topics:
-
-- why local GGUF inference was useful
-- how provider-chain visibility helped debug failures
-- how category normalization fixed search/filter consistency
-- what would be needed for production: auth, background jobs, object storage, full-text search, persisted notifications
-
-## Known Demo Caveats
-
-- First GGUF inference can be slow on CPU.
-- Auth pages are not wired to real accounts; present this as a local-first workspace.
-- Inline processing is fine for the demo but would become a background job in production.
-- Generated eval scores are useful regression signals, but real document examples are more persuasive.
+- CPU GGUF 추론은 첫 실행이 느릴 수 있습니다.
+- 현재 ERP 직접 연동은 없고 CSV/Excel/JSON 내보내기를 우선 지원합니다.
+- 인증 화면은 MVP shell이며 실제 계정 시스템은 별도 확장 영역입니다.
+- 복잡한 병합 셀이나 저화질 스캔 문서는 검토 필요로 이동할 수 있습니다.

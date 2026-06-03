@@ -31,5 +31,14 @@ def documents_to_csv(documents: list[Document]) -> str:
     return buffer.getvalue()
 
 
+def documents_to_excel(documents: list[Document]) -> bytes:
+    rows = [serialize_document(document) for document in documents]
+    frame = pd.DataFrame(rows)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        frame.to_excel(writer, index=False, sheet_name="documents")
+    return buffer.getvalue()
+
+
 def document_to_json(document: Document) -> str:
     return json.dumps(serialize_document(document), indent=2)

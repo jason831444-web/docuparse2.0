@@ -15,7 +15,7 @@ export function DocumentCard({ document, selected = false, onSelect, returnTo }:
         <div className="flex min-w-0 items-start gap-3">
           {onSelect ? (
             <input
-              aria-label={`Select ${document.title || document.original_filename}`}
+              aria-label={`${document.title || document.original_filename} 선택`}
               type="checkbox"
               className="mt-1 size-4"
               checked={selected}
@@ -40,11 +40,11 @@ export function DocumentCard({ document, selected = false, onSelect, returnTo }:
             {document.source_file_type ? <Badge variant="outline">{document.source_file_type.toUpperCase()}</Badge> : null}
           </div>
           <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">
-            {document.extracted_date ? <span className="flex min-w-0 items-center gap-2"><Calendar className="size-4 shrink-0" /><span className="truncate">{formatDate(document.extracted_date)}</span></span> : null}
-            <span className="flex min-w-0 items-center gap-2"><DollarSign className="size-4 shrink-0" /><span className="truncate">{formatMoney(document.extracted_amount, document.currency || "USD")}</span></span>
+            {document.issue_date || document.extracted_date ? <span className="flex min-w-0 items-center gap-2"><Calendar className="size-4 shrink-0" /><span className="truncate">{formatDate(document.issue_date || document.extracted_date)}</span></span> : null}
+            <span className="flex min-w-0 items-center gap-2"><DollarSign className="size-4 shrink-0" /><span className="truncate">{formatMoney(document.extracted_amount, document.currency || "KRW")}</span></span>
             <span className="flex min-w-0 items-center gap-2"><FileType2 className="size-4 shrink-0" /><span className="truncate">{titleCaseLabel(document.source_file_type || document.mime_type)}</span></span>
           </div>
-          <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground"><Tag className="size-4 shrink-0" /><span className="truncate">{document.tags.slice(0, 3).join(", ") || "No tags"}</span></div>
+          <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground"><Tag className="size-4 shrink-0" /><span className="truncate">{document.vendor_name || document.customer_name || document.document_number || "거래처 정보 없음"}</span></div>
       </CardContent>
     </Card>
   );

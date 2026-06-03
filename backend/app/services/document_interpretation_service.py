@@ -139,6 +139,14 @@ class DocumentInterpretationService:
                     "meeting_notice",
                     "instructional_memo",
                     "invoice",
+                    "purchase_order",
+                    "quotation",
+                    "transaction_statement",
+                    "delivery_note",
+                    "packing_list",
+                    "inspection_report",
+                    "contract",
+                    "general_document",
                 }
             )
         )

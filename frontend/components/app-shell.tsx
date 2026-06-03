@@ -20,13 +20,13 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/upload", label: "Upload", icon: Upload },
-  { href: "/documents", label: "All Documents", icon: Files },
-  { href: "/categories", label: "Categories", icon: FolderKanban },
-  { href: "/review", label: "Needs Review", icon: BellRing },
-  { href: "/favorites", label: "Favorites", icon: FileHeart },
-  { href: "/settings", label: "Settings", icon: Settings }
+  { href: "/", label: "대시보드", icon: LayoutDashboard },
+  { href: "/upload", label: "문서 업로드", icon: Upload },
+  { href: "/documents", label: "문서 목록", icon: Files },
+  { href: "/categories", label: "문서 유형", icon: FolderKanban },
+  { href: "/review", label: "검토 필요", icon: BellRing },
+  { href: "/favorites", label: "즐겨찾기", icon: FileHeart },
+  { href: "/settings", label: "설정", icon: Settings }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -78,7 +78,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </span>
             <div>
               <p>DocuParse</p>
-              <p className="text-xs font-normal text-muted-foreground">AI document workflows</p>
+              <p className="text-xs font-normal text-muted-foreground">제조업 문서 자동화</p>
             </div>
           </Link>
           <nav className="space-y-1">
@@ -100,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
           <div className="mt-8 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-            Local-first document understanding with visible provider chains and review-before-trust workflows.
+            발주서, 견적서, 거래명세서, 납품서를 ERP/엑셀 입력용 데이터로 변환합니다.
           </div>
         </aside>
         <div className="min-w-0">
@@ -108,11 +108,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="shell flex h-16 items-center gap-4">
               <form onSubmit={submitSearch} className="relative max-w-xl flex-1">
                 <Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Search title, summary, merchant, OCR text" value={query} onChange={(event) => setQuery(event.target.value)} />
+                <Input className="pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={query} onChange={(event) => setQuery(event.target.value)} />
               </form>
               <Link
                 href="/notifications"
-                aria-label="Notifications"
+                aria-label="알림"
                 className={cn(
                   "relative grid size-10 place-items-center rounded-md border bg-white text-muted-foreground transition hover:border-primary/40 hover:text-foreground",
                   pathname.startsWith("/notifications") && "border-primary/50 text-primary"

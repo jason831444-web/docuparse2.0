@@ -23,11 +23,11 @@ export default function DashboardPage() {
   }, []);
 
   const metrics = [
-    { label: "Total documents", value: stats?.total ?? 0, icon: FileText },
-    { label: "Processing", value: stats?.processing ?? 0, icon: Clock3 },
-    { label: "Needs review", value: stats?.needs_review ?? 0, icon: TriangleAlert },
-    { label: "Confirmed", value: stats?.confirmed ?? 0, icon: ShieldCheck },
-    { label: "Failed", value: stats?.failed ?? 0, icon: RefreshCcw }
+    { label: "총 문서 수", value: stats?.total ?? 0, icon: FileText },
+    { label: "처리 중", value: stats?.processing ?? 0, icon: Clock3 },
+    { label: "검토 필요", value: stats?.needs_review ?? 0, icon: TriangleAlert },
+    { label: "확정 완료", value: stats?.confirmed ?? 0, icon: ShieldCheck },
+    { label: "처리 실패", value: stats?.failed ?? 0, icon: RefreshCcw }
   ];
 
   return (
@@ -35,18 +35,18 @@ export default function DashboardPage() {
       <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="space-y-5">
           <div className="rounded-2xl border bg-white/95 p-8 shadow-sm shadow-slate-200/70">
-            <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">Local AI document workspace</p>
+            <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">제조업 문서 자동화 현황</p>
             <h1 className="mt-3 max-w-3xl text-4xl font-semibold tracking-normal">
-              Upload documents, inspect the extraction path, then review, organize, and find them later.
+              발주서, 견적서, 거래명세서, 납품서를 ERP/엑셀 입력용 데이터로 변환하세요.
             </h1>
             <p className="mt-4 max-w-2xl text-muted-foreground">
-              DocuParse classifies documents into meaningful folders, preserves extracted text and interpretation details separately,
-              and keeps review-required work easy to spot before you rely on the result.
+              DocuParse는 문서 유형, 거래처, 문서번호, 날짜, 납기일, 품목 테이블, 금액을 자동 추출하고
+              신뢰도 낮은 항목을 검토 필요로 표시합니다.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
-              <Button asChild><Link href="/upload">Upload document</Link></Button>
-              <Button asChild variant="outline"><Link href="/documents">Open library</Link></Button>
-              <Button asChild variant="outline"><Link href="/review">Needs review</Link></Button>
+              <Button asChild><Link href="/upload">제조업 문서 업로드</Link></Button>
+              <Button asChild variant="outline"><Link href="/documents">문서 목록</Link></Button>
+              <Button asChild variant="outline"><Link href="/review">검토 필요</Link></Button>
             </div>
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -69,8 +69,8 @@ export default function DashboardPage() {
       <section className="mt-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>Recent uploads</CardTitle>
-            <Button asChild variant="ghost" size="sm"><Link href="/documents">View all</Link></Button>
+            <CardTitle>최근 업로드 문서</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/documents">전체 보기</Link></Button>
           </CardHeader>
           <CardContent className="grid min-w-0 gap-4 lg:grid-cols-2">
             {(stats?.recent ?? []).slice(0, 4).map((document) => <DocumentCard key={document.id} document={document} />)}
@@ -78,8 +78,8 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>Needs review</CardTitle>
-            <Button asChild variant="ghost" size="sm"><Link href="/review">Open queue</Link></Button>
+            <CardTitle>검토 필요</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/review">검토 목록 열기</Link></Button>
           </CardHeader>
           <CardContent className="space-y-3">
             {(stats?.recent_review ?? []).slice(0, 4).map((document) => (
@@ -100,8 +100,8 @@ export default function DashboardPage() {
       <section className="mt-8">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>Category folders</CardTitle>
-            <Button asChild variant="ghost" size="sm"><Link href="/categories">Browse folders</Link></Button>
+            <CardTitle>문서 유형별 분류</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/categories">유형 보기</Link></Button>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             {(stats?.category_overview ?? []).slice(0, 6).map((folder) => (
@@ -114,8 +114,8 @@ export default function DashboardPage() {
       <section className="mt-8 grid gap-6 xl:grid-cols-[1fr_1fr]">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>Recent edits</CardTitle>
-            <Button asChild variant="ghost" size="sm"><Link href="/documents">Open library</Link></Button>
+            <CardTitle>최근 수정 문서</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/documents">문서 목록</Link></Button>
           </CardHeader>
           <CardContent className="space-y-3">
             {(activity?.recent_edits ?? []).slice(0, 5).map((document) => (
@@ -131,8 +131,8 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>Favorites</CardTitle>
-            <Button asChild variant="ghost" size="sm"><Link href="/favorites">Pinned documents</Link></Button>
+            <CardTitle>즐겨찾기</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/favorites">즐겨찾기 문서</Link></Button>
           </CardHeader>
           <CardContent className="space-y-3">
             {(activity?.favorites ?? []).slice(0, 5).map((document) => (

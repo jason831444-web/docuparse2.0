@@ -22,7 +22,7 @@ export function FolderCard({ folder, href, onDelete }: { folder: FolderSummary; 
               </span>
               <div className="min-w-0">
                 <p className="line-clamp-2 break-words text-lg font-semibold leading-snug">{folder.label}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{folder.count} document{folder.count === 1 ? "" : "s"} organized here</p>
+                <p className="mt-1 text-sm text-muted-foreground">이 유형에 문서 {folder.count}건이 정리되었습니다</p>
               </div>
             </div>
             <ArrowRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
@@ -32,15 +32,15 @@ export function FolderCard({ folder, href, onDelete }: { folder: FolderSummary; 
         <div className="grid grid-cols-3 gap-2">
           <div className="rounded-md border bg-slate-50 p-3">
             <p className="text-lg font-semibold">{folder.needs_review}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Review</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">검토 필요</p>
           </div>
           <div className="rounded-md border bg-slate-50 p-3">
             <p className="text-lg font-semibold">{folder.confirmed}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Confirmed</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">확정 완료</p>
           </div>
           <div className="rounded-md border bg-slate-50 p-3">
             <p className="text-lg font-semibold">{folder.processing}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Running</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">처리 중</p>
           </div>
         </div>
 
@@ -53,15 +53,15 @@ export function FolderCard({ folder, href, onDelete }: { folder: FolderSummary; 
         </div>
 
         <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">
-          <span className="flex min-w-0 items-center gap-2"><BellRing className="size-4 shrink-0 text-amber-600" /><span className="truncate">Needs review</span></span>
-          <span className="flex min-w-0 items-center gap-2"><CheckCircle2 className="size-4 shrink-0 text-emerald-600" /><span className="truncate">Confirmed</span></span>
-          <span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 text-primary" /><span className="truncate">Processing</span></span>
+          <span className="flex min-w-0 items-center gap-2"><BellRing className="size-4 shrink-0 text-amber-600" /><span className="truncate">검토 필요</span></span>
+          <span className="flex min-w-0 items-center gap-2"><CheckCircle2 className="size-4 shrink-0 text-emerald-600" /><span className="truncate">확정 완료</span></span>
+          <span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 text-primary" /><span className="truncate">처리 중</span></span>
         </div>
 
         {onDelete && folder.custom && folder.count === 0 ? (
           <Button type="button" variant="outline" size="sm" onClick={onDelete}>
             <Trash2 className="size-4" />
-            Delete empty folder
+            빈 유형 삭제
           </Button>
         ) : null}
       </CardContent>

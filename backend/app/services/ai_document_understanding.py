@@ -55,6 +55,14 @@ class HTMLTableTextExtractor(HTMLParser):
 
 
 CATEGORY_MAP = {
+    "purchase_order": ["발주서", "purchase order", "po no", "발주 번호", "납기일"],
+    "quotation": ["견적서", "quotation", "quote", "견적 번호"],
+    "transaction_statement": ["거래명세서", "transaction statement", "공급가액", "세액"],
+    "delivery_note": ["납품서", "delivery note", "납품 번호", "납품일"],
+    "invoice": ["세금계산서", "invoice", "청구서"],
+    "packing_list": ["포장명세서", "packing list"],
+    "inspection_report": ["검사성적서", "inspection report"],
+    "contract": ["계약서", "contract"],
     "installation_guide": ["installation guide", "setup guide", "technical guide", "install", "setup", "configuration", "dependencies", "prerequisites"],
     "implementation_schedule": ["implementation", "schedule", "task", "feature", "status", "testing", "coverage", "pipeline", "claimed", "roadmap"],
     "food_drink": ["coffee", "cafe", "restaurant", "bakery", "pizza", "burger", "tea", "deli"],
@@ -70,9 +78,16 @@ CATEGORY_MAP = {
 
 @dataclass
 class AIDocumentUnderstandingResult:
-    document_type: DocumentType = DocumentType.other
+    document_type: DocumentType = DocumentType.general_document
     title: str | None = None
     merchant_name: str | None = None
+    vendor_name: str | None = None
+    customer_name: str | None = None
+    document_number: str | None = None
+    issue_date: date | None = None
+    due_date: date | None = None
+    line_items: list[dict] = field(default_factory=list)
+    low_confidence_fields: list[str] = field(default_factory=list)
     extracted_date: date | None = None
     extracted_amount: Decimal | None = None
     subtotal: Decimal | None = None
@@ -147,6 +162,12 @@ class LocalDocumentAIService(DocumentAIService):
             "document_type": self.provider_name,
             "title": self.provider_name,
             "merchant_name": self.provider_name,
+            "vendor_name": self.provider_name,
+            "customer_name": self.provider_name,
+            "document_number": self.provider_name,
+            "issue_date": self.provider_name,
+            "due_date": self.provider_name,
+            "line_items": self.provider_name,
             "extracted_date": "ocr_parser",
             "extracted_amount": self.provider_name,
             "subtotal": self.provider_name,
@@ -158,6 +179,13 @@ class LocalDocumentAIService(DocumentAIService):
             document_type=document_type,
             title=title,
             merchant_name=self._merchant(lines, parsed) if document_type == DocumentType.receipt else parsed.merchant_name,
+            vendor_name=parsed.vendor_name or parsed.merchant_name,
+            customer_name=parsed.customer_name,
+            document_number=parsed.document_number,
+            issue_date=parsed.issue_date or parsed.extracted_date,
+            due_date=parsed.due_date,
+            line_items=parsed.line_items,
+            low_confidence_fields=self._low_confidence_fields(parsed.line_items, document_type),
             extracted_date=parsed.extracted_date or self.parser._extract_date(text),
             extracted_amount=total,
             subtotal=subtotal,
@@ -175,6 +203,27 @@ class LocalDocumentAIService(DocumentAIService):
             provider_chain=[self.provider_name],
             field_sources=field_sources,
         )
+
+    def _low_confidence_fields(self, line_items: list[dict], document_type: DocumentType) -> list[str]:
+        fields: list[str] = []
+        manufacturing_types = {
+            DocumentType.purchase_order,
+            DocumentType.quotation,
+            DocumentType.transaction_statement,
+            DocumentType.delivery_note,
+            DocumentType.invoice,
+            DocumentType.packing_list,
+        }
+        if document_type not in manufacturing_types:
+            return fields
+        if not line_items:
+            fields.append("line_items")
+            return fields
+        for index, item in enumerate(line_items, start=1):
+            for key in ["quantity", "unit_price", "line_total"]:
+                if item.get(key) in (None, "", []):
+                    fields.append(f"line_items[{index}].{key}")
+        return fields[:30]
 
     def _clean_lines(self, raw_text: str) -> list[str]:
         lines = []
@@ -211,9 +260,22 @@ class LocalDocumentAIService(DocumentAIService):
 
     def _classify(self, text: str, filename: str, fallback: DocumentType) -> tuple[DocumentType, Decimal]:
         haystack = f"{filename}\n{text}".lower()
+        manufacturing_scores = {
+            DocumentType.purchase_order: self._score(haystack, ["발주서", "발주 번호", "purchase order", "po no", "납기일"]),
+            DocumentType.quotation: self._score(haystack, ["견적서", "견적 번호", "quotation", "quote", "견적금액"]),
+            DocumentType.transaction_statement: self._score(haystack, ["거래명세서", "거래 명세서", "transaction statement", "공급가액", "세액"]),
+            DocumentType.delivery_note: self._score(haystack, ["납품서", "납품 번호", "delivery note", "납품일"]),
+            DocumentType.invoice: self._score(haystack, ["세금계산서", "invoice", "청구서", "공급받는자"]),
+            DocumentType.packing_list: self._score(haystack, ["포장명세서", "packing list", "carton", "box"]),
+            DocumentType.inspection_report: self._score(haystack, ["검사성적서", "inspection report", "검사 결과", "합격"]),
+            DocumentType.contract: self._score(haystack, ["계약서", "contract", "계약 금액"]),
+        }
+        manufacturing_winner, manufacturing_score = max(manufacturing_scores.items(), key=lambda item: item[1])
+        if manufacturing_score >= 2:
+            return manufacturing_winner, Decimal(str(min(0.94, 0.58 + manufacturing_score * 0.06)))
         invoice_score = self._score(haystack, ["invoice", "invoice number", "invoice #", "vendor", "bill to", "amount due", "total due"])
         if invoice_score >= 4:
-            return DocumentType.document, Decimal("0.84")
+            return DocumentType.invoice, Decimal("0.84")
         guide_score = self._score(haystack, ["installation guide", "setup guide", "technical guide", "project setup", "install", "configuration", "dependencies", "prerequisites"])
         tracker_score = self._score(haystack, ["implementation schedule", "project tracker", "roadmap", "task", "feature", "status", "testing", "coverage", "pipeline", "claimed"])
         if guide_score >= 4 or tracker_score >= 6:
@@ -440,11 +502,14 @@ class OpenAIVisionDocumentAIService(DocumentAIService):
         mime = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
         prompt = (
             "Analyze this document image directly. Return only JSON with: document_type, title, "
-            "merchant_name, extracted_date as YYYY-MM-DD or null, extracted_amount, subtotal, tax, "
+            "merchant_name, vendor_name, customer_name, document_number, issue_date, due_date, "
+            "line_items, low_confidence_fields, extracted_date as YYYY-MM-DD or null, extracted_amount, subtotal, tax, "
             "currency, category, tags, summary, cleaned_raw_text, confidence_score between 0 and 1, "
             "review_required, and extraction_notes. Supported document_type values are receipt, "
-            "notice, document, memo, presentation, other. Prefer categories like food_drink, transport, education, "
-            "utilities, retail, groceries, health, office, notice, other. OCR text is supplied only "
+            "purchase_order, quotation, transaction_statement, delivery_note, invoice, packing_list, "
+            "inspection_report, contract, general_document, notice, document, memo, presentation, other. "
+            "For Korean manufacturing documents, line_items must include item_name, item_code, specification, "
+            "quantity, unit, unit_price, supply_amount, tax_amount, line_total. OCR text is supplied only "
             f"as auxiliary context. Filename: {filename}. OCR text:\n{raw_text[:6000]}"
         )
         response = self.client.chat.completions.create(
@@ -475,6 +540,13 @@ class OpenAIVisionDocumentAIService(DocumentAIService):
             document_type=doc_type,
             title=payload.get("title") or parsed.title,
             merchant_name=payload.get("merchant_name") or parsed.merchant_name,
+            vendor_name=payload.get("vendor_name") or parsed.vendor_name,
+            customer_name=payload.get("customer_name") or parsed.customer_name,
+            document_number=payload.get("document_number") or parsed.document_number,
+            issue_date=self._parse_date(payload.get("issue_date")) or parsed.issue_date,
+            due_date=self._parse_date(payload.get("due_date")) or parsed.due_date,
+            line_items=payload.get("line_items") or parsed.line_items,
+            low_confidence_fields=[str(field) for field in payload.get("low_confidence_fields", [])],
             extracted_date=self._parse_date(payload.get("extracted_date")) or parsed.extracted_date,
             extracted_amount=self._decimal(payload.get("extracted_amount")) or parsed.extracted_amount,
             subtotal=self._decimal(payload.get("subtotal")),
@@ -903,10 +975,13 @@ class Qwen25VLDocumentAIService(DocumentAIService):
     def _prompt(self, raw_text: str, parsed: ParsedDocument, filename: str) -> str:
         return (
             "Refine this document extraction. Return only JSON with keys: document_type, title, "
-            "merchant_name, extracted_date, extracted_amount, subtotal, tax, currency, category, "
+            "merchant_name, vendor_name, customer_name, document_number, issue_date, due_date, line_items, "
+            "low_confidence_fields, extracted_date, extracted_amount, subtotal, tax, currency, category, "
             "tags, summary, cleaned_raw_text, confidence_score, review_required, extraction_notes. "
-            "Use document_type receipt, notice, document, memo, presentation, or other. Fill missing fields only "
-            "when visible or strongly supported. "
+            "Use document_type purchase_order, quotation, transaction_statement, delivery_note, invoice, "
+            "packing_list, inspection_report, contract, general_document, receipt, notice, document, memo, "
+            "presentation, or other. For line_items include item_name, item_code, specification, quantity, "
+            "unit, unit_price, supply_amount, tax_amount, line_total. Fill missing fields only when visible or strongly supported. "
             f"Filename: {filename}. Prior parser type: {parsed.document_type.value}. OCR text:\n{raw_text[:6000]}"
         )
 
@@ -1012,6 +1087,18 @@ class HybridOpenSourceDocumentAIService(DocumentAIService):
                 reasons.append("Document title is missing.")
             if not result.summary:
                 reasons.append("Document summary is missing.")
+        elif result.document_type in {
+            DocumentType.purchase_order,
+            DocumentType.quotation,
+            DocumentType.transaction_statement,
+            DocumentType.delivery_note,
+            DocumentType.invoice,
+            DocumentType.packing_list,
+        }:
+            if not result.line_items:
+                reasons.append("Manufacturing line items are missing.")
+            if any(item.get(field) in (None, "", []) for item in result.line_items for field in ["quantity", "unit_price", "line_total"]):
+                reasons.append("Manufacturing line item quantity, unit price, or line total is uncertain.")
         if not result.category or result.category == "other":
             reasons.append("Category is missing or weak.")
         if result.review_required:
@@ -1040,6 +1127,13 @@ class HybridOpenSourceDocumentAIService(DocumentAIService):
         for field_name in [
             "title",
             "merchant_name",
+            "vendor_name",
+            "customer_name",
+            "document_number",
+            "issue_date",
+            "due_date",
+            "line_items",
+            "low_confidence_fields",
             "extracted_date",
             "extracted_amount",
             "subtotal",

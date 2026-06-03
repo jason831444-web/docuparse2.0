@@ -6,40 +6,41 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatMoney(value?: string | number | null, currency = "USD") {
-  if (value === undefined || value === null || value === "") return "No amount";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(value));
+  if (value === undefined || value === null || value === "") return "금액 없음";
+  return new Intl.NumberFormat("ko-KR", { style: "currency", currency }).format(Number(value));
 }
 
 export function formatDate(value?: string | null) {
-  if (!value) return "No date";
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`));
+  if (!value) return "날짜 없음";
+  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`));
 }
 
 export function formatDateTime(value?: string | null) {
-  if (!value) return "Unknown";
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  if (!value) return "알 수 없음";
+  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
 const LABEL_ALIASES: Record<string, string> = {
-  syllabus: "Syllabus",
-  course_guide: "Course Guide",
-  presentation_guide: "Presentation Guide",
-  speaking_notes: "Speaking Notes",
-  resume_profile: "Resume Profile",
-  profile_record: "Profile Record",
-  installation_guide: "Installation Guide",
-  implementation_schedule: "Implementation Schedule",
-  repair_service_receipt: "Repair Service Receipt",
-  utility_bill: "Utility Bill",
-  meeting_notice: "Meeting Notice",
-  instructional_memo: "Instructional Memo",
-  presentation: "Presentation",
-  repair_service: "Repair Service",
-  retail: "Retail",
+  purchase_order: "발주서",
+  quotation: "견적서",
+  transaction_statement: "거래명세서",
+  delivery_note: "납품서",
+  invoice: "인보이스/세금계산서",
+  packing_list: "포장명세서",
+  inspection_report: "검사성적서",
+  contract: "계약서",
+  general_document: "일반 문서",
+  receipt: "영수증",
+  notice: "공지 문서",
+  document: "문서",
+  memo: "메모",
+  presentation: "프레젠테이션",
+  other: "기타",
+  retail: "소매",
 };
 
 export function titleCaseLabel(value?: string | null): string {
-  if (!value) return "Uncategorized";
+  if (!value) return "미분류";
   if (value.includes(">")) return value.split(">").map((part) => titleCaseLabel(part)).join(" > ");
   const alias = LABEL_ALIASES[value];
   if (alias) return alias;
@@ -76,6 +77,6 @@ export function documentSummaryDetailed(document: { workflow_metadata?: Record<s
 }
 
 export function shortSummary(summary?: string | null, limit = 120) {
-  if (!summary) return "No summary available yet.";
+  if (!summary) return "아직 추출된 업무 데이터가 없습니다.";
   return summary.length > limit ? `${summary.slice(0, limit).trim()}...` : summary;
 }

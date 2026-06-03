@@ -9,7 +9,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail ?? "Request failed");
+    throw new Error(error.detail ?? "요청에 실패했습니다");
   }
   return response.json() as Promise<T>;
 }
@@ -25,8 +25,8 @@ export const api = {
   deleteCategory: async (value: string) => {
     const response = await fetch(`${API_BASE}/documents/categories/${encodeURIComponent(value)}`, { method: "DELETE" });
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: "Could not delete category" }));
-      throw new Error(error.detail ?? "Could not delete category");
+      const error = await response.json().catch(() => ({ detail: "문서 유형을 삭제하지 못했습니다" }));
+      throw new Error(error.detail ?? "문서 유형을 삭제하지 못했습니다");
     }
   },
   fileTypes: () => request<FolderSummary[]>("/documents/file-types", { cache: "no-store" }),
@@ -42,7 +42,7 @@ export const api = {
     request<DocumentRecord>(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   remove: async (id: string) => {
     const response = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
-    if (!response.ok) throw new Error("Could not delete document");
+    if (!response.ok) throw new Error("문서를 삭제하지 못했습니다");
   },
   bulkDelete: async (ids: string[]) =>
     request<{ deleted: number }>("/documents/bulk/delete", { method: "POST", body: JSON.stringify({ ids }) }),
@@ -52,7 +52,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
-    if (!response.ok) throw new Error("Could not download selected files");
+    if (!response.ok) throw new Error("선택한 파일을 다운로드하지 못했습니다");
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -68,5 +68,6 @@ export const api = {
   markNeedsReview: (id: string) => request<DocumentRecord>(`/documents/${id}/needs-review`, { method: "POST" }),
   toggleFavorite: (id: string) => request<DocumentRecord>(`/documents/${id}/favorite`, { method: "POST" }),
   exportCsvUrl: () => `${API_BASE}/documents/export/csv`,
+  exportExcelUrl: () => `${API_BASE}/documents/export/xlsx`,
   exportJsonUrl: (id: string) => `${API_BASE}/documents/${id}/export/json`
 };

@@ -44,7 +44,7 @@ export function CategorySelector({
           );
         })}
         {!shownFolders.length ? (
-          <div className="px-2 py-2 text-sm text-muted-foreground">Categories will appear after documents are processed.</div>
+          <div className="px-2 py-2 text-sm text-muted-foreground">문서 처리 후 문서 유형이 표시됩니다.</div>
         ) : null}
       </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
@@ -52,11 +52,11 @@ export function CategorySelector({
           className="bg-white"
           value={normalizedValue}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Type a category, e.g. implementation_schedule"
+          placeholder="문서 유형 입력 예: purchase_order"
         />
         <Button type="button" variant="outline" onClick={() => activeFolder && onChange(activeFolder.category || activeFolder.value)} disabled={!activeFolder}>
           <Plus className="size-4" />
-          {activeFolder ? titleCaseLabel(activeFolder.category || activeFolder.value) : "Select"}
+          {activeFolder ? titleCaseLabel(activeFolder.category || activeFolder.value) : "선택"}
         </Button>
       </div>
     </div>

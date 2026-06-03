@@ -27,8 +27,8 @@ export default function NotificationsPage() {
   return (
     <main className="shell py-8">
       <div className="mb-6">
-        <h1 className="text-3xl font-semibold tracking-normal">Notifications</h1>
-        <p className="mt-2 text-muted-foreground">Recent upload, processing, review, and category events from your document workspace.</p>
+        <h1 className="text-3xl font-semibold tracking-normal">알림</h1>
+        <p className="mt-2 text-muted-foreground">업로드, 처리 중, 검토 필요, 확정 완료 상태를 최근 순서로 확인합니다.</p>
       </div>
 
       {items.length ? (
@@ -45,10 +45,10 @@ export default function NotificationsPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-semibold">{item.title}</p>
-                        {item.action_required ? <Badge className="bg-amber-100 text-amber-900">Action needed</Badge> : null}
+                        {item.action_required ? <Badge className="bg-amber-100 text-amber-900">확인 필요</Badge> : null}
                         {item.category_label ? <Badge variant="outline">{item.category_label}</Badge> : null}
                       </div>
-                      <p className="mt-1 line-clamp-2 break-words text-sm text-muted-foreground">{item.document_title || "Untitled document"}</p>
+                      <p className="mt-1 line-clamp-2 break-words text-sm text-muted-foreground">{item.document_title || "제목 없는 문서"}</p>
                       <p className="mt-1 text-sm text-muted-foreground">{item.message}</p>
                       <p className="mt-2 text-xs text-muted-foreground">
                         {titleCaseLabel(item.processing_status)} · {formatDateTime(item.created_at)}
@@ -62,7 +62,7 @@ export default function NotificationsPage() {
         </div>
       ) : (
         <Card>
-          <CardContent className="p-10 text-center text-muted-foreground">No notifications yet.</CardContent>
+          <CardContent className="p-10 text-center text-muted-foreground">아직 알림이 없습니다.</CardContent>
         </Card>
       )}
     </main>

@@ -8,6 +8,16 @@ from app.services.file_ingestion import NormalizedDocument
 from app.services.parser import ParsedDocument
 
 
+MANUFACTURING_TYPES = {
+    DocumentType.purchase_order,
+    DocumentType.quotation,
+    DocumentType.transaction_statement,
+    DocumentType.delivery_note,
+    DocumentType.invoice,
+    DocumentType.packing_list,
+}
+
+
 @dataclass
 class QualityEvaluation:
     stage: str
@@ -54,6 +64,20 @@ class DocumentQualityEvaluator:
 
         if parsed.extracted_date:
             score += 0.05
+        if parsed.document_type in MANUFACTURING_TYPES:
+            if parsed.document_number:
+                score += 0.05
+            if parsed.vendor_name or parsed.merchant_name:
+                score += 0.05
+            if parsed.line_items:
+                score += 0.12
+            else:
+                reasons.append("No manufacturing line items were extracted.")
+                score -= 0.18
+            incomplete_items = self._incomplete_line_items(parsed.line_items)
+            if incomplete_items:
+                reasons.append("Some line items are missing quantity, unit price, or line total.")
+                score -= 0.12
         if parsed.document_type == DocumentType.receipt and parsed.extracted_amount:
             score += 0.08
             merchant_present = bool(parsed.merchant_name)
@@ -84,7 +108,7 @@ class DocumentQualityEvaluator:
             stage="post_ingestion",
             score=score,
             sufficient=sufficient,
-            review_required=score < 0.62 or normalized.partial_support,
+            review_required=score < 0.62 or normalized.partial_support or (parsed.document_type in MANUFACTURING_TYPES and (not parsed.line_items or self._incomplete_line_items(parsed.line_items))),
             escalation_recommended=escalation,
             reasons=reasons or ["Extracted content passed the first quality gate."],
         )
@@ -104,7 +128,20 @@ class DocumentQualityEvaluator:
         if ai_result.extraction_notes:
             reasons.extend(ai_result.extraction_notes[:4])
 
-        if ai_result.document_type == DocumentType.receipt:
+        if ai_result.document_type in MANUFACTURING_TYPES:
+            if not ai_result.document_number:
+                reasons.append("Document number is missing.")
+                score -= 0.06
+            if not (ai_result.vendor_name or ai_result.merchant_name):
+                reasons.append("Vendor or supplier name is missing.")
+                score -= 0.08
+            if not ai_result.line_items:
+                reasons.append("Line items are missing.")
+                score -= 0.22
+            if self._incomplete_line_items(ai_result.line_items):
+                reasons.append("Line item quantity, unit price, or line total is uncertain.")
+                score -= 0.16
+        elif ai_result.document_type == DocumentType.receipt:
             if not ai_result.extracted_amount:
                 reasons.append("Receipt amount is missing.")
                 score -= 0.18
@@ -123,7 +160,10 @@ class DocumentQualityEvaluator:
             score -= 0.05
 
         score = self._clamp(score)
-        review_required = score < 0.64 or bool(reasons and ai_result.review_required)
+        review_required = score < 0.64 or bool(reasons and ai_result.review_required) or (
+            ai_result.document_type in MANUFACTURING_TYPES
+            and (not ai_result.line_items or self._incomplete_line_items(ai_result.line_items))
+        )
         return QualityEvaluation(
             stage="post_structured_extraction",
             score=score,
@@ -140,3 +180,9 @@ class DocumentQualityEvaluator:
         token_count = len(line.split())
         symbol_count = len(re.findall(r"[^A-Za-z0-9\s.,:/$%-]", line))
         return (token_count <= 2 and symbol_count >= 2) or bool(re.search(r"(.)\1{4,}", line))
+
+    def _incomplete_line_items(self, line_items: list[dict] | None) -> bool:
+        for item in line_items or []:
+            if any(item.get(field) in (None, "", []) for field in ["quantity", "unit_price", "line_total"]):
+                return True
+        return False

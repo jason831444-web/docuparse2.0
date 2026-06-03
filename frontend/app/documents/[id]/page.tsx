@@ -33,7 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
 import { documentSummaryDetailed, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
-import type { DocumentRecord, DocumentUpdate, FolderSummary } from "@/types/document";
+import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
@@ -48,6 +48,13 @@ function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string 
     tax: document.tax ?? "",
     currency: document.currency ?? "",
     merchant_name: document.merchant_name ?? "",
+    vendor_name: document.vendor_name ?? "",
+    customer_name: document.customer_name ?? "",
+    document_number: document.document_number ?? "",
+    issue_date: document.issue_date ?? "",
+    due_date: document.due_date ?? "",
+    line_items: document.line_items ?? [],
+    low_confidence_fields: document.low_confidence_fields ?? [],
     category: document.category ?? "",
     tags: document.tags,
     summary: document.summary ?? "",
@@ -99,7 +106,7 @@ export default function DocumentDetailPage() {
     api
       .get(params.id)
       .then(syncDocument)
-      .catch((error) => toast.error(error instanceof Error ? error.message : "Could not load document"))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "문서를 불러오지 못했습니다"))
       .finally(() => setLoading(false));
     api.categories().then(setCategories).catch(() => setCategories([]));
   }, [params.id, syncDocument]);
@@ -111,12 +118,19 @@ export default function DocumentDetailPage() {
       ...fields,
       title: values.title || null,
       raw_text: values.raw_text || null,
-      extracted_date: values.extracted_date || null,
+      extracted_date: values.issue_date || values.extracted_date || null,
       extracted_amount: values.extracted_amount || null,
       subtotal: values.subtotal || null,
       tax: values.tax || null,
       currency: values.currency || null,
       merchant_name: values.merchant_name || null,
+      vendor_name: values.vendor_name || null,
+      customer_name: values.customer_name || null,
+      document_number: values.document_number || null,
+      issue_date: values.issue_date || null,
+      due_date: values.due_date || null,
+      line_items: values.line_items || [],
+      low_confidence_fields: values.low_confidence_fields || [],
       category: values.category || null,
       summary: values.summary || null,
       tags: tags_text
@@ -127,9 +141,9 @@ export default function DocumentDetailPage() {
     try {
       const updated = await api.update(params.id, payload);
       syncDocument(updated);
-      toast.success("Document saved");
+      toast.success("수정 내용을 저장했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save");
+      toast.error(error instanceof Error ? error.message : "저장에 실패했습니다");
     } finally {
       setSaving(false);
     }
@@ -140,9 +154,9 @@ export default function DocumentDetailPage() {
     try {
       const updated = await api.reprocess(params.id);
       syncDocument(updated);
-      toast.success("Reprocessing started");
+      toast.success("다시 처리를 시작했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Reprocess failed");
+      toast.error(error instanceof Error ? error.message : "다시 처리하지 못했습니다");
     } finally {
       setSaving(false);
     }
@@ -153,9 +167,9 @@ export default function DocumentDetailPage() {
     try {
       const updated = await api.confirm(params.id);
       syncDocument(updated);
-      toast.success("Document confirmed");
+      toast.success("확정 완료로 변경했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Confirm failed");
+      toast.error(error instanceof Error ? error.message : "확정 처리에 실패했습니다");
     } finally {
       setSaving(false);
     }
@@ -166,9 +180,9 @@ export default function DocumentDetailPage() {
     try {
       const updated = await api.markNeedsReview(params.id);
       syncDocument(updated);
-      toast.success("Moved to needs review");
+      toast.success("검토 필요 상태로 변경했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update review status");
+      toast.error(error instanceof Error ? error.message : "검토 상태를 변경하지 못했습니다");
     } finally {
       setSaving(false);
     }
@@ -178,21 +192,49 @@ export default function DocumentDetailPage() {
     try {
       const updated = await api.toggleFavorite(params.id);
       syncDocument(updated);
-      toast.success(updated.is_favorite ? "Pinned to favorites" : "Removed from favorites");
+      toast.success(updated.is_favorite ? "즐겨찾기에 추가했습니다" : "즐겨찾기에서 제거했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update favorite");
+      toast.error(error instanceof Error ? error.message : "즐겨찾기 상태를 변경하지 못했습니다");
     }
   }
 
   async function remove() {
-    if (!window.confirm("Delete this document and uploaded file?")) return;
+    if (!window.confirm("이 문서와 업로드한 원본 파일을 삭제할까요?")) return;
     try {
       await api.remove(params.id);
-      toast.success("Document deleted");
+      toast.success("문서를 삭제했습니다");
       router.push(searchParams.get("from") || "/documents");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Delete failed");
+      toast.error(error instanceof Error ? error.message : "삭제에 실패했습니다");
     }
+  }
+
+  function updateLineItem(index: number, field: keyof ManufacturingLineItem, value: string) {
+    const items = [...(form.getValues("line_items") || [])];
+    items[index] = { ...(items[index] || {}), [field]: value };
+    form.setValue("line_items", items, { shouldDirty: true });
+  }
+
+  function addLineItem() {
+    const items = [...(form.getValues("line_items") || [])];
+    items.push({
+      item_name: "",
+      item_code: "",
+      specification: "",
+      quantity: "",
+      unit: "",
+      unit_price: "",
+      supply_amount: "",
+      tax_amount: "",
+      line_total: "",
+    });
+    form.setValue("line_items", items, { shouldDirty: true });
+  }
+
+  function removeLineItem(index: number) {
+    const items = [...(form.getValues("line_items") || [])];
+    items.splice(index, 1);
+    form.setValue("line_items", items, { shouldDirty: true });
   }
 
   const categoryInterpretation = useMemo(
@@ -215,7 +257,7 @@ export default function DocumentDetailPage() {
     return (
       <main className="shell py-8">
         <Card>
-          <CardContent className="p-12 text-center text-muted-foreground">Document not found.</CardContent>
+          <CardContent className="p-12 text-center text-muted-foreground">문서를 찾을 수 없습니다.</CardContent>
         </Card>
       </main>
     );
@@ -228,6 +270,8 @@ export default function DocumentDetailPage() {
   const surfacedFields = readList(categoryInterpretation?.surfaced_fields);
   const isConfirmed = document.processing_status === "confirmed";
   const selectedCategory = form.watch("category") ?? "";
+  const lineItems = form.watch("line_items") ?? [];
+  const lowConfidenceFields = document.low_confidence_fields ?? [];
 
   return (
     <main className="shell py-8">
@@ -237,11 +281,11 @@ export default function DocumentDetailPage() {
             <StatusBadge status={document.processing_status} />
             <Badge className="bg-accent text-accent-foreground">{categoryLabel}</Badge>
             {document.source_file_type ? <Badge variant="outline">{titleCaseLabel(document.source_file_type)}</Badge> : null}
-            {document.is_favorite ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">Pinned</Badge> : null}
+            {document.is_favorite ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">즐겨찾기</Badge> : null}
           </div>
           <h1 className="text-3xl font-semibold tracking-normal">{document.title || titleHint || document.original_filename}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {document.original_filename} · Updated {formatDateTime(document.updated_at)}
+            {document.original_filename} · 최근 수정 {formatDateTime(document.updated_at)}
           </p>
           <p className="mt-3 max-w-2xl text-sm text-muted-foreground">
             {documentSummaryDetailed(document, 700)}
@@ -250,29 +294,29 @@ export default function DocumentDetailPage() {
         <div className="flex flex-wrap gap-2">
           <Button variant={isConfirmed ? "secondary" : "default"} onClick={confirmDocument} disabled={saving || isConfirmed}>
             <CheckCheck className="size-4" />
-            {isConfirmed ? "Confirmed" : "Confirm"}
+            {isConfirmed ? "확정 완료" : "확정 처리"}
           </Button>
           <Button variant="outline" onClick={markNeedsReview} disabled={saving}>
             <AlertTriangle className="size-4" />
-            Needs Review
+            검토 필요
           </Button>
           <Button variant="outline" onClick={toggleFavorite}>
             <Star className={`size-4 ${document.is_favorite ? "fill-amber-400 text-amber-400" : ""}`} />
-            {document.is_favorite ? "Pinned" : "Pin"}
+            {document.is_favorite ? "즐겨찾기" : "즐겨찾기"}
           </Button>
           <Button variant="outline" onClick={reprocess} disabled={saving}>
             <RefreshCw className="size-4" />
-            Reprocess
+            다시 처리
           </Button>
           <Button asChild variant="outline">
             <a href={api.exportJsonUrl(document.id)}>
               <Download className="size-4" />
-              JSON
+              JSON으로 내보내기
             </a>
           </Button>
           <Button variant="destructive" onClick={remove}>
             <Trash2 className="size-4" />
-            Delete
+            삭제
           </Button>
         </div>
       </div>
@@ -280,20 +324,20 @@ export default function DocumentDetailPage() {
       <div className="mb-6 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Primary category</p>
+            <p className="text-xs text-muted-foreground">문서 유형</p>
             <p className="mt-1 font-semibold">{categoryLabel}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Interpretation profile</p>
-            <p className="mt-1 font-semibold">{categoryProfile ? titleCaseLabel(categoryProfile) : "Not surfaced"}</p>
+            <p className="text-xs text-muted-foreground">AI 분류 프로필</p>
+            <p className="mt-1 font-semibold">{categoryProfile ? titleCaseLabel(categoryProfile) : "표시된 값 없음"}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Provider chain</p>
-            <p className="mt-1 break-words text-sm font-semibold">{document.provider_chain || "Unavailable"}</p>
+            <p className="text-xs text-muted-foreground">추출 경로</p>
+            <p className="mt-1 break-words text-sm font-semibold">{document.provider_chain || "확인 불가"}</p>
           </CardContent>
         </Card>
       </div>
@@ -314,7 +358,7 @@ export default function DocumentDetailPage() {
               activeTab === tab ? "border-primary bg-primary text-primary-foreground" : "bg-white text-muted-foreground hover:border-primary/40"
             }`}
           >
-            {tab === "ai" ? "AI Result" : tab === "extracted" ? "Extracted Text" : "Original"}
+            {tab === "ai" ? "AI 추출 결과" : tab === "extracted" ? "원문 텍스트" : "원본 문서"}
           </button>
         ))}
       </div>
@@ -324,7 +368,7 @@ export default function DocumentDetailPage() {
           {activeTab === "original" ? (
             <Card>
               <CardHeader>
-                <CardTitle>Original document</CardTitle>
+                <CardTitle>원본 문서</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {isImage ? (
@@ -337,16 +381,16 @@ export default function DocumentDetailPage() {
                     <p className="font-semibold">{document.original_filename}</p>
                     <p className="mt-1 text-sm text-muted-foreground">{document.mime_type}</p>
                     <Button asChild variant="outline" className="mt-4">
-                      <a href={document.file_url}>Open original</a>
+                      <a href={document.file_url}>원본 열기</a>
                     </Button>
                   </div>
                 )}
                 <InfoGrid
                   items={[
-                    ["Source file type", titleCaseLabel(document.source_file_type || "unknown")],
-                    ["Extraction method", document.extraction_method || "Unavailable"],
-                    ["Uploaded", formatDateTime(document.created_at)],
-                    ["Last updated", formatDateTime(document.updated_at)],
+                    ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
+                    ["추출 방식", document.extraction_method || "확인 불가"],
+                    ["업로드 날짜", formatDateTime(document.created_at)],
+                    ["최근 수정", formatDateTime(document.updated_at)],
                   ]}
                 />
               </CardContent>
@@ -356,16 +400,16 @@ export default function DocumentDetailPage() {
           {activeTab === "extracted" ? (
             <Card>
               <CardHeader>
-                <CardTitle>Extracted text</CardTitle>
+                <CardTitle>원문 텍스트</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <Textarea className="min-h-[38rem] font-mono text-xs" {...form.register("raw_text")} />
                 <InfoGrid
                   items={[
-                    ["Extraction provider", document.extraction_provider || "Unavailable"],
-                    ["Refinement provider", document.refinement_provider || "Not used"],
-                    ["Confidence", document.ai_confidence_score ? `${Math.round(Number(document.ai_confidence_score) * 100)}%` : null],
-                    ["Review recommendation", document.review_required ? "Recommended" : "Looks usable"],
+                    ["추출 제공자", document.extraction_provider || "확인 불가"],
+                    ["보정 제공자", document.refinement_provider || "사용 안 함"],
+                    ["신뢰도", document.ai_confidence_score ? `${Math.round(Number(document.ai_confidence_score) * 100)}%` : null],
+                    ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
                   ]}
                 />
               </CardContent>
@@ -377,15 +421,15 @@ export default function DocumentDetailPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="size-5 text-primary" />
-                  AI result
+                  AI 추출 결과
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <InfoGrid
                   items={[
-                    ["Primary visible label", categoryLabel],
-                    ["Interpretation profile", categoryProfile ? titleCaseLabel(categoryProfile) : null],
-                    ["Title hint", titleHint],
+                    ["문서 유형", categoryLabel],
+                    ["분류 프로필", categoryProfile ? titleCaseLabel(categoryProfile) : null],
+                    ["제목 후보", titleHint],
                   ]}
                 />
                 {document.ai_extraction_notes ? (
@@ -395,7 +439,7 @@ export default function DocumentDetailPage() {
                 ) : null}
                 {surfacedFields.length ? (
                   <div className="rounded-lg border bg-white p-4">
-                    <p className="mb-3 text-xs font-medium uppercase text-muted-foreground">Surfaced fields</p>
+                    <p className="mb-3 text-xs font-medium uppercase text-muted-foreground">검토 필요 항목</p>
                     <div className="flex flex-wrap gap-2">
                       {surfacedFields.map((field) => (
                         <Badge key={field} variant="outline">
@@ -407,7 +451,7 @@ export default function DocumentDetailPage() {
                 ) : null}
                 {document.field_sources ? (
                   <div className="rounded-lg border bg-white p-4">
-                    <p className="mb-3 text-xs font-medium uppercase text-muted-foreground">Field provenance</p>
+                    <p className="mb-3 text-xs font-medium uppercase text-muted-foreground">필드별 추출 출처</p>
                     <div className="grid gap-2 text-sm sm:grid-cols-2">
                       {Object.entries(document.field_sources).map(([field, source]) => (
                         <div key={field} className="flex items-center justify-between rounded-md border px-3 py-2">
@@ -429,22 +473,22 @@ export default function DocumentDetailPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Bot className="size-5 text-primary" />
-                Review and organization
+                문서 검토
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {document.review_required ? (
                 <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-100/60 p-3 text-sm text-amber-900">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                  Review is recommended before relying on this result. Confirm when it looks right, or keep it in the review queue.
+                  일부 항목은 확인이 필요합니다. 신뢰도 낮은 필드를 검토하고 수정한 뒤 확정 처리하세요.
                 </div>
               ) : null}
               <InfoGrid
                 items={[
-                  ["Current folder", categoryLabel],
-                  ["Status", titleCaseLabel(document.processing_status)],
-                  ["Needs review", document.review_required ? "Yes" : "No"],
-                  ["Follow-up", document.follow_up_required ? "Suggested" : "Not required"],
+                  ["문서 유형", categoryLabel],
+                  ["처리 상태", titleCaseLabel(document.processing_status)],
+                  ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
+                  ["신뢰도 낮은 필드", lowConfidenceFields.length ? `${lowConfidenceFields.length}개` : "없음"],
                 ]}
               />
             </CardContent>
@@ -453,10 +497,10 @@ export default function DocumentDetailPage() {
             <CardHeader className="border-b bg-slate-50/70">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">Correction workspace</p>
+                  <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">추출된 업무 데이터</p>
                   <CardTitle className="mt-1 flex items-center gap-2">
                     <ShieldCheck className="size-5 text-primary" />
-                    Review and edit
+                    문서 검토 및 수정
                   </CardTitle>
                 </div>
                 <Badge variant="outline">{categoryLabel}</Badge>
@@ -467,8 +511,8 @@ export default function DocumentDetailPage() {
                 <div className="mb-3 flex items-center gap-2">
                   <FolderKanban className="size-4 text-primary" />
                   <div>
-                    <p className="text-sm font-semibold">Category folder</p>
-                    <p className="text-xs text-muted-foreground">Move this document by meaning; search and filters use the normalized folder value.</p>
+                    <p className="text-sm font-semibold">문서 유형</p>
+                    <p className="text-xs text-muted-foreground">발주서, 견적서, 거래명세서, 납품서 등 업무 문서 유형을 확인하세요.</p>
                   </div>
                 </div>
                 <CategorySelector
@@ -478,73 +522,147 @@ export default function DocumentDetailPage() {
                 />
                 <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <Tag className="size-3.5" />
-                  Changing the category moves this document into a different AI-organized folder.
+                  문서 유형은 검색, 필터, 내보내기 데이터에 함께 반영됩니다.
                 </p>
               </section>
 
               <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">
                 <div>
-                  <p className="text-sm font-semibold">Editable extraction</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Correct the user-facing fields while keeping the original extraction available for audit.</p>
+                  <p className="text-sm font-semibold">문서 기본 정보</p>
+                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 발행일, 납기일을 ERP 입력 기준으로 수정하세요.</p>
                 </div>
                 <label className="grid gap-2 text-sm font-medium">
-                  Title
+                  제목
                   <Input {...form.register("title")} />
                 </label>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="grid gap-2 text-sm font-medium">
-                    Extracted date
-                    <Input type="date" {...form.register("extracted_date")} />
+                    발행일
+                    <Input type="date" {...form.register("issue_date")} />
                   </label>
                   <label className="grid gap-2 text-sm font-medium">
-                    Amount
+                    납기일
+                    <Input type="date" {...form.register("due_date")} />
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    공급업체
+                    <Input {...form.register("vendor_name")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    고객사
+                    <Input {...form.register("customer_name")} />
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    문서번호
+                    <Input {...form.register("document_number")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    합계금액
                     <Input type="number" min="0" step="0.01" {...form.register("extracted_amount")} />
                   </label>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-3">
                   <label className="grid gap-2 text-sm font-medium">
-                    Subtotal
+                    공급가액
                     <Input type="number" min="0" step="0.01" {...form.register("subtotal")} />
                   </label>
                   <label className="grid gap-2 text-sm font-medium">
-                    Tax
+                    세액
                     <Input type="number" min="0" step="0.01" {...form.register("tax")} />
                   </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
                   <label className="grid gap-2 text-sm font-medium">
-                    Currency
-                    <Input placeholder="USD" {...form.register("currency")} />
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium">
-                    Merchant / source
-                    <Input {...form.register("merchant_name")} />
+                    통화
+                    <Input placeholder="KRW" {...form.register("currency")} />
                   </label>
                 </div>
               </section>
 
               <section className="grid gap-4 rounded-lg border bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">품목 정보</p>
+                    <p className="mt-1 text-xs text-muted-foreground">품목명, 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 합계금액을 확인하세요.</p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={addLineItem}>품목 추가</Button>
+                </div>
+                {lineItems.length ? (
+                  <div className="overflow-x-auto rounded-lg border">
+                    <table className="min-w-[920px] w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-xs text-muted-foreground">
+                        <tr>
+                          {["품목명", "품목 코드", "규격", "수량", "단위", "단가", "공급가액", "세액", "합계금액", ""].map((header) => (
+                            <th key={header} className="px-2 py-2 font-medium">{header}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lineItems.map((item, index) => (
+                          <tr key={index} className="border-t">
+                            {([
+                              ["item_name", "품목명"],
+                              ["item_code", "품목 코드"],
+                              ["specification", "규격"],
+                              ["quantity", "수량"],
+                              ["unit", "단위"],
+                              ["unit_price", "단가"],
+                              ["supply_amount", "공급가액"],
+                              ["tax_amount", "세액"],
+                              ["line_total", "합계금액"],
+                            ] as Array<[keyof ManufacturingLineItem, string]>).map(([field, label]) => {
+                              const low = lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) || (field === "line_total" && lowConfidenceFields.includes("line_items"));
+                              return (
+                                <td key={field} className="px-2 py-2 align-top">
+                                  <Input
+                                    aria-label={`${index + 1}행 ${label}`}
+                                    className={low ? "border-amber-400 bg-amber-50" : ""}
+                                    value={String(item?.[field] ?? "")}
+                                    onChange={(event) => updateLineItem(index, field, event.target.value)}
+                                  />
+                                  {low ? <p className="mt-1 text-[11px] text-amber-700">신뢰도 낮음</p> : null}
+                                </td>
+                              );
+                            })}
+                            <td className="px-2 py-2 align-top">
+                              <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>삭제</Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+                    품목 정보가 추출되지 않았습니다. 사람이 확인해야 합니다.
+                  </div>
+                )}
+              </section>
+
+              <section className="grid gap-4 rounded-lg border bg-white p-4">
                 <div>
-                  <p className="text-sm font-semibold">Review notes</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Tags and summary make the corrected result easier to find later.</p>
+                  <p className="text-sm font-semibold">검토 메모</p>
+                  <p className="mt-1 text-xs text-muted-foreground">태그와 설명은 나중에 문서를 검색하고 업무 맥락을 확인하는 데 사용됩니다.</p>
                 </div>
                 <label className="grid gap-2 text-sm font-medium">
-                  Tags
-                  <Input placeholder="finance, spring-2026, review" {...form.register("tags_text")} />
+                  태그
+                  <Input placeholder="발주서, 검토필요, 2026-06" {...form.register("tags_text")} />
                 </label>
                 <label className="grid gap-2 text-sm font-medium">
-                  Summary
+                  업무 메모
                   <Textarea className="min-h-28" {...form.register("summary")} />
                 </label>
               </section>
 
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-slate-50 p-3">
                 <Link href="/review" className="text-sm text-muted-foreground underline-offset-4 hover:underline">
-                  Open review queue
+                  검토 필요 목록 열기
                 </Link>
                 <Button type="submit" disabled={saving}>
                   {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                  Save corrected document
+                  수정 저장
                 </Button>
               </div>
             </CardContent>

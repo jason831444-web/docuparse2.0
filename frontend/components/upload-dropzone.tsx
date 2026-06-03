@@ -71,15 +71,15 @@ export function UploadDropzone() {
     setUploading(true);
     try {
       const document = await api.upload(file);
-      toast.success("Document uploaded", {
-        description: "Open it when you are ready to review the result.",
+      toast.success("문서가 업로드되었습니다", {
+        description: "AI 추출 결과를 확인하고 업무 데이터를 검토하세요.",
         action: {
-          label: "Open",
+          label: "열기",
           onClick: () => router.push(`/documents/${document.id}`),
         },
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Upload failed");
+      toast.error(error instanceof Error ? error.message : "업로드에 실패했습니다");
     } finally {
       setUploading(false);
     }
@@ -105,9 +105,9 @@ export function UploadDropzone() {
       <div className="mb-4 grid size-14 place-items-center rounded-md bg-secondary">
         {uploading ? <Loader2 className="size-7 animate-spin" /> : <FileUp className="size-7 text-primary" />}
       </div>
-      <h2 className="text-xl font-semibold">Upload any document for AI workflow analysis</h2>
+      <h2 className="text-xl font-semibold">제조업 문서 업로드</h2>
       <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-        DocuParse routes images, PDFs, Office files, and structured text through the right extraction path, then opens a review-ready document workspace.
+        발주서, 견적서, 거래명세서, 납품서를 업로드하세요. 업로드 후 AI가 문서 유형과 핵심 업무 데이터를 자동으로 추출합니다.
       </p>
       <input
         ref={inputRef}
@@ -118,10 +118,10 @@ export function UploadDropzone() {
       />
       <Button className="mt-5" onClick={() => inputRef.current?.click()} disabled={uploading}>
         {uploading ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}
-        Select document
+        파일을 끌어다 놓거나 클릭해서 업로드하세요
       </Button>
       <p className="mt-3 text-xs text-muted-foreground">
-        Images, PDF, TXT, MD, CSV, JSON, XML, HTML, DOCX, XLSX, PPTX, and partial legacy formats
+        PDF, 이미지, 엑셀, 워드 문서를 지원합니다.
       </p>
     </div>
   );

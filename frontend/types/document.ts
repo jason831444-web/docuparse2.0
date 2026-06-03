@@ -1,4 +1,19 @@
-export type DocumentType = "receipt" | "notice" | "document" | "memo" | "presentation" | "other";
+export type DocumentType =
+  | "purchase_order"
+  | "quotation"
+  | "transaction_statement"
+  | "delivery_note"
+  | "invoice"
+  | "packing_list"
+  | "inspection_report"
+  | "contract"
+  | "general_document"
+  | "receipt"
+  | "notice"
+  | "document"
+  | "memo"
+  | "presentation"
+  | "other";
 export type ProcessingStatus = "uploaded" | "queued" | "processing" | "ready" | "needs_review" | "confirmed" | "completed" | "failed";
 
 export interface FolderSummary {
@@ -46,6 +61,13 @@ export interface DocumentRecord {
   tax: string | null;
   currency: string | null;
   merchant_name: string | null;
+  vendor_name: string | null;
+  customer_name: string | null;
+  document_number: string | null;
+  issue_date: string | null;
+  due_date: string | null;
+  line_items: ManufacturingLineItem[];
+  low_confidence_fields: string[];
   category: string | null;
   tags: string[];
   summary: string | null;
@@ -73,6 +95,18 @@ export interface DocumentRecord {
   created_at: string;
   updated_at: string;
   file_url: string;
+}
+
+export interface ManufacturingLineItem {
+  item_name?: string | null;
+  item_code?: string | null;
+  specification?: string | null;
+  quantity?: string | number | null;
+  unit?: string | null;
+  unit_price?: string | number | null;
+  supply_amount?: string | number | null;
+  tax_amount?: string | number | null;
+  line_total?: string | number | null;
 }
 
 export interface DocumentListResponse {
@@ -110,6 +144,13 @@ export type DocumentUpdate = Pick<
   | "tax"
   | "currency"
   | "merchant_name"
+  | "vendor_name"
+  | "customer_name"
+  | "document_number"
+  | "issue_date"
+  | "due_date"
+  | "line_items"
+  | "low_confidence_fields"
   | "category"
   | "tags"
   | "summary"

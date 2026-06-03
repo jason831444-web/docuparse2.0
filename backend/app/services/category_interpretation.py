@@ -35,6 +35,46 @@ class CategoryInterpretationService:
         lowered = text.lower()
         title_hint = self._meaningful_title(document.title, text)
         explicit_category = self._specific_existing_category(document.category)
+        manufacturing_types = {
+            DocumentType.purchase_order,
+            DocumentType.quotation,
+            DocumentType.transaction_statement,
+            DocumentType.delivery_note,
+            DocumentType.invoice,
+            DocumentType.packing_list,
+            DocumentType.inspection_report,
+            DocumentType.contract,
+            DocumentType.general_document,
+        }
+
+        if document.document_type in manufacturing_types and self._looks_like_manufacturing_document(lowered, document):
+            doc_type = document.document_type.value
+            line_items = getattr(document, "line_items", None) or []
+            missing_items = not line_items
+            return CategoryInterpretation(
+                category=explicit_category or document.category or doc_type,
+                profile=doc_type,
+                subtype=doc_type,
+                title_hint=title_hint or self._manufacturing_title(document, text),
+                summary_hint=self._manufacturing_summary(document, doc_type),
+                key_fields={
+                    "vendor_name": getattr(document, "vendor_name", None) or document.merchant_name,
+                    "customer_name": getattr(document, "customer_name", None),
+                    "document_number": getattr(document, "document_number", None),
+                    "line_item_count": len(line_items),
+                },
+                warnings=["Line items were not confidently extracted."] if missing_items else [],
+                workflow_hints={
+                    "review_focus": [
+                        "Verify document type, vendor, customer, document number, dates, quantities, unit prices, tax, and line totals."
+                    ],
+                    "important_points": [
+                        f"{len(line_items)} line item rows extracted.",
+                    ],
+                },
+                reasons=["Detected Korean manufacturing purchase, quotation, delivery, transaction, or invoice document signals."],
+                confidence=0.86 if line_items else 0.68,
+            )
 
         if document.document_type == DocumentType.receipt:
             if self._looks_like_repair_service_receipt(lowered):
@@ -269,6 +309,60 @@ class CategoryInterpretationService:
             summary_hint=None,
             confidence=0.55,
         )
+
+    def _looks_like_manufacturing_document(self, lowered: str, document: Document) -> bool:
+        if getattr(document, "line_items", None):
+            return True
+        signals = [
+            "발주서",
+            "견적서",
+            "거래명세서",
+            "납품서",
+            "세금계산서",
+            "포장명세서",
+            "검사성적서",
+            "품목명",
+            "공급가액",
+            "납기일",
+            "수량",
+            "단가",
+        ]
+        return sum(signal in lowered for signal in signals) >= 2
+
+    def _manufacturing_title(self, document: Document, text: str) -> str:
+        label = {
+            "purchase_order": "발주서",
+            "quotation": "견적서",
+            "transaction_statement": "거래명세서",
+            "delivery_note": "납품서",
+            "invoice": "인보이스/세금계산서",
+            "packing_list": "포장명세서",
+            "inspection_report": "검사성적서",
+            "contract": "계약서",
+        }.get(getattr(document.document_type, "value", ""), "일반 문서")
+        number = getattr(document, "document_number", None)
+        vendor = getattr(document, "vendor_name", None) or document.merchant_name
+        if number and vendor:
+            return f"{label} {number} - {vendor}"
+        if number:
+            return f"{label} {number}"
+        return self._filename_title(document.original_filename) or label
+
+    def _manufacturing_summary(self, document: Document, doc_type: str) -> str:
+        label = {
+            "purchase_order": "발주서",
+            "quotation": "견적서",
+            "transaction_statement": "거래명세서",
+            "delivery_note": "납품서",
+            "invoice": "인보이스/세금계산서",
+            "packing_list": "포장명세서",
+            "inspection_report": "검사성적서",
+            "contract": "계약서",
+        }.get(doc_type, "제조업 문서")
+        vendor = getattr(document, "vendor_name", None) or document.merchant_name or "공급업체 미확인"
+        customer = getattr(document, "customer_name", None) or "고객사 미확인"
+        count = len(getattr(document, "line_items", None) or [])
+        return f"{label}에서 {vendor}와 {customer} 간 거래 정보와 품목 {count}건을 ERP/엑셀 입력용 데이터로 추출했습니다."
 
     def _meaningful_title(self, current: str | None, text: str) -> str | None:
         cleaned_current = self._clean_title_candidate(current)

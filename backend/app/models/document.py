@@ -11,6 +11,15 @@ from app.db.session import Base
 
 
 class DocumentType(str, enum.Enum):
+    purchase_order = "purchase_order"
+    quotation = "quotation"
+    transaction_statement = "transaction_statement"
+    delivery_note = "delivery_note"
+    invoice = "invoice"
+    packing_list = "packing_list"
+    inspection_report = "inspection_report"
+    contract = "contract"
+    general_document = "general_document"
     receipt = "receipt"
     notice = "notice"
     document = "document"
@@ -40,7 +49,7 @@ class Document(Base):
     source_file_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     extraction_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
     ingestion_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    document_type: Mapped[DocumentType] = mapped_column(Enum(DocumentType, name="document_type"), default=DocumentType.other)
+    document_type: Mapped[DocumentType] = mapped_column(Enum(DocumentType, name="document_type"), default=DocumentType.general_document)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     extracted_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -49,6 +58,13 @@ class Document(Base):
     tax: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     merchant_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vendor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    document_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    issue_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    line_items: Mapped[list[dict]] = mapped_column(JSONB, default=list, nullable=False)
+    low_confidence_fields: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
     category: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
     confidence_score: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)

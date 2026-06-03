@@ -6,12 +6,12 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DocuParse",
-  description: "OCR document and receipt organization"
+  description: "한국 중소 제조업체를 위한 AI 문서 업무 자동화"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="ko">
       <body>
         <AppShell>{children}</AppShell>
         <Toaster richColors position="top-right" />

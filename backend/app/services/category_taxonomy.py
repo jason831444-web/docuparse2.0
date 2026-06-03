@@ -7,6 +7,15 @@ from app.models.document import Document, DocumentType
 
 
 ROOT_LABELS = {
+    "purchase_order": "발주서",
+    "quotation": "견적서",
+    "transaction_statement": "거래명세서",
+    "delivery_note": "납품서",
+    "invoice": "인보이스/세금계산서",
+    "packing_list": "포장명세서",
+    "inspection_report": "검사성적서",
+    "contract": "계약서",
+    "general_document": "일반 문서",
     "receipt": "Receipt",
     "document": "Document",
     "memo": "Memo",
@@ -32,6 +41,15 @@ ALIASES = {
 }
 
 LABEL_ALIASES = {
+    "purchase_order": "발주서",
+    "quotation": "견적서",
+    "transaction_statement": "거래명세서",
+    "delivery_note": "납품서",
+    "invoice": "인보이스/세금계산서",
+    "packing_list": "포장명세서",
+    "inspection_report": "검사성적서",
+    "contract": "계약서",
+    "general_document": "일반 문서",
     "retail": "Retail",
     "repair_service": "Repair Service",
     "utility_bill": "Utility Bill",

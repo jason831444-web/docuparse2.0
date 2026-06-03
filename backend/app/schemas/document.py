@@ -8,7 +8,7 @@ from app.models.document import DocumentType, ProcessingStatus
 
 
 class DocumentBase(BaseModel):
-    document_type: DocumentType = DocumentType.other
+    document_type: DocumentType = DocumentType.general_document
     title: str | None = Field(default=None, max_length=255)
     raw_text: str | None = None
     extracted_date: date | None = None
@@ -17,6 +17,13 @@ class DocumentBase(BaseModel):
     tax: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=8)
     merchant_name: str | None = Field(default=None, max_length=255)
+    vendor_name: str | None = Field(default=None, max_length=255)
+    customer_name: str | None = Field(default=None, max_length=255)
+    document_number: str | None = Field(default=None, max_length=120)
+    issue_date: date | None = None
+    due_date: date | None = None
+    line_items: list[dict] = Field(default_factory=list)
+    low_confidence_fields: list[str] = Field(default_factory=list)
     category: str | None = Field(default=None, max_length=80)
     tags: list[str] = Field(default_factory=list)
     summary: str | None = None

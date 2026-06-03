@@ -8,6 +8,18 @@ from app.services.parser import ParsedDocument
 from app.services.quality_evaluation import QualityEvaluation
 
 
+MANUFACTURING_TYPES = {
+    DocumentType.purchase_order,
+    DocumentType.quotation,
+    DocumentType.transaction_statement,
+    DocumentType.delivery_note,
+    DocumentType.invoice,
+    DocumentType.packing_list,
+    DocumentType.inspection_report,
+    DocumentType.contract,
+}
+
+
 class ProcessingPath(str, Enum):
     light = "light"
     medium = "medium"
@@ -93,6 +105,16 @@ class LightweightDocumentRouter:
 
         if parsed.document_type == DocumentType.receipt:
             return DocumentRoute("receipt_fast_path", ProcessingPath.medium, confidence=0.78, reasons=["Receipt-like fields were found in extracted text."])
+
+        if parsed.document_type in MANUFACTURING_TYPES:
+            review_required = not parsed.line_items or bool(quality and quality.review_required)
+            return DocumentRoute(
+                "manufacturing_document_fast_path",
+                ProcessingPath.medium,
+                confidence=0.80 if parsed.line_items else 0.62,
+                review_required=review_required,
+                reasons=["Manufacturing business document fields were found in extracted text."],
+            )
 
         if parsed.document_type in {DocumentType.notice, DocumentType.document, DocumentType.memo, DocumentType.presentation}:
             return DocumentRoute("notice_document_fast_path", ProcessingPath.medium, confidence=0.80, reasons=["Document text is sufficient for lightweight parsing."])

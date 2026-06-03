@@ -42,20 +42,20 @@ export function DocumentList({
     try {
       await api.bulkDownload(selectedIds);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Download failed");
+      toast.error(error instanceof Error ? error.message : "다운로드에 실패했습니다");
     }
   }
 
   async function deleteSelected() {
     if (!selectedIds.length) return;
-    if (!window.confirm(`Delete ${selectedIds.length} selected document${selectedIds.length === 1 ? "" : "s"}?`)) return;
+    if (!window.confirm(`선택한 문서 ${selectedIds.length}건을 삭제할까요?`)) return;
     try {
       const result = await api.bulkDelete(selectedIds);
-      toast.success(`Deleted ${result.deleted} document${result.deleted === 1 ? "" : "s"}`);
+      toast.success(`문서 ${result.deleted}건을 삭제했습니다`);
       setSelected(new Set());
       onChanged?.();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Delete failed");
+      toast.error(error instanceof Error ? error.message : "삭제에 실패했습니다");
     }
   }
 
@@ -64,17 +64,17 @@ export function DocumentList({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3">
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" className="size-4" checked={allSelected} onChange={(event) => toggleAll(event.target.checked)} />
-          Select all
+          전체 선택
         </label>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">{selected.size} selected</span>
+          <span className="text-sm text-muted-foreground">{selected.size}건 선택됨</span>
           <Button type="button" variant="outline" size="sm" disabled={!selected.size} onClick={downloadSelected}>
             <Download className="size-4" />
-            Download originals
+            원본 다운로드
           </Button>
           <Button type="button" variant="destructive" size="sm" disabled={!selected.size} onClick={deleteSelected}>
             <Trash2 className="size-4" />
-            Delete
+            삭제
           </Button>
         </div>
       </div>

@@ -1,138 +1,113 @@
 # DocuParse
 
-DocuParse is a local-first AI document understanding workspace. It helps users upload messy real-world documents, extract useful text and fields, organize them into meaningful categories, and review the result before trusting it.
+DocuParse는 한국 중소 제조업체의 발주서, 견적서, 거래명세서, 납품서를 AI로 읽고 ERP/엑셀 입력용 구조화 데이터로 변환하는 문서 업무 자동화 플랫폼입니다.
 
-The project is built as a portfolio-quality full-stack system rather than a simple OCR demo. It combines a Next.js review UI, FastAPI processing backend, PostgreSQL persistence, Docker local infrastructure, deterministic parsing, quality gates, and optional local GGUF interpretation through llama.cpp.
+DocuParse is an AI-powered document automation platform that converts manufacturing purchase, quotation, delivery, and transaction documents into structured ERP/Excel-ready data with human review and confidence tracking.
 
-## Portfolio Snapshot
+## 제품 개요
 
-- **Project type:** full-stack AI document processing workspace
-- **Core engineering focus:** multi-format ingestion, local inference, reviewable AI output, search/category consistency, and Dockerized local infrastructure
-- **Best demo path:** upload a PDF guide and an XLSX implementation tracker, inspect the provider chain, edit a category, then verify search/review/notifications
-- **Architecture docs:** [docs/architecture.md](docs/architecture.md)
-- **Demo script:** [docs/demo.md](docs/demo.md)
+한국 중소 제조업체의 구매/납품 업무에서는 PDF, 이미지, 엑셀, 워드 형태의 발주서, 견적서, 거래명세서, 납품서가 매일 들어옵니다. 담당자는 거래처명, 문서번호, 발행일, 납기일, 품목명, 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 총액을 ERP나 엑셀에 다시 입력해야 합니다.
 
-## Problem
+DocuParse는 이 반복 입력 업무를 줄이기 위한 MVP입니다. 문서를 업로드하면 AI와 휴리스틱 파이프라인이 문서 유형을 분류하고 핵심 업무 데이터를 추출합니다. 신뢰도 낮은 필드는 검토 필요로 표시되며, 사용자는 원본 문서와 원문 텍스트를 보면서 구조화된 데이터를 수정하고 확정할 수 있습니다. 확정된 데이터는 CSV, Excel, JSON으로 내보내 ERP/엑셀 입력에 사용할 수 있습니다.
 
-Personal and small-team document collections are usually hard to search because files arrive in many formats: receipts, PDFs, spreadsheets, invoices, setup guides, resumes, notices, and notes. OCR alone gives raw text, but users still need category, title, summary, important dates, review status, and a way to correct mistakes.
+## 우선 지원 문서
 
-DocuParse focuses on that workflow:
+- `purchase_order`: 발주서
+- `quotation`: 견적서
+- `transaction_statement`: 거래명세서
+- `delivery_note`: 납품서
 
-- turn heterogeneous documents into searchable structured records
-- keep AI/heuristic interpretation visible and editable
-- route uncertain documents into review instead of silently trusting weak output
-- organize documents by category folders rather than raw filenames or file types
+확장 문서 타입:
 
-## Who It Is For
+- `invoice`: 인보이스/세금계산서
+- `packing_list`: 포장명세서
+- `inspection_report`: 검사성적서
+- `contract`: 계약서
+- `general_document`: 일반 문서
 
-DocuParse is designed for a local document workflow: a student, researcher, freelancer, small team, or developer who wants to organize document files without sending everything to a hosted SaaS. For portfolio purposes, it demonstrates full-stack engineering and practical AI application architecture.
+## 추출 대상 필드
 
-## Key Features
+문서 기본 정보:
 
-- Multi-format uploads: images, PDFs, DOCX, PPTX, XLSX, CSV, TXT, Markdown, JSON, XML, and HTML
-- Text-layer PDF extraction, scanned-PDF OCR, Tesseract image OCR, Office extraction, and structured text extraction
-- Local GGUF-backed interpretation through llama.cpp, with deterministic fallback behavior
-- Provider-chain and field-source visibility for debugging and trust
-- Category-first organization with editable category folders
-- Review queue for uncertain or warning-producing documents
-- Search across title, summary, workflow summary, source/merchant, raw extracted text, original filename, and category
-- Filters for category, file type, processing status, date range, amount range, favorites, and review state
-- Document detail page with original file preview/link, extracted text, AI result, workflow panel, editable fields, and category selector
-- Notifications for processed, processing, review-needed, and failed documents
-- Reprocess, confirm, mark needs review, favorite, bulk download, bulk delete, CSV export, and per-document JSON export
-- Evaluation harness for regression-checking title selection, category interpretation, summaries, action items, and provider-chain behavior
+- 문서 유형
+- 공급업체
+- 고객사
+- 문서번호
+- 발행일
+- 납기일
+- 공급가액
+- 세액
+- 합계금액
 
-## Screenshots
+품목 정보인 `line_items`가 가장 중요합니다.
 
-### Dashboard Overview
+각 품목 행은 다음 필드를 포함합니다.
 
-Upload, track, and review document-processing activity in one workspace.
+- `item_name`: 품목명
+- `item_code`: 품목 코드
+- `specification`: 규격
+- `quantity`: 수량
+- `unit`: 단위
+- `unit_price`: 단가
+- `supply_amount`: 공급가액
+- `tax_amount`: 세액
+- `line_total`: 합계금액
 
-![Dashboard Overview](docs/screenshots/dashboard-overview.png)
+품목 정보가 없거나 수량, 단가, 합계금액이 불확실하면 `review_required=True` 또는 `needs_review` 상태로 이동합니다.
 
-### Document Detail View
+## 핵심 기능
 
-Inspect extracted content, interpretation metadata, and provider-chain results.
+- PDF, 이미지, 엑셀, 워드, CSV, TXT, JSON, XML, HTML 업로드
+- OCR/text extraction, Office extraction, PDF text-layer extraction 유지
+- 문서 라우팅: light / medium / heavy 처리 경로
+- 제조업 문서 유형 분류
+- 거래처, 문서번호, 날짜, 납기일, 금액, 품목 테이블 추출
+- `provider_chain`과 `field_sources`를 통한 추출 경로 추적
+- 품질 게이트와 `needs_review` 상태
+- ERP-ready data review UI
+- 사람이 품목 수량, 단가, 총액을 수정한 뒤 확정 처리
+- CSV, Excel, JSON 내보내기
+- 검색: 파일명, 거래처명, 품목명, 문서번호, 원문 텍스트
 
-![Document Detail View](docs/screenshots/document-detail-view.png)
+## 데모 흐름
 
-### AI-Organized Category Folders
-
-Browse documents by interpreted purpose rather than raw file type.
-
-![AI-Organized Category Folders](docs/screenshots/ai-organized-category-folders.png)
-
-### Correction Workspace
-
-Review AI-generated results and update category and extracted fields before trust.
-
-![Correction Workspace](docs/screenshots/correction-workspace.png)
-
-## Supported File Types
-
-| Family | Extensions | Processing path |
-| --- | --- | --- |
-| Images | `png`, `jpg`, `jpeg`, `webp`, `tiff` | OCR with Tesseract/OpenCV; optional vision-style heavy path |
-| PDFs | `pdf` | Text-layer extraction first; scanned-page rendering/OCR when needed |
-| Office | `docx`, `pptx`, `xlsx` | Direct Office text/table extraction |
-| Tabular | `csv` | Structured row extraction |
-| Text/markup | `txt`, `md`, `json`, `xml`, `html` | Direct text extraction and normalization |
-| Partial legacy | `rtf`, `eml`, OpenDocument-like formats | Best-effort extraction with review warnings |
-
-## Main Workflow
-
-1. Upload a document from the dashboard or upload page.
-2. The backend validates the file and stores the original in local storage.
-3. Ingestion normalizes the file into text, metadata, optional page images, and extraction warnings.
-4. A lightweight router decides whether direct parsing is enough or whether heavier AI interpretation is useful.
-5. The parser and interpretation layer extract title, category, fields, summary, action items, warnings, and workflow metadata.
-6. Quality gates decide whether the document should be marked ready or needs review.
-7. The user reviews the original, extracted text, AI result, provider chain, category, and workflow panel.
-8. The user confirms, edits, reprocesses, exports, searches, filters, or moves the document into another category.
+1. 사용자가 발주서 PDF 또는 이미지 파일을 업로드한다.
+2. 시스템이 문서 유형을 발주서로 분류한다.
+3. 공급업체, 고객사, 발주번호, 발주일, 납기일을 추출한다.
+4. 품목 테이블에서 품목명, 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 총액을 추출한다.
+5. 신뢰도 낮은 필드는 “검토 필요”로 표시한다.
+6. 사용자가 틀린 수량이나 단가를 수정한다.
+7. 문서를 “확정 완료” 상태로 변경한다.
+8. 최종 결과를 CSV, Excel, JSON 중 하나로 내보낸다.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Upload["Upload UI"] --> API["FastAPI /api/documents/upload"]
+    Upload["제조업 문서 업로드"] --> API["FastAPI /api/documents/upload"]
     API --> Storage["Local file storage"]
-    API --> DB["PostgreSQL metadata"]
-    Storage --> Ingestion["File ingestion\nPDF / Office / text / OCR"]
+    API --> DB["PostgreSQL Document metadata"]
+    Storage --> Ingestion["File ingestion\nPDF / OCR / Office / text"]
     Ingestion --> Router["Document router\nlight / medium / heavy"]
-    Router --> Parser["Deterministic parser\nfields + title + tags"]
+    Router --> Parser["Manufacturing parser\nheaders + line_items"]
     Router --> AI["Optional local GGUF\nllama.cpp interpretation"]
-    Parser --> Interpret["Category + workflow interpretation"]
-    AI --> Interpret
-    Interpret --> Quality["Quality gates\nwarnings + review status"]
+    Parser --> Quality["Quality gates\nline item completeness"]
+    AI --> Quality
     Quality --> DB
-    DB --> UI["Next.js dashboard\nreview / search / categories"]
+    DB --> UI["Next.js review UI\nERP-ready data correction"]
+    UI --> Export["CSV / Excel / JSON export"]
 ```
 
-High-level subsystems:
+기존 DocuParse의 핵심 구조는 유지됩니다.
 
-- `frontend/`: Next.js App Router UI for dashboard, upload, document library, categories, review queue, notifications, and document detail editing.
-- `backend/app/api/`: FastAPI routes for uploads, document CRUD, category folders, notifications, export, and bulk actions.
-- `backend/app/services/file_ingestion.py`: normalizes PDFs, images, Office files, spreadsheets, text, and partial formats.
-- `backend/app/services/document_router.py`: chooses a light, medium, or heavy processing path.
-- `backend/app/services/parser.py`: deterministic extraction for dates, amounts, titles, categories, tags, and document type.
-- `backend/app/services/document_interpretation_service.py`: orchestrates heuristic and optional AI interpretation.
-- `backend/app/services/category_interpretation.py`: maps extracted content into portfolio-visible categories and workflow hints.
-- `backend/app/services/workflow_enrichment.py`: produces summaries, action items, warnings, dates, urgency, and follow-up flags.
-- `backend/app/services/quality_evaluation.py`: scores extraction quality and decides whether review is needed.
-- `backend/eval/`: generated sample corpus and quality evaluation reports.
-
-See [docs/architecture.md](docs/architecture.md) for a deeper walkthrough.
-
-## Why This Is Technically Interesting
-
-DocuParse is interesting because it treats document AI as a system problem, not just a model call.
-
-- It separates file ingestion, routing, parsing, AI interpretation, quality evaluation, and workflow enrichment.
-- It preserves provider-chain visibility so a reviewer can see whether a result came from PDF text extraction, OCR, heuristic fallback, or local GGUF interpretation.
-- It uses deterministic rules and quality gates to reduce blind trust in AI output.
-- It supports a realistic set of file formats instead of only clean demo images.
-- It includes a human review loop with editable categories and fields.
-- It runs locally with Docker and can use a local GGUF model mounted outside the image.
+- `frontend/`: Next.js App Router UI
+- `backend/app/api/`: FastAPI document API
+- `backend/app/services/file_ingestion.py`: 파일 타입별 ingestion
+- `backend/app/services/document_router.py`: 처리 경로 결정
+- `backend/app/services/parser.py`: 제조업 문서 필드와 품목 행 휴리스틱 추출
+- `backend/app/services/ai_document_understanding.py`: AI/fallback 구조화 결과
+- `backend/app/services/quality_evaluation.py`: 품목 행과 핵심 필드 품질 게이트
+- `backend/eval/`: 회귀 평가 코퍼스와 리포트
 
 ## Tech Stack
 
@@ -142,8 +117,8 @@ Frontend:
 - TypeScript
 - Tailwind CSS
 - React Hook Form
-- Sonner toasts
-- lucide-react icons
+- Sonner
+- lucide-react
 
 Backend:
 
@@ -155,23 +130,17 @@ Backend:
 - PostgreSQL
 - Tesseract OCR, pytesseract, Pillow, OpenCV
 - PyMuPDF, pypdf, python-docx, python-pptx, openpyxl
-- llama-cpp-python for optional local GGUF interpretation
-
-Infrastructure:
-
-- Docker Compose for local development
-- Production-lite Docker Compose with nginx reverse proxy
-- Local mounted model directory for GGUF weights
+- llama-cpp-python optional GGUF interpretation
 
 ## Run Locally With Docker
 
-Place a GGUF model at:
+GGUF 모델을 사용할 경우 다음 위치에 둡니다.
 
 ```text
 models/gguf/gemma-3-4b-it-q4_0.gguf
 ```
 
-Then start the local stack:
+로컬 스택 실행:
 
 ```bash
 docker compose --profile backend up --build
@@ -183,9 +152,7 @@ Open:
 - Backend API docs: http://localhost:8001/docs
 - Health check: http://localhost:8001/health
 
-The backend runs Alembic migrations on startup. Uploaded files and PostgreSQL data are stored in Docker volumes.
-
-## Local Development Without Full Stack
+## Local Development
 
 Backend:
 
@@ -210,7 +177,7 @@ cp .env.example .env.local
 npm run dev -- --port 3001
 ```
 
-Run focused backend tests:
+Backend tests:
 
 ```bash
 cd backend
@@ -219,93 +186,9 @@ pip install -r requirements-dev.txt
 PYTHONPATH=. pytest
 ```
 
-## Demo Walkthrough
-
-See [docs/demo.md](docs/demo.md) for a fuller script. A short portfolio walkthrough can use this flow:
-
-1. Start Docker and open the dashboard.
-2. Upload a PDF setup guide or installation manual.
-3. Open the document detail page and show extracted text, category, summary, review status, and provider chain.
-4. Upload an XLSX implementation tracker.
-5. Show that it becomes an implementation/project-planning category rather than a profile record just because a cell contains the word `profile`.
-6. Change a document category and verify category filtering/search still finds it.
-7. Open notifications and the review queue.
-8. Run or show `backend/eval/reports/latest-gemma.md` to demonstrate regression evaluation.
-
-Prepare a richer screenshot dataset with:
-
-```bash
-PYTHONPATH=backend backend/.venv/bin/python backend/scripts/prepare_portfolio_demo.py
-```
-
-## Portfolio Evidence To Add
-
-Recommended screenshots or GIFs:
-
-- Dashboard with upload dropzone and status cards
-- Document detail page showing provider chain and editable category
-- Category folders page
-- Search/filter results after changing a category
-- Notifications page
-- Evaluation report snippet
-
-Recommended metrics to mention in a portfolio writeup:
-
-- supported file families
-- number of sample evaluation documents
-- before/after quality score from evaluation reports
-- provider-chain examples
-- examples of review-required warnings
-
 ## Known Limitations
 
-- Authentication pages are not wired to a real user system; the current project is a local-first workspace, not a multi-user SaaS.
-- Processing is inline by default, so large OCR/GGUF jobs can make upload requests slow.
-- Search uses straightforward database filtering rather than a dedicated full-text search index.
-- Notifications are currently derived from document state, not persisted as an event stream.
-- Category interpretation combines deterministic heuristics with optional model output; it is designed for reviewability, not perfect automatic classification.
-- Production deployment docs are intentionally lightweight and do not include TLS termination or object storage.
-
-## Useful Commands
-
-Run the fallback quality evaluation:
-
-```bash
-cd backend
-PYTHONPATH=. python scripts/run_quality_eval.py --mode fallback --label fallback-check
-```
-
-Run a GGUF-backed evaluation against a running backend:
-
-```bash
-cd backend
-PYTHONPATH=. python scripts/run_quality_eval.py \
-  --mode gemma \
-  --backend-url http://localhost:8001 \
-  --label gguf-smoke \
-  --limit 2 \
-  --cleanup
-```
-
-Confirm the local GGUF path after upload by checking a document detail response. The `provider_chain` should include:
-
-```text
-ai_interpretation_gemma_gguf
-```
-
-## Future Improvements
-
-High-value next steps:
-
-- Background processing queue for long OCR/GGUF jobs
-- Small API and frontend smoke test suite
-- Architecture/demo screenshots in `docs/`
-- Full-text PostgreSQL search indexes
-- Structured processing logs with durations and route/provider metadata
-
-Lower-priority ideas:
-
-- Real multi-user authentication
-- Cloud object storage
-- More analytics dashboards
-- More niche document categories
+- 현재 기본 처리 방식은 inline processing이므로 큰 OCR/GGUF 작업은 업로드 응답을 느리게 만들 수 있습니다.
+- 제조업 품목 테이블 추출은 MVP 휴리스틱과 AI fallback 중심입니다. 복잡한 병합 셀, 회전 스캔, 저화질 팩스 문서는 검토 필요로 보낼 수 있습니다.
+- 실제 ERP 연동 API는 아직 없고, CSV/Excel/JSON 내보내기를 우선 지원합니다.
+- 인증은 로컬 포트폴리오 수준의 제품 shell입니다.

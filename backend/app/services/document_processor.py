@@ -91,6 +91,13 @@ class DocumentProcessor:
             document.tax = ai_result.tax
             document.currency = ai_result.currency or parsed.currency
             document.merchant_name = sanitize_for_postgres(ai_result.merchant_name or parsed.merchant_name)
+            document.vendor_name = sanitize_for_postgres(ai_result.vendor_name or parsed.vendor_name or document.merchant_name)
+            document.customer_name = sanitize_for_postgres(ai_result.customer_name or parsed.customer_name)
+            document.document_number = sanitize_for_postgres(ai_result.document_number or parsed.document_number)
+            document.issue_date = ai_result.issue_date or parsed.issue_date or document.extracted_date
+            document.due_date = ai_result.due_date or parsed.due_date
+            document.line_items = sanitize_for_postgres(ai_result.line_items or parsed.line_items or [])
+            document.low_confidence_fields = sanitize_for_postgres(ai_result.low_confidence_fields or [])
             document.category = ai_result.category or parsed.category
             document.tags = sanitize_for_postgres(ai_result.tags or parsed.tags)
             interpretation = self.category_interpreter.interpret(document, ai_result.cleaned_raw_text or raw_text)
@@ -129,6 +136,7 @@ class DocumentProcessor:
             document.follow_up_required = workflow.follow_up_required
             document.workflow_metadata = sanitize_for_postgres(workflow.workflow_metadata or None)
             document.review_required = document.review_required or bool(workflow.warnings)
+            document.review_required = document.review_required or self._manufacturing_review_required(document)
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
         except Exception as exc:
             db.rollback()
@@ -239,6 +247,30 @@ class DocumentProcessor:
             f"Category interpretation: profile={interpretation.profile}, category={interpretation.category}, confidence={interpretation.confidence}."
         ] + list(interpretation.reasons) + list(interpretation.diagnostics)
 
+    def _manufacturing_review_required(self, document: Document) -> bool:
+        manufacturing_types = {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+        }
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        if doc_type not in manufacturing_types:
+            return False
+        low_confidence = list(document.low_confidence_fields or [])
+        if not document.line_items:
+            low_confidence.append("line_items")
+            document.low_confidence_fields = sorted(set(low_confidence))
+            return True
+        for index, item in enumerate(document.line_items, start=1):
+            for field in ["quantity", "unit_price", "line_total"]:
+                if item.get(field) in (None, "", []):
+                    low_confidence.append(f"line_items[{index}].{field}")
+        document.low_confidence_fields = sorted(set(low_confidence))
+        return bool(document.low_confidence_fields)
+
     def _apply_title_hint(self, current_title: str | None, interpretation: CategoryInterpretation) -> str | None:
         if not interpretation.title_hint:
             return current_title
@@ -327,6 +359,14 @@ class DocumentProcessor:
 
     def _apply_category_hint(self, current_category: str | None, interpretation: CategoryInterpretation) -> str | None:
         specific_profiles = {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "packing_list",
+            "inspection_report",
+            "contract",
+            "general_document",
             "syllabus",
             "course_guide",
             "presentation_guide",
@@ -347,6 +387,22 @@ class DocumentProcessor:
 
     def _refined_document_type(self, current_type, interpretation: CategoryInterpretation):
         profile = interpretation.profile
+        manufacturing_profiles = {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+            "inspection_report",
+            "contract",
+            "general_document",
+        }
+        if profile in manufacturing_profiles:
+            try:
+                return type(current_type)(profile)
+            except ValueError:
+                return current_type
         if profile in {"syllabus", "course_guide", "resume_profile", "profile_record", "installation_guide", "implementation_schedule", "invoice", "utility_bill"}:
             return type(current_type).document
         if profile in {"presentation_guide", "speaking_notes"}:

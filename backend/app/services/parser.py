@@ -17,6 +17,13 @@ DATE_PATTERNS = [
 ]
 
 CATEGORY_KEYWORDS = {
+    "purchase_order": ["발주서", "발주 번호", "po no", "purchase order", "납기일", "발주일"],
+    "quotation": ["견적서", "견적 번호", "quotation", "quote", "유효기간", "견적금액"],
+    "transaction_statement": ["거래명세서", "거래 명세서", "transaction statement", "공급가액", "세액"],
+    "delivery_note": ["납품서", "납품 번호", "delivery note", "납품일", "인수자"],
+    "packing_list": ["포장명세서", "packing list", "포장 수량", "box", "carton"],
+    "inspection_report": ["검사성적서", "inspection report", "검사 결과", "합격", "불합격"],
+    "contract": ["계약서", "contract", "계약 기간", "계약 금액"],
     "profile_record": ["name:", "id:", "student id", "major:", "age:", "department:", "dob:"],
     "installation_guide": ["installation guide", "setup guide", "install", "installation", "setup", "configuration", "environment variables", "dependencies", "prerequisites"],
     "implementation_schedule": ["implementation", "schedule", "task", "feature", "status", "testing", "coverage", "pipeline", "claimed", "roadmap"],
@@ -36,12 +43,18 @@ CATEGORY_KEYWORDS = {
 
 @dataclass
 class ParsedDocument:
-    document_type: DocumentType = DocumentType.other
+    document_type: DocumentType = DocumentType.general_document
     title: str | None = None
     extracted_date: date | None = None
     extracted_amount: Decimal | None = None
     currency: str | None = None
     merchant_name: str | None = None
+    vendor_name: str | None = None
+    customer_name: str | None = None
+    document_number: str | None = None
+    issue_date: date | None = None
+    due_date: date | None = None
+    line_items: list[dict] = field(default_factory=list)
     category: str | None = None
     tags: list[str] = field(default_factory=list)
 
@@ -53,21 +66,47 @@ class DocumentParser:
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
-        amount = self._extract_amount(joined) if doc_type == DocumentType.receipt else None
+        amount = self._extract_amount(joined)
         category = self._guess_category(joined)
+        issue_date = self._extract_labeled_date(joined, ["발행일", "작성일", "발주일", "견적일", "납품일", "거래일자", "일자"])
+        due_date = self._extract_labeled_date(joined, ["납기일", "납품예정일", "납품 예정일", "due date", "delivery date"])
+        vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급자", "거래처", "매입처", "vendor", "supplier"])
+        customer_name = self._extract_labeled_text(joined, ["고객사", "수요처", "발주처", "납품처", "구매자", "customer", "buyer"])
         return ParsedDocument(
             document_type=doc_type,
             title=self._guess_title(lines, doc_type, filename),
-            extracted_date=self._extract_date(joined),
+            extracted_date=issue_date or self._extract_date(joined),
             extracted_amount=amount,
-            currency="USD" if amount is not None else None,
-            merchant_name=self._guess_merchant(lines) if doc_type == DocumentType.receipt else None,
+            currency="KRW" if amount is not None else None,
+            merchant_name=vendor_name or (self._guess_merchant(lines) if doc_type == DocumentType.receipt else None),
+            vendor_name=vendor_name,
+            customer_name=customer_name,
+            document_number=self._extract_document_number(joined),
+            issue_date=issue_date,
+            due_date=due_date,
+            line_items=self._extract_line_items(lines),
             category=category,
             tags=self._guess_tags(joined, category, doc_type),
         )
 
     def _guess_document_type(self, text: str, filename: str) -> DocumentType:
         haystack = f"{filename}\n{text}".lower()
+        if self._score_korean_manufacturing(haystack, ["발주서", "발주 번호", "purchase order", "po no", "po번호"]) >= 1:
+            return DocumentType.purchase_order
+        if self._score_korean_manufacturing(haystack, ["견적서", "견적 번호", "quotation", "quote"]) >= 1:
+            return DocumentType.quotation
+        if self._score_korean_manufacturing(haystack, ["거래명세서", "거래 명세서", "transaction statement"]) >= 1:
+            return DocumentType.transaction_statement
+        if self._score_korean_manufacturing(haystack, ["납품서", "delivery note", "납품 번호"]) >= 1:
+            return DocumentType.delivery_note
+        if self._score_korean_manufacturing(haystack, ["포장명세서", "packing list"]) >= 1:
+            return DocumentType.packing_list
+        if self._score_korean_manufacturing(haystack, ["검사성적서", "inspection report"]) >= 1:
+            return DocumentType.inspection_report
+        if self._score_korean_manufacturing(haystack, ["계약서", "contract"]) >= 1:
+            return DocumentType.contract
+        if self._score_korean_manufacturing(haystack, ["세금계산서", "invoice", "청구서"]) >= 1:
+            return DocumentType.invoice
         receipt_score = sum(keyword in haystack for keyword in ["receipt", "subtotal", "total", "tax", "change", "visa"])
         invoice_score = sum(keyword in haystack for keyword in ["invoice", "invoice number", "invoice #", "vendor", "bill to", "amount due", "total due"])
         presentation_score = sum(keyword in haystack for keyword in ["presentation", "slide", "speaker notes", "speaking notes", "talk track", "rehearse", "script"])
@@ -87,12 +126,21 @@ class DocumentParser:
             return DocumentType.notice
         if memo_score >= 1:
             return DocumentType.memo
-        return DocumentType.document if len(text) > 250 else DocumentType.other
+        return DocumentType.general_document if len(text) > 250 else DocumentType.other
+
+    def _score_korean_manufacturing(self, haystack: str, keywords: list[str]) -> int:
+        return sum(1 for keyword in keywords if keyword.lower() in haystack)
 
     def _extract_date(self, text: str) -> date | None:
         candidates = re.findall(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|[A-Z][a-z]+ \d{1,2}, \d{4})\b", text)
+        candidates.extend(re.findall(r"\b\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\b", text))
         for candidate in candidates:
-            normalized = candidate.replace("-", "/") if re.match(r"\d{1,2}-\d{1,2}-", candidate) else candidate
+            normalized = candidate
+            if re.search(r"[년월일.]", normalized):
+                parts = re.findall(r"\d{1,4}", normalized)
+                if len(parts) >= 3:
+                    normalized = f"{parts[0]}-{parts[1]}-{parts[2]}"
+            normalized = normalized.replace("-", "/") if re.match(r"\d{1,2}-\d{1,2}-", normalized) else normalized
             for pattern in DATE_PATTERNS:
                 try:
                     return datetime.strptime(normalized, pattern).date()
@@ -103,13 +151,106 @@ class DocumentParser:
     def _extract_amount(self, text: str) -> Decimal | None:
         priority_lines = [
             line for line in text.splitlines()
-            if re.search(r"\b(total|amount due|balance|grand total)\b", line, flags=re.IGNORECASE)
+            if re.search(r"\b(total|amount due|balance|grand total)\b|합계|총액|청구금액|공급대가", line, flags=re.IGNORECASE)
         ]
         for line in priority_lines + [text]:
-            matches = re.findall(r"(?:USD|\$)?\s*([0-9]{1,6}(?:,[0-9]{3})*(?:\.[0-9]{2}))", line)
+            matches = re.findall(r"(?:USD|KRW|₩|\$)?\s*([0-9]{1,9}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)", line)
             if matches:
                 return max(Decimal(value.replace(",", "")) for value in matches)
         return None
+
+    def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        pattern = rf"(?:{label_pattern})\s*[:：]?\s*([^\n|]+)"
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        return re.sub(r"\s+", " ", match.group(1)).strip(" -:：")[:120] or None
+
+    def _extract_labeled_date(self, text: str, labels: list[str]) -> date | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(
+            rf"(?:{label_pattern})\s*[:：]?\s*(\d{{4}}[.\-/년]\s*\d{{1,2}}[.\-/월]\s*\d{{1,2}}[일]?)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        return self._extract_date(match.group(1)) if match else None
+
+    def _extract_document_number(self, text: str) -> str | None:
+        labels = ["발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "문서번호", "po no", "quote no", "invoice no"]
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", text, flags=re.IGNORECASE)
+        return match.group(1).strip()[:80] if match else None
+
+    def _extract_line_items(self, lines: list[str]) -> list[dict]:
+        items: list[dict] = []
+        for line in lines:
+            normalized = re.sub(r"\s+", " ", line).strip()
+            if not normalized or not self._looks_like_item_line(normalized):
+                continue
+            parts = [part.strip() for part in re.split(r"\s*\|\s*|\t+|,{2,}", normalized) if part.strip()]
+            if len(parts) >= 6:
+                item = self._line_item_from_parts(parts)
+            else:
+                item = self._line_item_from_free_text(normalized)
+            if item and item.get("item_name"):
+                items.append(item)
+        return items[:80]
+
+    def _looks_like_item_line(self, line: str) -> bool:
+        lowered = line.lower()
+        if any(header in lowered for header in ["품목명", "item name", "단가", "수량", "공급가액", "세액"]):
+            return False
+        money_count = len(re.findall(r"\d{1,9}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2}", line))
+        has_quantity = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:ea|pcs|개|set|kg|m|box)?\b", lowered))
+        return money_count >= 2 and has_quantity
+
+    def _line_item_from_parts(self, parts: list[str]) -> dict:
+        amounts = [self._to_decimal(part) for part in parts if self._to_decimal(part) is not None]
+        text_parts = [part for part in parts if self._to_decimal(part) is None]
+        return {
+            "item_name": text_parts[0] if text_parts else parts[0],
+            "item_code": text_parts[1] if len(text_parts) > 1 and re.search(r"\d", text_parts[1]) else None,
+            "specification": text_parts[2] if len(text_parts) > 2 else None,
+            "quantity": str(amounts[0]) if len(amounts) >= 4 else None,
+            "unit": self._extract_unit(" ".join(parts)),
+            "unit_price": str(amounts[-4]) if len(amounts) >= 4 else None,
+            "supply_amount": str(amounts[-3]) if len(amounts) >= 3 else None,
+            "tax_amount": str(amounts[-2]) if len(amounts) >= 2 else None,
+            "line_total": str(amounts[-1]) if amounts else None,
+        }
+
+    def _line_item_from_free_text(self, line: str) -> dict | None:
+        amounts = [self._to_decimal(value) for value in re.findall(r"\d{1,9}(?:,\d{3})*(?:\.\d{1,2})?", line)]
+        amounts = [amount for amount in amounts if amount is not None]
+        if len(amounts) < 3:
+            return None
+        name = re.split(r"\s+\d", line, maxsplit=1)[0].strip(" -|")
+        return {
+            "item_name": name[:120] if name else None,
+            "item_code": self._extract_item_code(line),
+            "specification": None,
+            "quantity": str(amounts[0]) if len(amounts) >= 4 else None,
+            "unit": self._extract_unit(line),
+            "unit_price": str(amounts[-4]) if len(amounts) >= 4 else None,
+            "supply_amount": str(amounts[-3]),
+            "tax_amount": str(amounts[-2]),
+            "line_total": str(amounts[-1]),
+        }
+
+    def _to_decimal(self, value: str) -> Decimal | None:
+        try:
+            return Decimal(str(value).replace(",", "").strip())
+        except Exception:
+            return None
+
+    def _extract_unit(self, line: str) -> str | None:
+        match = re.search(r"\b(ea|pcs|set|kg|box|m)\b|(?<=\d)\s*(개|식|대|매|박스|세트)", line, flags=re.IGNORECASE)
+        return match.group(1) or match.group(2) if match else None
+
+    def _extract_item_code(self, line: str) -> str | None:
+        match = re.search(r"\b[A-Z]{1,6}[-_]?\d{2,8}[A-Z0-9-]*\b", line)
+        return match.group(0) if match else None
 
     def _guess_title(self, lines: list[str], doc_type: DocumentType, filename: str) -> str:
         text = "\n".join(lines)
@@ -208,6 +349,16 @@ class DocumentParser:
 
     def _guess_category(self, text: str) -> str | None:
         lowered = text.lower()
+        if "발주서" in lowered or "purchase order" in lowered:
+            return "purchase_order"
+        if "견적서" in lowered or "quotation" in lowered or "quote" in lowered:
+            return "quotation"
+        if "거래명세서" in lowered or "transaction statement" in lowered:
+            return "transaction_statement"
+        if "납품서" in lowered or "delivery note" in lowered:
+            return "delivery_note"
+        if "세금계산서" in lowered or "invoice" in lowered:
+            return "invoice"
         if self._looks_like_implementation_schedule(text):
             return "implementation_schedule"
         if self._looks_like_technical_guide(text):

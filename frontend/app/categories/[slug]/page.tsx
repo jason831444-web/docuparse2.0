@@ -30,12 +30,12 @@ export default function CategoryFolderPage() {
     <main className="shell py-8">
       <div className="mb-6">
         <h1 className="text-3xl font-semibold tracking-normal">{titleCaseLabel(category)}</h1>
-        <p className="mt-2 text-muted-foreground">Documents automatically organized into this AI category folder.</p>
+        <p className="mt-2 text-muted-foreground">AI가 이 제조업 문서 유형으로 분류한 문서입니다.</p>
       </div>
       {data?.items.length ? (
         <DocumentList documents={data.items} onChanged={load} returnTo={`/categories/${encodeURIComponent(category)}`} />
       ) : (
-        <Card><CardContent className="p-10 text-center text-muted-foreground">No documents in this category yet.</CardContent></Card>
+        <Card><CardContent className="p-10 text-center text-muted-foreground">이 문서 유형에는 아직 문서가 없습니다.</CardContent></Card>
       )}
     </main>
   );

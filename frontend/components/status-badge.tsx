@@ -12,6 +12,17 @@ const colors: Record<ProcessingStatus, string> = {
   failed: "border-red-300 bg-red-50 text-red-800"
 };
 
+const labels: Record<ProcessingStatus, string> = {
+  uploaded: "업로드됨",
+  queued: "대기 중",
+  processing: "처리 중",
+  ready: "자동 추출 완료",
+  needs_review: "검토 필요",
+  confirmed: "확정 완료",
+  completed: "자동 추출 완료",
+  failed: "실패"
+};
+
 export function StatusBadge({ status }: { status: ProcessingStatus }) {
-  return <Badge className={colors[status]}>{status.replace("_", " ")}</Badge>;
+  return <Badge className={colors[status]}>{labels[status]}</Badge>;
 }
