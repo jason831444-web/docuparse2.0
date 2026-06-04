@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BellRing,
+  Database,
   FileHeart,
   FileSearch,
   Files,
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/categories", label: "문서 유형", icon: FolderKanban },
   { href: "/review", label: "검토 필요", icon: BellRing },
   { href: "/favorites", label: "즐겨찾기", icon: FileHeart },
+  { href: "/masters/items", label: "내부 장부", icon: Database },
   { href: "/settings", label: "설정", icon: Settings }
 ];
 

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.documents import router as documents_router
+from app.api.routes.item_master import router as item_master_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -25,3 +26,4 @@ def health() -> dict[str, str]:
 
 
 app.include_router(documents_router, prefix=settings.api_prefix)
+app.include_router(item_master_router, prefix=settings.api_prefix)

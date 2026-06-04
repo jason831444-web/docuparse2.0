@@ -100,6 +100,9 @@ export interface DocumentRecord {
 export interface ManufacturingLineItem {
   item_name?: string | null;
   item_code?: string | null;
+  source_item_name?: string | null;
+  source_item_code?: string | null;
+  internal_item_code?: string | null;
   specification?: string | null;
   quantity?: string | number | null;
   unit?: string | null;
@@ -107,6 +110,58 @@ export interface ManufacturingLineItem {
   supply_amount?: string | number | null;
   tax_amount?: string | number | null;
   line_total?: string | number | null;
+  item_master_match_status?: "auto_matched" | "needs_review" | "unmatched" | "skipped_no_item_master" | string | null;
+  item_master_match_confidence?: string | number | null;
+  item_master_candidates?: ItemMasterCandidate[];
+  item_master_match_reason?: string | null;
+}
+
+export interface ItemMasterCandidate {
+  internal_item_code: string;
+  item_name: string | null;
+  spec: string | null;
+  unit: string | null;
+  standard_price: string | null;
+  score: string;
+  score_breakdown?: Record<string, string>;
+}
+
+export interface ItemMasterRecord {
+  id: string;
+  internal_item_code: string;
+  item_name: string;
+  normalized_item_name: string | null;
+  spec: string | null;
+  normalized_spec: string | null;
+  unit: string | null;
+  category: string | null;
+  standard_price: string | null;
+  active: boolean;
+  aliases: string[];
+  last_uploaded_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ItemMasterListResponse {
+  items: ItemMasterRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ItemMasterStats {
+  total_items: number;
+  active_items: number;
+  inactive_items: number;
+  last_uploaded_at: string | null;
+}
+
+export interface ItemMasterUploadResult {
+  inserted: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
 }
 
 export interface DocumentListResponse {

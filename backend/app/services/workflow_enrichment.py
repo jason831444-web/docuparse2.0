@@ -38,7 +38,7 @@ class DocumentWorkflowEnrichmentService:
         mode = self._workflow_mode(document, interpretation)
         profile = interpretation.profile if interpretation and interpretation.profile else self._content_profile(document, text, mode)
         if self._is_manufacturing_document(document, profile):
-            return self._manufacturing_business_data(document, interpretation)
+            return self._manufacturing_business_data(document, text, interpretation)
         if document.document_type == DocumentType.receipt:
             result = self._receipt(document, text, mode)
         elif profile in {"syllabus", "course_guide"}:
@@ -127,6 +127,7 @@ class DocumentWorkflowEnrichmentService:
     def _manufacturing_business_data(
         self,
         document: Document,
+        text: str,
         interpretation: CategoryInterpretation | None,
     ) -> WorkflowEnrichment:
         doc_type = getattr(document.document_type, "value", str(document.document_type or "general_document"))
@@ -134,29 +135,37 @@ class DocumentWorkflowEnrichmentService:
         vendor = document.vendor_name or document.merchant_name or "공급업체 미확인"
         customer = document.customer_name or "고객사 미확인"
         number = document.document_number or "문서번호 미확인"
-        due_date = self._korean_date(document.due_date)
         issue_date = self._korean_date(document.issue_date or document.extracted_date)
+        business_fields = self._manufacturing_business_fields(document, text, doc_type)
         line_item_count = len(document.line_items or [])
         total = self._korean_money(document.extracted_amount, document.currency or "KRW")
-        warnings = self._manufacturing_validation_warnings(document)
+        review_reasons = self._manufacturing_review_reasons(document, business_fields)
+        review_issues = self._normalized_review_issues(document, review_reasons)
+        warnings = self._dedupe([issue["message_ko"] for issue in review_issues])
         review_required = bool(warnings or document.review_required)
         export_ready = not review_required
-        summary = (
-            f"이 {label}는 {vendor}{self._with_particle(vendor)} {customer} 간의 거래 문서입니다. "
-            f"{self._manufacturing_number_label(doc_type)}는 {number}이며, "
-            f"납기일은 {due_date or '미확인'}입니다. "
-            f"품목 {line_item_count}건과 합계금액 {total or '미확인'}이 추출되었습니다."
+        summary = self._manufacturing_summary(
+            doc_type,
+            label,
+            vendor,
+            customer,
+            number,
+            business_fields,
+            line_item_count,
+            total,
         )
-        action_items = [
-            "품목명, 수량, 단가, 합계금액이 실제 원본 문서와 일치하는지 확인하세요.",
-            "납기일이 실제 요청 일정과 맞는지 확인하세요.",
-        ]
+        action_items = self._manufacturing_action_items(doc_type, warnings)
         if warnings:
             action_items.insert(0, "검토 필요 항목을 수정한 뒤 확정 처리하세요.")
+        key_dates = self._manufacturing_key_dates(doc_type, issue_date, business_fields)
         metadata = {
             "business_summary": summary,
+            "business_fields": business_fields,
             "action_items": action_items,
             "validation_warnings": warnings,
+            "normalized_review_issues": review_issues,
+            "review_reasons": review_reasons,
+            "missing_required_fields": [issue["field"] for issue in review_issues if str(issue.get("code", "")).startswith("missing_")],
             "export_ready": export_ready,
             "review_required": review_required,
             "line_item_count": line_item_count,
@@ -193,36 +202,182 @@ class DocumentWorkflowEnrichmentService:
             summary_detailed=summary,
             action_items=action_items,
             warnings=warnings,
-            key_dates=[value for value in [f"발행일: {issue_date}" if issue_date else None, f"납기일: {due_date}" if due_date else None] if value],
+            key_dates=key_dates,
             urgency_level="medium" if review_required else "low",
             follow_up_required=review_required,
             workflow_metadata=metadata,
         )
 
-    def _manufacturing_validation_warnings(self, document: Document) -> list[str]:
-        warnings: list[str] = []
+    def _manufacturing_business_fields(self, document: Document, text: str, doc_type: str) -> dict[str, str | list[str]]:
+        fields: dict[str, str | list[str]] = {}
+        if doc_type == "purchase_order":
+            fields["due_date"] = self._date_iso(document.due_date)
+        elif doc_type == "quotation":
+            fields["quotation_date"] = self._date_iso(self._extract_labeled_date(text, ["견적일", "quotation date"]) or document.issue_date or document.extracted_date)
+            fields["valid_until"] = self._date_iso(self._extract_labeled_date(text, ["유효기간", "견적유효기간", "valid until", "expiration date", "expires"]) or document.due_date)
+            fields["delivery_terms"] = self._extract_labeled_text(text, ["납기조건", "delivery terms"])
+            fields["payment_terms"] = self._extract_labeled_text(text, ["결제조건", "payment terms"])
+        elif doc_type == "transaction_statement":
+            fields["transaction_date"] = self._date_iso(self._extract_labeled_date(text, ["거래일자", "거래일", "transaction date"]) or document.issue_date or document.extracted_date)
+        elif doc_type == "delivery_note":
+            fields["delivery_date"] = self._date_iso(self._extract_labeled_date(text, ["납품일", "납품일자", "delivery date"]) or document.due_date)
+            fields["receiving_location"] = self._extract_labeled_text(text, ["입고장소", "납품장소", "receiving location"])
+            fields["receiver_name"] = self._extract_labeled_text(text, ["수령자", "인수자", "receiver"])
+        elif doc_type == "invoice":
+            fields["payment_due_date"] = self._date_iso(document.due_date or self._extract_labeled_date(text, ["지급기한", "결제기한", "payment due date", "due date"]))
+            supplier_brn = self._extract_labeled_text(text, ["공급자 사업자등록번호", "공급업체 사업자등록번호", "supplier business registration number"])
+            customer_brn = self._extract_labeled_text(text, ["공급받는자 사업자등록번호", "고객사 사업자등록번호", "customer business registration number"])
+            fields["supplier_business_registration_number"] = supplier_brn
+            fields["customer_business_registration_number"] = customer_brn
+            fields["business_registration_numbers"] = re.findall(r"\b\d{3}-\d{2}-\d{5}\b", text)
+        return {key: value for key, value in fields.items() if value not in (None, "", [])}
+
+    def _manufacturing_review_reasons(self, document: Document, business_fields: dict[str, str | list[str]]) -> list[dict[str, Any]]:
+        reasons: list[dict[str, Any]] = []
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
         if not (document.vendor_name or document.merchant_name):
-            warnings.append("공급업체가 추출되지 않았습니다.")
+            reasons.append(self._review_reason("missing_vendor_name", "공급업체가 추출되지 않았습니다.", "vendor_name"))
         if not document.customer_name:
-            warnings.append("고객사가 추출되지 않았습니다.")
+            reasons.append(self._review_reason("missing_customer_name", "고객사가 추출되지 않았습니다.", "customer_name"))
         if not document.document_number:
-            warnings.append("문서번호가 추출되지 않았습니다.")
+            reasons.append(self._review_reason("missing_document_number", f"{self._manufacturing_number_label(doc_type)} 미확인", "document_number"))
         if not (document.issue_date or document.extracted_date):
-            warnings.append("발행일이 추출되지 않았습니다.")
-        if not document.due_date:
-            warnings.append("납기일이 추출되지 않았습니다.")
+            reasons.append(self._review_reason("missing_issue_date", f"{self._manufacturing_issue_label(doc_type)} 미확인", "issue_date"))
+        if doc_type == "purchase_order" and not document.due_date:
+            reasons.append(self._review_reason("missing_due_date", "납기일 미확인", "due_date"))
+        if doc_type == "invoice" and not business_fields.get("payment_due_date"):
+            reasons.append(self._review_reason("missing_payment_due_date", "지급기한 미확인", "due_date"))
         if not document.line_items:
-            warnings.append("품목 정보가 추출되지 않았습니다.")
+            reasons.append(self._review_reason("missing_line_items", "품목 정보가 추출되지 않았습니다.", "line_items"))
         for index, item in enumerate(document.line_items or [], start=1):
             if item.get("item_name") in (None, "", []):
-                warnings.append(f"{index}번째 품목의 품목명이 비어 있습니다.")
+                reasons.append(self._review_reason("missing_item_name", f"{index}번째 품목의 품목명이 비어 있습니다.", "line_items.item_name", index - 1))
             if item.get("quantity") in (None, "", []):
-                warnings.append(f"{index}번째 품목의 수량을 확인해야 합니다.")
+                reasons.append(self._review_reason("missing_quantity", f"{index}번째 품목의 수량이 비어 있습니다.", "line_items.quantity", index - 1))
             if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
-                warnings.append(f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.")
+                reasons.append(self._review_reason("missing_price_or_total", f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.", "line_items.unit_price", index - 1))
+            if item.get("item_code") in (None, "", []):
+                reasons.append(self._review_reason("missing_item_code", f"{index}번째 품목 품목코드 미확인", "line_items.item_code", index - 1))
+            match_status = item.get("item_master_match_status")
+            if match_status == "needs_review":
+                reasons.append(self._review_reason("item_master_match_required", f"{index}번째 품목 내부 품목코드 후보 확인 필요", "line_items.internal_item_code", index - 1))
+            elif match_status == "unmatched":
+                reasons.append(self._review_reason("item_master_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1))
+        if any(
+            item.get("item_master_match_status") == "skipped_no_item_master" and item.get("item_code") in (None, "", [])
+            for item in document.line_items or []
+        ):
+            reasons.append(self._review_reason("item_matching_skipped", "내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.", "line_items.internal_item_code", severity="info"))
         if self._manufacturing_total_mismatch(document):
-            warnings.append("문서 합계금액과 품목 합계금액이 일치하지 않습니다.")
-        return self._dedupe(warnings)
+            reasons.append(self._review_reason(
+                "amount_mismatch",
+                "문서 합계금액과 품목 합계금액이 일치하지 않습니다.",
+                "total_amount",
+                expected=self._line_items_total(document),
+                actual=document.extracted_amount,
+            ))
+        return self._dedupe_review_reasons(reasons)
+
+    def _normalized_review_issues(self, document: Document, review_reasons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        issues = self._dedupe_review_reasons(list(review_reasons), by_message=True)
+        known_messages = {self._normalize_review_message(str(issue.get("message_ko"))) for issue in issues if issue.get("message_ko")}
+        metadata = document.workflow_metadata or {}
+        for message in self._string_list(metadata.get("validation_warnings")):
+            normalized_message = self._normalize_review_message(message)
+            if normalized_message not in known_messages:
+                issues.append(self._review_reason("validation_warning", message, "document"))
+                known_messages.add(normalized_message)
+        for field in list(document.low_confidence_fields or []):
+            message = self._low_confidence_message(field)
+            normalized_message = self._normalize_review_message(message)
+            if normalized_message not in known_messages:
+                issues.append(self._review_reason(field.split(":", 1)[0], message, self._low_confidence_field(field)))
+                known_messages.add(normalized_message)
+        if document.review_required and not issues:
+            issues.append(self._review_reason("review_required", "검토 필요 항목을 확인하세요.", "document"))
+        return self._dedupe_review_reasons(issues, by_message=True)
+
+    def _low_confidence_message(self, value: str) -> str:
+        code, _, item_token = value.partition(":")
+        item_number = item_token.replace("item_", "")
+        prefix = f"{item_number}번째 품목 " if item_number.isdigit() else ""
+        return {
+            "missing_line_items": "품목 정보가 추출되지 않았습니다.",
+            "missing_item_name": f"{prefix}품목명이 비어 있습니다.",
+            "missing_quantity": f"{prefix}수량이 비어 있습니다.",
+            "missing_price_or_total": f"{prefix}단가 또는 합계금액을 확인해야 합니다.",
+            "missing_item_code": f"{prefix}품목코드 미확인",
+            "item_master_match_required": f"{prefix}내부 품목코드 후보 확인 필요" if prefix else "내부 품목 장부 매칭 필요",
+            "item_master_unmatched": f"{prefix}내부 품목코드 미매칭" if prefix else "내부 품목코드 미매칭",
+            "item_matching_skipped": "내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.",
+            "amount_mismatch": "문서 합계금액과 품목 합계금액이 일치하지 않습니다.",
+            "missing_document_number": "문서번호 미확인",
+            "missing_issue_date": "날짜 미확인",
+            "missing_due_date": "납기일 미확인",
+            "missing_payment_due_date": "지급기한 미확인",
+        }.get(code, value)
+
+    def _low_confidence_field(self, value: str) -> str:
+        code = value.split(":", 1)[0]
+        return {
+            "missing_quantity": "line_items.quantity",
+            "missing_item_name": "line_items.item_name",
+            "missing_item_code": "line_items.item_code",
+            "item_master_match_required": "line_items.internal_item_code",
+            "item_master_unmatched": "line_items.internal_item_code",
+            "item_matching_skipped": "line_items.internal_item_code",
+            "missing_price_or_total": "line_items.unit_price",
+            "amount_mismatch": "total_amount",
+        }.get(code, code)
+
+    def _review_reason(
+        self,
+        code: str,
+        message_ko: str,
+        field: str,
+        item_index: int | None = None,
+        severity: str = "warning",
+        expected: Decimal | None = None,
+        actual: Decimal | None = None,
+    ) -> dict[str, Any]:
+        reason: dict[str, Any] = {
+            "code": code,
+            "message_ko": message_ko,
+            "field": field,
+            "severity": severity,
+        }
+        if item_index is not None:
+            reason["item_index"] = item_index
+        if expected is not None:
+            reason["expected"] = str(expected)
+        if actual is not None:
+            reason["actual"] = str(actual)
+        return reason
+
+    def _dedupe_review_reasons(self, reasons: list[dict[str, Any]], by_message: bool = False) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple] = set()
+        seen_messages: set[str] = set()
+        for reason in reasons:
+            message_key = self._normalize_review_message(str(reason.get("message_ko") or ""))
+            if by_message and message_key:
+                if message_key in seen_messages:
+                    continue
+                seen_messages.add(message_key)
+            key = (
+                reason.get("code"),
+                reason.get("field"),
+                reason.get("item_index"),
+                message_key if reason.get("code") in {None, "", "validation_warning", "review_required"} else "",
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(reason)
+        return deduped
+
+    def _normalize_review_message(self, value: str) -> str:
+        return re.sub(r"\s+", " ", value or "").strip()
 
     def _manufacturing_total_mismatch(self, document: Document) -> bool:
         if document.extracted_amount is None or not document.line_items:
@@ -243,6 +398,112 @@ class DocumentWorkflowEnrichmentService:
         tolerance = max(Decimal("1"), abs(document.extracted_amount) * Decimal("0.02"))
         return abs(document.extracted_amount - line_total) > tolerance
 
+    def _line_items_total(self, document: Document) -> Decimal | None:
+        total = Decimal("0")
+        found = False
+        for item in document.line_items or []:
+            value = item.get("line_total")
+            if value in (None, "", []):
+                continue
+            try:
+                total += Decimal(str(value).replace(",", ""))
+                found = True
+            except Exception:
+                return None
+        return total if found else None
+
+    def _manufacturing_summary(
+        self,
+        doc_type: str,
+        label: str,
+        vendor: str,
+        customer: str,
+        number: str,
+        fields: dict[str, str | list[str]],
+        line_item_count: int,
+        total: str | None,
+    ) -> str:
+        number_label = self._manufacturing_number_label(doc_type)
+        detail = ""
+        if doc_type == "quotation":
+            valid_until = self._korean_date_from_iso(fields.get("valid_until"))
+            terms = []
+            if fields.get("delivery_terms"):
+                terms.append(f"납기조건은 {fields['delivery_terms']}")
+            if fields.get("payment_terms"):
+                terms.append(f"결제조건은 {fields['payment_terms']}")
+            detail = f"유효기간은 {valid_until or '미확인'}이며, " + (", ".join(terms) + "입니다. " if terms else "")
+        elif doc_type == "transaction_statement":
+            transaction_date = self._korean_date_from_iso(fields.get("transaction_date"))
+            detail = f"거래일자는 {transaction_date or '미확인'}입니다. "
+        elif doc_type == "delivery_note":
+            delivery_date = self._korean_date_from_iso(fields.get("delivery_date"))
+            location = fields.get("receiving_location") or "입고장소 미확인"
+            receiver = fields.get("receiver_name") or "수령자 미확인"
+            detail = f"납품일은 {delivery_date or '미확인'}이며, 입고장소는 {location}, 수령자는 {receiver}입니다. "
+        elif doc_type == "invoice":
+            payment_due = self._korean_date_from_iso(fields.get("payment_due_date"))
+            detail = f"지급기한은 {payment_due or '미확인'}입니다. "
+        else:
+            due_date = self._korean_date_from_iso(fields.get("due_date"))
+            detail = f"납기일은 {due_date or '미확인'}입니다. "
+        return (
+            f"이 {label}는 {vendor}{self._with_particle(vendor)} {customer} 간의 거래 문서입니다. "
+            f"{number_label}는 {number}이며, {detail}"
+            f"품목 {line_item_count}건과 합계금액 {total or '미확인'}이 추출되었습니다."
+        )
+
+    def _manufacturing_action_items(self, doc_type: str, warnings: list[str]) -> list[str]:
+        items = ["품목명, 수량, 단가, 합계금액이 실제 원본 문서와 일치하는지 확인하세요."]
+        if doc_type == "purchase_order":
+            items.append("납기일이 실제 요청 일정과 맞는지 확인하세요.")
+        elif doc_type == "quotation":
+            items.append("유효기간, 납기조건, 결제조건이 견적 조건과 맞는지 확인하세요.")
+        elif doc_type == "delivery_note":
+            items.append("납품일, 입고장소, 수령자가 실제 납품 정보와 맞는지 확인하세요.")
+        elif doc_type == "invoice":
+            items.append("지급기한과 사업자등록번호가 원본과 일치하는지 확인하세요.")
+        else:
+            items.append("문서번호와 날짜가 원본 문서와 일치하는지 확인하세요.")
+        return items
+
+    def _manufacturing_key_dates(self, doc_type: str, issue_date: str | None, fields: dict[str, str | list[str]]) -> list[str]:
+        values: list[tuple[str, str | None]] = []
+        if issue_date and doc_type not in {"transaction_statement"}:
+            values.append((self._manufacturing_issue_label(doc_type), issue_date))
+        if doc_type == "purchase_order":
+            values.append(("납기일", self._korean_date_from_iso(fields.get("due_date"))))
+        elif doc_type == "quotation":
+            values.append(("견적일", issue_date))
+            values.append(("유효기간", self._korean_date_from_iso(fields.get("valid_until"))))
+        elif doc_type == "transaction_statement":
+            transaction_date = self._korean_date_from_iso(fields.get("transaction_date"))
+            values.append(("거래일자", transaction_date or issue_date))
+            if issue_date and issue_date != transaction_date:
+                values.append(("발행일", issue_date))
+        elif doc_type == "delivery_note":
+            values.append(("납품일", self._korean_date_from_iso(fields.get("delivery_date"))))
+        elif doc_type == "invoice":
+            values.append(("지급기한", self._korean_date_from_iso(fields.get("payment_due_date"))))
+        return self._dedupe_key_dates(values)
+
+    def _dedupe_key_dates(self, values: list[tuple[str, str | None]]) -> list[str]:
+        result: list[str] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        seen_dates: set[str] = set()
+        for label, value in values:
+            if not value:
+                continue
+            pair = (label, value)
+            if pair in seen_pairs:
+                continue
+            if value in seen_dates and label in {"거래일자", "발행일", "견적일"}:
+                continue
+            seen_pairs.add(pair)
+            seen_dates.add(value)
+            result.append(f"{label}: {value}")
+        return result
+
     def _manufacturing_label(self, doc_type: str) -> str:
         return {
             "purchase_order": "발주서",
@@ -261,8 +522,48 @@ class DocumentWorkflowEnrichmentService:
             "quotation": "견적번호",
             "transaction_statement": "거래명세서번호",
             "delivery_note": "납품번호",
-            "invoice": "문서번호",
+            "invoice": "계산서번호",
         }.get(doc_type, "문서번호")
+
+    def _manufacturing_issue_label(self, doc_type: str) -> str:
+        return {
+            "quotation": "견적일",
+            "transaction_statement": "거래일자",
+        }.get(doc_type, "발행일")
+
+    def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(rf"(?:{label_pattern})\s*[:：]?\s*([^\n|]+)", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        return re.sub(r"\s+", " ", match.group(1)).strip(" -:：")[:120] or None
+
+    def _extract_labeled_date(self, text: str, labels: list[str]) -> date | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(
+            rf"(?:{label_pattern})\s*[:：]?\s*(\d{{4}}[.\-/년]\s*\d{{1,2}}[.\-/월]\s*\d{{1,2}}[일]?)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        return self._parse_date(match.group(1)) if match else None
+
+    def _parse_date(self, value: str) -> date | None:
+        parts = re.findall(r"\d{1,4}", value)
+        if len(parts) < 3:
+            return None
+        try:
+            return date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except ValueError:
+            return None
+
+    def _date_iso(self, value: date | None) -> str | None:
+        return value.isoformat() if value else None
+
+    def _korean_date_from_iso(self, value: object) -> str | None:
+        if not value or not isinstance(value, str):
+            return None
+        parsed = self._parse_date(value)
+        return self._korean_date(parsed)
 
     def _korean_date(self, value: date | None) -> str | None:
         if not value:

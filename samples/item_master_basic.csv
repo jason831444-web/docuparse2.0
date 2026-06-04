@@ -1,0 +1,11 @@
+internal_item_code,item_name,spec,unit,category,standard_price,active
+M-001,SUS304 철판 2.0T,1000x2000,EA,원자재,25000,true
+M-002,알루미늄 봉 10mm,3000mm,EA,원자재,8000,true
+BOLT-M8-20,M8 육각 볼트,M8x20,EA,부자재,120,true
+WASH-SUS-08,SUS304 와셔,M8,EA,부자재,40,true
+BRK-SUS-01,스테인리스 브라켓,50x80x3T,EA,가공품,1500,true
+PLT-FIX-02,고정 플레이트,120x60x5T,EA,가공품,2800,true
+BRG-H-100,베어링 하우징,100mm,EA,가공품,12000,true
+PIN-S45C-08,축 고정핀,8x60,EA,부자재,350,true
+CON-PCB-12P,PCB 커넥터,12핀,EA,전자부품,300,true
+CBL-HAR-500,케이블 하네스,500mm,EA,전자부품,2200,true

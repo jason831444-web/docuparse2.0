@@ -3,9 +3,9 @@ import uuid
 from datetime import datetime, date
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, Enum, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
@@ -107,3 +107,40 @@ class CategoryFolder(Base):
     parent: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     category: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ItemMaster(Base):
+    __tablename__ = "item_masters"
+    __table_args__ = (UniqueConstraint("internal_item_code", name="uq_item_masters_internal_item_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    internal_item_code: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    normalized_item_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    spec: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    normalized_spec: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    standard_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    aliases: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    last_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    alias_records: Mapped[list["ItemAlias"]] = relationship("ItemAlias", back_populates="item_master", cascade="all, delete-orphan")
+
+
+class ItemAlias(Base):
+    __tablename__ = "item_aliases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    item_master_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("item_masters.id", ondelete="CASCADE"), nullable=False, index=True)
+    alias_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    normalized_alias_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    alias_spec: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    item_master: Mapped[ItemMaster] = relationship("ItemMaster", back_populates="alias_records")

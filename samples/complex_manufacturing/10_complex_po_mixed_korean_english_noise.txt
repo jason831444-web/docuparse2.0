@@ -1,0 +1,39 @@
+문서유형: 구매발주서 / Purchase Order
+PO No: PO-2026-0711-MIX-888
+발행일자: 2026년 7월 11일
+납기 요청: 2026년 7월 28일
+Supplier: 대한정밀부품
+Buyer: 한빛제조
+Memo: OCR에서 줄 깨짐과 영어/한국어 혼합이 발생한 상황을 가정한다.
+
+[ITEM TABLE START]
+item name: SUS304
+2T
+PLATE
+spec: 1000 x 2000
+qty: 7 EA
+unit price: 25,000 KRW
+subtotal: 175,000
+vat: 17,500
+total: 192,500
+
+item name: M8 육각 볼트
+spec: M8x20 / zinc
+qty: 1,200 EA
+unit price: 120
+subtotal: 144,000
+vat: 14,400
+total: 158,400
+
+item name: SUS washer m8
+spec: M8
+qty: 1,200 EA
+unit price: 40
+subtotal: 48,000
+vat: 4,800
+total: 52,800
+[ITEM TABLE END]
+
+공급가액 합계 367000
+세액 합계 36700
+총 합계 403700

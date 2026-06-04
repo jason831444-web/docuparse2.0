@@ -217,16 +217,15 @@ class LocalDocumentAIService(DocumentAIService):
         if document_type not in manufacturing_types:
             return fields
         if not line_items:
-            fields.append("line_items")
+            fields.append("missing_line_items")
             return fields
         for index, item in enumerate(line_items, start=1):
             if item.get("item_name") in (None, "", []):
-                fields.append(f"line_items[{index}].item_name")
+                fields.append(f"missing_item_name:item_{index}")
             if item.get("quantity") in (None, "", []):
-                fields.append(f"line_items[{index}].quantity")
+                fields.append(f"missing_quantity:item_{index}")
             if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
-                fields.append(f"line_items[{index}].unit_price")
-                fields.append(f"line_items[{index}].line_total")
+                fields.append(f"missing_price_or_total:item_{index}")
         return fields[:30]
 
     def _clean_lines(self, raw_text: str) -> list[str]:
@@ -263,20 +262,22 @@ class LocalDocumentAIService(DocumentAIService):
         return notes, max(Decimal("0.25"), min(Decimal("0.95"), score))
 
     def _classify(self, text: str, filename: str, fallback: DocumentType) -> tuple[DocumentType, Decimal]:
+        content = text.lower()
+        first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])
+        priority_indicators = [
+            (DocumentType.delivery_note, ["납품서", "납품번호", "납품일", "납품수량", "입고장소", "수령자", "delivery note"]),
+            (DocumentType.quotation, ["견적서", "견적번호", "견적일", "유효기간", "견적유효기간", "납기조건", "결제조건", "quotation", "quote"]),
+            (DocumentType.invoice, ["세금계산서", "계산서번호", "인보이스번호", "청구서번호", "지급기한", "결제기한", "사업자등록번호", "invoice"]),
+            (DocumentType.purchase_order, ["발주서", "발주번호", "발주처", "납기일", "purchase order", "po no"]),
+            (DocumentType.transaction_statement, ["거래명세서", "거래명세서번호", "거래일자", "transaction statement"]),
+        ]
+        for document_type, keywords in priority_indicators:
+            strong_hits = sum(1 for keyword in keywords if keyword.lower() in first_lines)
+            content_hits = sum(1 for keyword in keywords if keyword.lower() in content)
+            threshold = 1 if document_type != DocumentType.transaction_statement else 2
+            if strong_hits >= 1 or content_hits >= threshold:
+                return document_type, Decimal(str(min(0.94, 0.68 + content_hits * 0.04)))
         haystack = f"{filename}\n{text}".lower()
-        manufacturing_scores = {
-            DocumentType.purchase_order: self._score(haystack, ["발주서", "발주 번호", "purchase order", "po no", "납기일"]),
-            DocumentType.quotation: self._score(haystack, ["견적서", "견적 번호", "quotation", "quote", "견적금액"]),
-            DocumentType.transaction_statement: self._score(haystack, ["거래명세서", "거래 명세서", "transaction statement", "공급가액", "세액"]),
-            DocumentType.delivery_note: self._score(haystack, ["납품서", "납품 번호", "delivery note", "납품일"]),
-            DocumentType.invoice: self._score(haystack, ["세금계산서", "invoice", "청구서", "공급받는자"]),
-            DocumentType.packing_list: self._score(haystack, ["포장명세서", "packing list", "carton", "box"]),
-            DocumentType.inspection_report: self._score(haystack, ["검사성적서", "inspection report", "검사 결과", "합격"]),
-            DocumentType.contract: self._score(haystack, ["계약서", "contract", "계약 금액"]),
-        }
-        manufacturing_winner, manufacturing_score = max(manufacturing_scores.items(), key=lambda item: item[1])
-        if manufacturing_score >= 2:
-            return manufacturing_winner, Decimal(str(min(0.94, 0.58 + manufacturing_score * 0.06)))
         invoice_score = self._score(haystack, ["invoice", "invoice number", "invoice #", "vendor", "bill to", "amount due", "total due"])
         if invoice_score >= 4:
             return DocumentType.invoice, Decimal("0.84")
@@ -419,7 +420,16 @@ class LocalDocumentAIService(DocumentAIService):
         if not lines:
             return None
         if document_type == DocumentType.receipt:
-            return "Receipt with merchant, date, totals, and tax fields extracted when visible."
+            return "영수증의 가맹점, 날짜, 금액, 세액 정보를 추출했습니다."
+        if document_type in {
+            DocumentType.purchase_order,
+            DocumentType.quotation,
+            DocumentType.transaction_statement,
+            DocumentType.delivery_note,
+            DocumentType.invoice,
+            DocumentType.packing_list,
+        }:
+            return "제조업 문서의 문서 유형, 거래처, 문서번호, 날짜, 품목 및 금액 정보를 구조화했습니다."
         unique_lines = []
         seen = set()
         for line in lines:

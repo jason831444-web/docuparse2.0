@@ -24,6 +24,14 @@ DATE_PATTERNS = [
     "%B %d, %Y",
 ]
 
+MANUFACTURING_TYPE_INDICATORS = [
+    (DocumentType.delivery_note, ["납품서", "납품번호", "납품일", "납품수량", "입고장소", "수령자", "delivery note"]),
+    (DocumentType.quotation, ["견적서", "견적번호", "견적일", "유효기간", "견적유효기간", "납기조건", "결제조건", "quotation", "quote"]),
+    (DocumentType.invoice, ["세금계산서", "계산서번호", "인보이스번호", "청구서번호", "지급기한", "결제기한", "사업자등록번호", "invoice"]),
+    (DocumentType.purchase_order, ["발주서", "발주번호", "발주처", "납기일", "purchase order", "po no"]),
+    (DocumentType.transaction_statement, ["거래명세서", "거래명세서번호", "거래일자", "transaction statement"]),
+]
+
 CATEGORY_KEYWORDS = {
     "purchase_order": ["발주서", "발주 번호", "po no", "purchase order", "납기일", "발주일"],
     "quotation": ["견적서", "견적 번호", "quotation", "quote", "유효기간", "견적금액"],
@@ -49,15 +57,15 @@ CATEGORY_KEYWORDS = {
 }
 
 LINE_ITEM_LABELS = {
-    "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "item"],
+    "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "product name", "item"],
     "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "part no", "part number", "item code"],
-    "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification"],
+    "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification", "dimension"],
     "quantity": ["수량", "주문수량", "납품수량", "qty", "quantity"],
     "unit": ["단위", "unit"],
-    "unit_price": ["단가", "개당가격", "unit price"],
-    "supply_amount": ["공급가액", "공급액", "supply amount"],
-    "tax_amount": ["세액", "부가세", "vat", "tax"],
-    "line_total": ["합계금액", "총액", "금액", "합계", "line total", "amount"],
+    "unit_price": ["단가", "단 가", "개당가격", "unit price"],
+    "supply_amount": ["공급가액", "공급액", "공급 금액", "supply amount", "amount"],
+    "tax_amount": ["세액", "세 액", "부가세", "vat", "tax", "w세액"],
+    "line_total": ["합계금액", "총액", "금액", "합계", "total", "line total"],
 }
 
 LINE_ITEM_LABEL_LOOKUP = {
@@ -89,6 +97,9 @@ class ParsedDocument:
     document_number: str | None = None
     issue_date: date | None = None
     due_date: date | None = None
+    subtotal: Decimal | None = None
+    tax: Decimal | None = None
+    business_fields: dict = field(default_factory=dict)
     line_items: list[dict] = field(default_factory=list)
     category: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -102,10 +113,13 @@ class DocumentParser:
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
         line_items = self._extract_line_items(lines)
-        amount = self._extract_amount(joined) or self._line_items_total(line_items)
+        subtotal = self._extract_labeled_amount(joined, ["공급가액", "공급액", "공급 금액", "subtotal", "supply amount"])
+        tax = self._extract_labeled_amount(joined, ["세액", "세 액", "부가세", "vat", "tax", "w세액"])
+        amount = self._extract_labeled_amount(joined, ["합계금액", "총액", "공급대가", "청구금액", "total", "grand total"]) or self._line_items_total(line_items)
         category = self._guess_category(joined)
-        issue_date = self._extract_labeled_date(joined, ["발행일", "작성일", "발주일", "견적일", "납품일", "거래일자", "일자"])
-        due_date = self._extract_labeled_date(joined, ["납기일", "납품예정일", "납품 예정일", "due date", "delivery date"])
+        business_fields = self._extract_business_fields(joined, doc_type)
+        issue_date = self._extract_issue_date(joined, doc_type)
+        due_date = self._extract_due_date(joined, doc_type)
         vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급자", "거래처", "매입처", "vendor", "supplier"])
         customer_name = self._extract_labeled_text(joined, ["고객사", "수요처", "발주처", "납품처", "구매자", "customer", "buyer"])
         return ParsedDocument(
@@ -120,21 +134,24 @@ class DocumentParser:
             document_number=self._extract_document_number(joined),
             issue_date=issue_date,
             due_date=due_date,
+            subtotal=subtotal,
+            tax=tax,
+            business_fields=business_fields,
             line_items=line_items,
             category=category,
             tags=self._guess_tags(joined, category, doc_type),
         )
 
     def _guess_document_type(self, text: str, filename: str) -> DocumentType:
+        content = text.lower()
+        first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])
+        for document_type, keywords in MANUFACTURING_TYPE_INDICATORS:
+            strong_hits = sum(1 for keyword in keywords if keyword.lower() in first_lines)
+            content_hits = sum(1 for keyword in keywords if keyword.lower() in content)
+            threshold = 1 if document_type != DocumentType.transaction_statement else 2
+            if strong_hits >= 1 or content_hits >= threshold:
+                return document_type
         haystack = f"{filename}\n{text}".lower()
-        if self._score_korean_manufacturing(haystack, ["발주서", "발주 번호", "purchase order", "po no", "po번호"]) >= 1:
-            return DocumentType.purchase_order
-        if self._score_korean_manufacturing(haystack, ["견적서", "견적 번호", "quotation", "quote"]) >= 1:
-            return DocumentType.quotation
-        if self._score_korean_manufacturing(haystack, ["거래명세서", "거래 명세서", "transaction statement"]) >= 1:
-            return DocumentType.transaction_statement
-        if self._score_korean_manufacturing(haystack, ["납품서", "delivery note", "납품 번호"]) >= 1:
-            return DocumentType.delivery_note
         if self._score_korean_manufacturing(haystack, ["포장명세서", "packing list"]) >= 1:
             return DocumentType.packing_list
         if self._score_korean_manufacturing(haystack, ["검사성적서", "inspection report"]) >= 1:
@@ -195,6 +212,17 @@ class DocumentParser:
                 return max(Decimal(value.replace(",", "")) for value in matches)
         return None
 
+    def _extract_labeled_amount(self, text: str, labels: list[str]) -> Decimal | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        matches = re.finditer(
+            rf"(?:^|\n)\s*(?:{label_pattern})\s*[:：]?\s*(?:KRW|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*(?:원|KRW)?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        values = [self._to_decimal(match.group(1)) for match in matches]
+        values = [value for value in values if value is not None]
+        return values[-1] if values else None
+
     def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
         label_pattern = "|".join(re.escape(label) for label in labels)
         pattern = rf"(?:{label_pattern})\s*[:：]?\s*([^\n|]+)"
@@ -213,10 +241,52 @@ class DocumentParser:
         return self._extract_date(match.group(1)) if match else None
 
     def _extract_document_number(self, text: str) -> str | None:
-        labels = ["발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "문서번호", "po no", "quote no", "invoice no"]
+        labels = ["발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호", "po no", "quote no", "invoice no"]
         label_pattern = "|".join(re.escape(label) for label in labels)
         match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", text, flags=re.IGNORECASE)
         return match.group(1).strip()[:80] if match else None
+
+    def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
+        fields: dict[str, object] = {}
+        if doc_type == DocumentType.quotation:
+            fields["quotation_date"] = self._date_string(self._extract_labeled_date(text, ["견적일", "quotation date"]))
+            fields["valid_until"] = self._date_string(self._extract_labeled_date(text, ["유효기간", "견적유효기간", "valid until", "expires"]))
+            fields["delivery_terms"] = self._extract_labeled_text(text, ["납기조건", "delivery terms"])
+            fields["payment_terms"] = self._extract_labeled_text(text, ["결제조건", "payment terms"])
+        elif doc_type == DocumentType.transaction_statement:
+            fields["transaction_date"] = self._date_string(self._extract_labeled_date(text, ["거래일자", "거래일", "transaction date"]))
+        elif doc_type == DocumentType.delivery_note:
+            fields["delivery_date"] = self._date_string(self._extract_labeled_date(text, ["납품일", "납품일자", "delivery date"]))
+            fields["receiving_location"] = self._extract_labeled_text(text, ["입고장소", "납품장소", "receiving location"])
+            fields["receiver_name"] = self._extract_labeled_text(text, ["수령자", "인수자", "receiver"])
+        elif doc_type == DocumentType.invoice:
+            fields["payment_due_date"] = self._date_string(self._extract_labeled_date(text, ["지급기한", "결제기한", "payment due date", "due date"]))
+            fields["business_registration_numbers"] = re.findall(r"\b\d{3}-\d{2}-\d{5}\b", text)
+        return {key: value for key, value in fields.items() if value not in (None, "", [])}
+
+    def _extract_issue_date(self, text: str, doc_type: DocumentType) -> date | None:
+        labels_by_type = {
+            DocumentType.purchase_order: ["발행일", "작성일", "발주일", "issue date"],
+            DocumentType.quotation: ["견적일", "발행일", "작성일", "quotation date"],
+            DocumentType.transaction_statement: ["발행일", "작성일", "issue date"],
+            DocumentType.delivery_note: ["발행일", "작성일", "issue date"],
+            DocumentType.invoice: ["발행일", "작성일", "invoice date"],
+        }
+        labels = labels_by_type.get(doc_type, ["발행일", "작성일", "일자", "issue date"])
+        return self._extract_labeled_date(text, labels)
+
+    def _extract_due_date(self, text: str, doc_type: DocumentType) -> date | None:
+        labels_by_type = {
+            DocumentType.purchase_order: ["납기일", "납품예정일", "납품 예정일", "delivery due date", "due date"],
+            DocumentType.quotation: ["유효기간", "견적유효기간", "valid until", "expiration date"],
+            DocumentType.delivery_note: ["납품일", "납품일자", "delivery date"],
+            DocumentType.invoice: ["지급기한", "결제기한", "payment due date", "due date"],
+        }
+        labels = labels_by_type.get(doc_type)
+        return self._extract_labeled_date(text, labels) if labels else None
+
+    def _date_string(self, value: date | None) -> str | None:
+        return value.isoformat() if value else None
 
     def _extract_line_items(self, lines: list[str]) -> list[dict]:
         items = self._extract_key_value_line_items(lines)
@@ -275,6 +345,10 @@ class DocumentParser:
                     break
                 if sum(bool(self._line_item_field_for_label(cell)) for cell in cells) >= 3:
                     break
+                if len(cells) < len(mapped_headers):
+                    cells = cells + [""] * (len(mapped_headers) - len(cells))
+                elif len(cells) > len(mapped_headers):
+                    cells = cells[:len(mapped_headers)]
                 item: dict = {}
                 for field, cell in zip(mapped_headers, cells):
                     if not field:
@@ -290,11 +364,11 @@ class DocumentParser:
     def _split_table_line(self, line: str) -> list[str]:
         stripped = line.strip()
         if "|" in stripped:
-            return [part.strip() for part in stripped.split("|") if part.strip()]
+            return [part.strip() for part in stripped.split("|")]
         if "\t" in stripped:
-            return [part.strip() for part in stripped.split("\t") if part.strip()]
+            return [part.strip() for part in stripped.split("\t")]
         if "," in stripped and len(stripped.split(",")) >= 4:
-            return [part.strip() for part in stripped.split(",") if part.strip()]
+            return [part.strip() for part in stripped.split(",")]
         return [part.strip() for part in re.split(r"\s{2,}", stripped) if part.strip()]
 
     def _parse_labeled_line(self, line: str) -> tuple[str, str] | None:
@@ -543,16 +617,16 @@ class DocumentParser:
 
     def _guess_category(self, text: str) -> str | None:
         lowered = text.lower()
-        if "발주서" in lowered or "purchase order" in lowered:
-            return "purchase_order"
-        if "견적서" in lowered or "quotation" in lowered or "quote" in lowered:
-            return "quotation"
-        if "거래명세서" in lowered or "transaction statement" in lowered:
-            return "transaction_statement"
         if "납품서" in lowered or "delivery note" in lowered:
             return "delivery_note"
         if "세금계산서" in lowered or "invoice" in lowered:
             return "invoice"
+        if "견적서" in lowered or "quotation" in lowered or "quote" in lowered:
+            return "quotation"
+        if "발주서" in lowered or "purchase order" in lowered:
+            return "purchase_order"
+        if "거래명세서" in lowered or "transaction statement" in lowered:
+            return "transaction_statement"
         if self._looks_like_implementation_schedule(text):
             return "implementation_schedule"
         if self._looks_like_technical_guide(text):
@@ -572,6 +646,8 @@ class DocumentParser:
         return best[0] if best[1] >= 80 else None
 
     def _guess_tags(self, text: str, category: str | None, doc_type: DocumentType) -> list[str]:
+        if doc_type in MANUFACTURING_TYPES:
+            return [doc_type.value]
         tags = {doc_type.value}
         if category:
             tags.add(category)

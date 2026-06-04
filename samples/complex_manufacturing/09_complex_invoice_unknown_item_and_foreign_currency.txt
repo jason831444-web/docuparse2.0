@@ -1,0 +1,15 @@
+문서유형: Invoice
+Invoice No: INV-2026-0710-US-019
+Issue Date: 2026-07-10
+Due Date: 2026-08-09
+Vendor: Global Motion Parts LLC
+Customer: NeoFactory Korea
+Currency: USD
+Note: One item is not in the Korean internal item master. Do not create fake internal item code.
+
+Line | Item Description | Vendor SKU | Specification | Qty | Unit | Unit Price | Subtotal | Tax | Total
+1 | Linear Guide Rail HGW20 | HGW20-1000 | 1000mm | 8 | EA | 45.00 | 360.00 | 0.00 | 360.00
+2 | Cable Harness 500 | CBL-HAR-500 | 500mm | 40 | EA | 2.20 | 88.00 | 0.00 | 88.00
+3 | PCB Connector 12P | CON-PCB-12P | 12P | 200 | EA | 0.30 | 60.00 | 0.00 | 60.00
+
+Invoice Total: USD 508.00

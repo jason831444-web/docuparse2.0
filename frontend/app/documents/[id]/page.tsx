@@ -32,13 +32,70 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
-import { documentSummaryDetailed, extractionMethodLabel, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
+import { businessFieldDate, documentFieldLabels, documentSummaryDetailed, extractionMethodLabel, formatDateTime, normalizedReviewIssues, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
 
+const numericLineItemFields = new Set<keyof ManufacturingLineItem>(["quantity", "unit_price", "supply_amount", "tax_amount", "line_total"]);
+const warningTextPattern = /(비어 있습니다|미확인|신뢰도 낮음|확인 필요|장부 매칭|검토 필요)/;
+
+function cleanLineItemValue(field: keyof ManufacturingLineItem, value: unknown) {
+  if (value === null || value === undefined) return "";
+  const text = String(value).trim();
+  if (!text || warningTextPattern.test(text)) return "";
+  if (numericLineItemFields.has(field)) {
+    const numeric = text.replace(/[,₩원\s]/g, "");
+    return /^-?\d+(\.\d+)?$/.test(numeric) ? numeric : "";
+  }
+  if ((field === "item_code" || field === "internal_item_code") && warningTextPattern.test(text)) return "";
+  return text;
+}
+
+function cleanLineItems(items: ManufacturingLineItem[]) {
+  return (items || []).map((item) => ({
+    ...item,
+    item_name: cleanLineItemValue("item_name", item.item_name),
+    item_code: cleanLineItemValue("item_code", item.item_code),
+    source_item_name: item.source_item_name ?? item.item_name ?? null,
+    source_item_code: item.source_item_code ?? item.item_code ?? null,
+    internal_item_code: cleanLineItemValue("internal_item_code", item.internal_item_code),
+    specification: cleanLineItemValue("specification", item.specification),
+    quantity: cleanLineItemValue("quantity", item.quantity),
+    unit: cleanLineItemValue("unit", item.unit),
+    unit_price: cleanLineItemValue("unit_price", item.unit_price),
+    supply_amount: cleanLineItemValue("supply_amount", item.supply_amount),
+    tax_amount: cleanLineItemValue("tax_amount", item.tax_amount),
+    line_total: cleanLineItemValue("line_total", item.line_total),
+    item_master_match_status: item.item_master_match_status ?? null,
+    item_master_match_confidence: item.item_master_match_confidence ?? null,
+    item_master_candidates: item.item_master_candidates ?? [],
+    item_master_match_reason: item.item_master_match_reason ?? null,
+  }));
+}
+
+function itemMasterStatusLabel(status: string | null | undefined) {
+  return {
+    auto_matched: "자동 매칭됨",
+    needs_review: "검토 필요",
+    unmatched: "미매칭",
+    skipped_no_item_master: "품목마스터 없음",
+  }[status || ""] ?? "확인 전";
+}
+
+function itemMasterStatusClass(status: string | null | undefined) {
+  if (status === "auto_matched") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "needs_review") return "border-amber-300 bg-amber-50 text-amber-800";
+  if (status === "unmatched" || status === "skipped_no_item_master") return "border-slate-300 bg-slate-50 text-slate-700";
+  return "border-slate-200 bg-white text-slate-600";
+}
+
 function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string } {
+  const businessFields = (document.workflow_metadata?.business_fields ?? {}) as Record<string, unknown>;
+  const transactionDate = typeof businessFields.transaction_date === "string" ? businessFields.transaction_date : document.extracted_date;
+  const issueDate = document.document_type === "transaction_statement" ? transactionDate : document.issue_date;
+  const roleDate = document.document_type === "transaction_statement" ? document.issue_date : businessFieldDate(document);
   return {
     title: document.title ?? "",
     raw_text: document.raw_text ?? "",
@@ -51,9 +108,9 @@ function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string 
     vendor_name: document.vendor_name ?? "",
     customer_name: document.customer_name ?? "",
     document_number: document.document_number ?? "",
-    issue_date: document.issue_date ?? "",
-    due_date: document.due_date ?? "",
-    line_items: document.line_items ?? [],
+    issue_date: issueDate ?? "",
+    due_date: roleDate ?? "",
+    line_items: cleanLineItems(document.line_items ?? []),
     low_confidence_fields: document.low_confidence_fields ?? [],
     category: document.category ?? "",
     tags: document.tags,
@@ -114,6 +171,7 @@ export default function DocumentDetailPage() {
   async function onSubmit(values: DocumentUpdate & { tags_text: string }) {
     setSaving(true);
     const { tags_text, ...fields } = values;
+    const isTransactionStatement = document?.document_type === "transaction_statement";
     const payload: DocumentUpdate = {
       ...fields,
       title: values.title || null,
@@ -127,9 +185,9 @@ export default function DocumentDetailPage() {
       vendor_name: values.vendor_name || null,
       customer_name: values.customer_name || null,
       document_number: values.document_number || null,
-      issue_date: values.issue_date || null,
-      due_date: values.due_date || null,
-      line_items: values.line_items || [],
+      issue_date: isTransactionStatement ? values.due_date || values.issue_date || null : values.issue_date || null,
+      due_date: isTransactionStatement ? null : values.due_date || null,
+      line_items: cleanLineItems(values.line_items || []),
       low_confidence_fields: values.low_confidence_fields || [],
       category: values.category || null,
       summary: values.summary || null,
@@ -211,7 +269,7 @@ export default function DocumentDetailPage() {
 
   function updateLineItem(index: number, field: keyof ManufacturingLineItem, value: string) {
     const items = [...(form.getValues("line_items") || [])];
-    items[index] = { ...(items[index] || {}), [field]: value };
+    items[index] = { ...(items[index] || {}), [field]: cleanLineItemValue(field, value) };
     form.setValue("line_items", items, { shouldDirty: true });
   }
 
@@ -220,6 +278,7 @@ export default function DocumentDetailPage() {
     items.push({
       item_name: "",
       item_code: "",
+      internal_item_code: "",
       specification: "",
       quantity: "",
       unit: "",
@@ -228,6 +287,18 @@ export default function DocumentDetailPage() {
       tax_amount: "",
       line_total: "",
     });
+    form.setValue("line_items", items, { shouldDirty: true });
+  }
+
+  function selectItemMasterCandidate(index: number, candidate: NonNullable<ManufacturingLineItem["item_master_candidates"]>[number]) {
+    const items = [...(form.getValues("line_items") || [])];
+    items[index] = {
+      ...(items[index] || {}),
+      internal_item_code: candidate.internal_item_code,
+      item_master_match_status: "auto_matched",
+      item_master_match_confidence: candidate.score,
+      item_master_match_reason: "USER_SELECTED_CANDIDATE",
+    };
     form.setValue("line_items", items, { shouldDirty: true });
   }
 
@@ -271,7 +342,9 @@ export default function DocumentDetailPage() {
   const isConfirmed = document.processing_status === "confirmed";
   const selectedCategory = form.watch("category") ?? "";
   const lineItems = form.watch("line_items") ?? [];
+  const reviewIssues = normalizedReviewIssues(document);
   const lowConfidenceFields = document.low_confidence_fields ?? [];
+  const fieldLabels = documentFieldLabels(document.document_type);
 
   return (
     <main className="shell py-8">
@@ -388,7 +461,7 @@ export default function DocumentDetailPage() {
                 <InfoGrid
                   items={[
                     ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
-                    ["추출 방식", document.extraction_method || "확인 불가"],
+                    ["추출 방식", extractionMethodLabel(document)],
                     ["업로드 날짜", formatDateTime(document.created_at)],
                     ["최근 수정", formatDateTime(document.updated_at)],
                   ]}
@@ -488,7 +561,7 @@ export default function DocumentDetailPage() {
                   ["문서 유형", categoryLabel],
                   ["처리 상태", titleCaseLabel(document.processing_status)],
                   ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
-                  ["신뢰도 낮은 필드", lowConfidenceFields.length ? `${lowConfidenceFields.length}개` : "없음"],
+                  ["검토 필요 항목", reviewIssues.length ? reviewIssues.map((issue) => issue.message_ko).join(", ") : "없음"],
                 ]}
               />
             </CardContent>
@@ -529,7 +602,7 @@ export default function DocumentDetailPage() {
               <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">
                 <div>
                   <p className="text-sm font-semibold">문서 기본 정보</p>
-                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 발행일, 납기일을 ERP 입력 기준으로 수정하세요.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 날짜, 금액을 ERP 입력 기준으로 수정하세요.</p>
                 </div>
                 <label className="grid gap-2 text-sm font-medium">
                   제목
@@ -537,11 +610,11 @@ export default function DocumentDetailPage() {
                 </label>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="grid gap-2 text-sm font-medium">
-                    발행일
+                    {fieldLabels.issueDate}
                     <Input type="date" {...form.register("issue_date")} />
                   </label>
                   <label className="grid gap-2 text-sm font-medium">
-                    납기일
+                    {fieldLabels.dueDate}
                     <Input type="date" {...form.register("due_date")} />
                   </label>
                 </div>
@@ -557,7 +630,7 @@ export default function DocumentDetailPage() {
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="grid gap-2 text-sm font-medium">
-                    문서번호
+                    {fieldLabels.documentNumber}
                     <Input {...form.register("document_number")} />
                   </label>
                   <label className="grid gap-2 text-sm font-medium">
@@ -585,16 +658,16 @@ export default function DocumentDetailPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold">품목 정보</p>
-                    <p className="mt-1 text-xs text-muted-foreground">품목명, 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 합계금액을 확인하세요.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">품목명, 문서 품목코드, 내부 품목코드, 규격, 수량, 단가, 공급가액, 세액, 합계금액을 확인하세요.</p>
                   </div>
                   <Button type="button" variant="outline" size="sm" onClick={addLineItem}>품목 추가</Button>
                 </div>
                 {lineItems.length ? (
                   <div className="overflow-x-auto rounded-lg border">
-                    <table className="min-w-[920px] w-full text-sm">
+                    <table className="min-w-[1180px] w-full text-sm">
                       <thead className="bg-slate-50 text-left text-xs text-muted-foreground">
                         <tr>
-                          {["품목명", "품목 코드", "규격", "수량", "단위", "단가", "공급가액", "세액", "합계금액", ""].map((header) => (
+                          {["품목명", "문서 품목코드", "내부 품목코드", "규격", "수량", "단위", "단가", "공급가액", "세액", "합계금액", "매칭 상태", ""].map((header) => (
                             <th key={header} className="px-2 py-2 font-medium">{header}</th>
                           ))}
                         </tr>
@@ -604,7 +677,8 @@ export default function DocumentDetailPage() {
                           <tr key={index} className="border-t">
                             {([
                               ["item_name", "품목명"],
-                              ["item_code", "품목 코드"],
+                              ["item_code", "문서 품목코드"],
+                              ["internal_item_code", "내부 품목코드"],
                               ["specification", "규격"],
                               ["quantity", "수량"],
                               ["unit", "단위"],
@@ -613,7 +687,22 @@ export default function DocumentDetailPage() {
                               ["tax_amount", "세액"],
                               ["line_total", "합계금액"],
                             ] as Array<[keyof ManufacturingLineItem, string]>).map(([field, label]) => {
-                              const low = lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) || (field === "line_total" && lowConfidenceFields.includes("line_items"));
+                              const itemCode = `item_${index + 1}`;
+                              const structuredLowCodes = [
+                                field === "item_code" ? `missing_item_code:${itemCode}` : null,
+                                field === "internal_item_code" ? `item_master_match_required:${itemCode}` : null,
+                                field === "internal_item_code" ? `item_master_unmatched:${itemCode}` : null,
+                                field === "internal_item_code" ? "item_matching_skipped" : null,
+                                field === "item_name" ? `missing_item_name:${itemCode}` : null,
+                                field === "quantity" ? `missing_quantity:${itemCode}` : null,
+                                field === "unit_price" || field === "line_total" ? `missing_price_or_total:${itemCode}` : null,
+                              ].filter(Boolean);
+                              const fieldIssues = reviewIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
+                              const low =
+                                fieldIssues.length > 0 ||
+                                structuredLowCodes.some((code) => lowConfidenceFields.includes(code as string)) ||
+                                lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) ||
+                                (field === "line_total" && lowConfidenceFields.includes("missing_line_items"));
                               return (
                                 <td key={field} className="px-2 py-2 align-top">
                                   <Input
@@ -622,10 +711,42 @@ export default function DocumentDetailPage() {
                                     value={String(item?.[field] ?? "")}
                                     onChange={(event) => updateLineItem(index, field, event.target.value)}
                                   />
-                                  {low ? <p className="mt-1 text-[11px] text-amber-700">신뢰도 낮음</p> : null}
+                                  {fieldIssues.length ? (
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {fieldIssues.map((issue) => (
+                                        <Badge key={`${issue.code}-${issue.message_ko}`} className="border-amber-300 bg-amber-50 text-[11px] text-amber-800">
+                                          {issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  ) : low ? <p className="mt-1 text-[11px] text-amber-700">확인 필요</p> : null}
                                 </td>
                               );
                             })}
+                            <td className="px-2 py-2 align-top">
+                              <Badge variant="outline" className={itemMasterStatusClass(item.item_master_match_status)}>
+                                {itemMasterStatusLabel(item.item_master_match_status)}
+                              </Badge>
+                              {item.item_master_match_confidence ? (
+                                <p className="mt-1 text-[11px] text-muted-foreground">신뢰도 {Math.round(Number(item.item_master_match_confidence) * 100)}%</p>
+                              ) : null}
+                              {item.item_master_candidates?.length ? (
+                                <div className="mt-2 grid gap-1">
+                                  {item.item_master_candidates.slice(0, 3).map((candidate) => (
+                                    <div key={candidate.internal_item_code} className="rounded-md border bg-white p-2 text-xs">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-semibold">{candidate.internal_item_code}</span>
+                                        <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(index, candidate)}>
+                                          이 품목으로 선택
+                                        </Button>
+                                      </div>
+                                      <p className="mt-1 text-muted-foreground">{candidate.item_name} · {candidate.spec || "규격 없음"} · {candidate.unit || "단위 없음"}</p>
+                                      <p className="mt-1 text-muted-foreground">후보 신뢰도 {Math.round(Number(candidate.score) * 100)}%</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </td>
                             <td className="px-2 py-2 align-top">
                               <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>삭제</Button>
                             </td>

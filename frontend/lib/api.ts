@@ -1,4 +1,15 @@
-import type { ActivitySummary, AppNotification, DocumentListResponse, DocumentRecord, DocumentStats, DocumentUpdate, FolderSummary } from "@/types/document";
+import type {
+  ActivitySummary,
+  AppNotification,
+  DocumentListResponse,
+  DocumentRecord,
+  DocumentStats,
+  DocumentUpdate,
+  FolderSummary,
+  ItemMasterListResponse,
+  ItemMasterStats,
+  ItemMasterUploadResult,
+} from "@/types/document";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001/api";
 
@@ -69,5 +80,19 @@ export const api = {
   toggleFavorite: (id: string) => request<DocumentRecord>(`/documents/${id}/favorite`, { method: "POST" }),
   exportCsvUrl: () => `${API_BASE}/documents/export/csv`,
   exportExcelUrl: () => `${API_BASE}/documents/export/xlsx`,
-  exportJsonUrl: (id: string) => `${API_BASE}/documents/${id}/export/json`
+  exportJsonUrl: (id: string) => `${API_BASE}/documents/${id}/export/json`,
+  itemMaster: {
+    list: (params: URLSearchParams) => request<ItemMasterListResponse>(`/item-master?${params.toString()}`, { cache: "no-store" }),
+    stats: () => request<ItemMasterStats>("/item-master/stats", { cache: "no-store" }),
+    upload: (file: File) => {
+      const data = new FormData();
+      data.append("file", file);
+      return request<ItemMasterUploadResult>("/item-master/upload", { method: "POST", body: data });
+    },
+    remove: async (id: string) => {
+      const response = await fetch(`${API_BASE}/item-master/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("품목을 비활성화하지 못했습니다");
+    },
+    clear: () => request<{ deleted_items: number; deleted_aliases: number }>("/item-master", { method: "DELETE" }),
+  }
 };

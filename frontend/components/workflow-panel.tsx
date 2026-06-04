@@ -2,7 +2,7 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDate, formatMoney, primaryCategoryLabel } from "@/lib/utils";
+import { businessFieldDate, businessIssueDate, documentFieldLabels, formatDate, formatMoney, normalizedReviewIssues, primaryCategoryLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
@@ -33,11 +33,10 @@ function ValueGrid({ values }: { values: Array<[string, string | null | undefine
 }
 
 export function WorkflowPanel({ document }: { document: DocumentRecord }) {
-  const reviewItems = document.low_confidence_fields.length
-    ? document.low_confidence_fields
-    : document.review_required
-      ? ["line_items"]
-      : [];
+  const labels = documentFieldLabels(document.document_type);
+  const reviewItems = normalizedReviewIssues(document).map((issue) => issue.message_ko);
+  const roleDate = businessFieldDate(document);
+  const issueDate = businessIssueDate(document);
   const exportReady = !document.review_required && document.processing_status === "confirmed";
 
   return (
@@ -60,9 +59,9 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
           values={[
             ["공급업체", document.vendor_name || document.merchant_name],
             ["고객사", document.customer_name],
-            ["문서번호", document.document_number],
-            ["발행일", document.issue_date ? formatDate(document.issue_date) : null],
-            ["납기일", document.due_date ? formatDate(document.due_date) : null],
+            [labels.documentNumber, document.document_number],
+            [labels.issueDate, issueDate ? formatDate(issueDate) : null],
+            [labels.dueDate, roleDate ? formatDate(roleDate) : null],
             ["품목 수", `${document.line_items.length}건`],
             ["합계금액", document.extracted_amount ? formatMoney(document.extracted_amount, document.currency || "KRW") : null],
           ]}

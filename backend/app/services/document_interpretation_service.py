@@ -2,6 +2,7 @@ import json
 import importlib.util
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,51 @@ from app.services.category_interpretation import CategoryInterpretation, Categor
 
 
 logger = logging.getLogger(__name__)
+
+_gguf_models: dict[tuple[str, int, int, int], Any] = {}
+_gguf_model_lock = threading.Lock()
+_gguf_inference_semaphore = threading.Semaphore(1)
+
+
+def get_llama_cpp_gguf_model(settings: Any) -> Any:
+    model_path = settings.llama_cpp_model_path
+    if model_path is None:
+        raise RuntimeError("LLAMA_CPP_MODEL_PATH is required when AI_INTERPRETATION_PROVIDER=llama_cpp.")
+    if not model_path.exists():
+        raise RuntimeError(f"Configured GGUF model file does not exist: {model_path}")
+    if model_path.is_dir():
+        raise RuntimeError(f"LLAMA_CPP_MODEL_PATH must point to a .gguf file, not a directory: {model_path}")
+
+    model_ref = str(model_path)
+    cache_key = (
+        model_ref,
+        int(settings.llama_cpp_context_window),
+        int(settings.llama_cpp_threads or 0),
+        int(settings.llama_cpp_gpu_layers),
+    )
+    cached = _gguf_models.get(cache_key)
+    if cached is not None:
+        return cached
+
+    with _gguf_model_lock:
+        cached = _gguf_models.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            from llama_cpp import Llama
+        except ImportError as exc:
+            raise RuntimeError("llama-cpp-python is not installed. Install backend/requirements-llama.txt.") from exc
+
+        logger.warning("Loading GGUF interpretation model with llama.cpp: %s", model_ref)
+        model = Llama(
+            model_path=model_ref,
+            n_ctx=settings.llama_cpp_context_window,
+            n_threads=settings.llama_cpp_threads or None,
+            n_gpu_layers=settings.llama_cpp_gpu_layers,
+            verbose=False,
+        )
+        _gguf_models[cache_key] = model
+        return model
 
 
 class DocumentInterpretationService:
@@ -678,11 +724,6 @@ class OpenAITextInterpretationProvider(BaseInterpretationProvider):
 class LlamaCppGemmaInterpretationProvider(OpenAITextInterpretationProvider):
     provider_name = "ai_interpretation_gemma_gguf"
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._llm: Any | None = None
-        self._loaded_model_path: str | None = None
-
     def interpret(self, document: Document, text: str, heuristic: CategoryInterpretation) -> CategoryInterpretation:
         payload = self._payload(document, text, heuristic)
         raw = self._call_llama_cpp(payload)
@@ -710,43 +751,18 @@ class LlamaCppGemmaInterpretationProvider(OpenAITextInterpretationProvider):
 
     def _call_llama_cpp(self, payload: dict[str, Any]) -> dict[str, Any]:
         llm = self._load_model()
-        output = llm(
-            self._prompt(payload),
-            max_tokens=self.settings.llama_cpp_max_tokens,
-            temperature=self.settings.llama_cpp_temperature,
-            stop=["</s>", "<end_of_turn>"],
-            echo=False,
-        )
+        with _gguf_inference_semaphore:
+            output = llm(
+                self._prompt(payload),
+                max_tokens=self.settings.llama_cpp_max_tokens,
+                temperature=self.settings.llama_cpp_temperature,
+                stop=["</s>", "<end_of_turn>"],
+                echo=False,
+            )
         return self._extract_json(self._output_text(output))
 
     def _load_model(self) -> Any:
-        model_path = self.settings.llama_cpp_model_path
-        if model_path is None:
-            raise RuntimeError("LLAMA_CPP_MODEL_PATH is required when AI_INTERPRETATION_PROVIDER=llama_cpp.")
-        if not model_path.exists():
-            raise RuntimeError(f"Configured GGUF model file does not exist: {model_path}")
-        if model_path.is_dir():
-            raise RuntimeError(f"LLAMA_CPP_MODEL_PATH must point to a .gguf file, not a directory: {model_path}")
-
-        model_ref = str(model_path)
-        if self._llm is not None and self._loaded_model_path == model_ref:
-            return self._llm
-
-        try:
-            from llama_cpp import Llama
-        except ImportError as exc:
-            raise RuntimeError("llama-cpp-python is not installed. Install backend/requirements-llama.txt.") from exc
-
-        logger.warning("Loading GGUF interpretation model with llama.cpp: %s", model_ref)
-        self._llm = Llama(
-            model_path=model_ref,
-            n_ctx=self.settings.llama_cpp_context_window,
-            n_threads=self.settings.llama_cpp_threads or None,
-            n_gpu_layers=self.settings.llama_cpp_gpu_layers,
-            verbose=False,
-        )
-        self._loaded_model_path = model_ref
-        return self._llm
+        return get_llama_cpp_gguf_model(self.settings)
 
     def _prompt(self, payload: dict[str, Any]) -> str:
         instruction = (

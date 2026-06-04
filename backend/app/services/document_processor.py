@@ -1,3 +1,4 @@
+import logging
 import re
 from decimal import Decimal
 from pathlib import Path
@@ -6,16 +7,20 @@ from sqlalchemy.orm import Session
 
 from app.models.document import Document, ProcessingStatus
 from app.services.ai_document_understanding import LocalDocumentAIService, get_document_ai_service
-from app.services.category_interpretation import CategoryInterpretation
+from app.services.category_interpretation import CategoryInterpretation, CategoryInterpretationService
 from app.services.category_taxonomy import clean_tags_for_context, normalize_category
 from app.services.document_router import LightweightDocumentRouter
 from app.services.document_interpretation_service import DocumentInterpretationService
 from app.services.file_ingestion import FileIngestionService, NormalizedDocument
+from app.services.item_master_matcher import ItemMasterMatcher
 from app.services.ocr import OCRService
 from app.services.parser import DocumentParser
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.quality_evaluation import DocumentQualityEvaluator, QualityEvaluation
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -26,8 +31,10 @@ class DocumentProcessor:
         self.quality = DocumentQualityEvaluator()
         self.router = LightweightDocumentRouter()
         self.lightweight_ai = LocalDocumentAIService()
+        self.heuristic_interpreter = CategoryInterpretationService()
         self.category_interpreter = DocumentInterpretationService()
         self.workflow_enrichment = DocumentWorkflowEnrichmentService()
+        self.item_master_matcher = ItemMasterMatcher()
 
     def process(self, db: Session, document: Document) -> Document:
         document.processing_status = ProcessingStatus.processing
@@ -43,13 +50,18 @@ class DocumentProcessor:
             extraction_quality = self.quality.evaluate_extraction(normalized, parsed)
             route = self.router.route(normalized, parsed, extraction_quality)
             analysis_path = normalized.primary_image_path or stored_path
+            ai_fallback_notes: list[str] = []
             if route.heavy_ai_required and normalized.primary_image_path:
-                ai_result = get_document_ai_service().analyze(
-                    analysis_path,
-                    raw_text,
-                    parsed,
-                    document.original_filename,
-                )
+                try:
+                    ai_result = get_document_ai_service().analyze(
+                        analysis_path,
+                        raw_text,
+                        parsed,
+                        document.original_filename,
+                    )
+                except Exception as exc:
+                    ai_fallback_notes.append(f"AI extraction failed; parser result used: {exc}")
+                    ai_result = self.lightweight_ai.analyze(analysis_path, raw_text, parsed, document.original_filename)
             else:
                 ai_result = self.lightweight_ai.analyze(analysis_path, raw_text, parsed, document.original_filename)
                 ai_result.extraction_provider = normalized.extraction_method or route.route_label
@@ -88,8 +100,8 @@ class DocumentProcessor:
             deterministic_first = self._parsed_manufacturing_has_business_data(parsed)
             document.extracted_date = parsed.extracted_date or ai_result.extracted_date if deterministic_first else ai_result.extracted_date or parsed.extracted_date
             document.extracted_amount = parsed.extracted_amount or ai_result.extracted_amount if deterministic_first else ai_result.extracted_amount or parsed.extracted_amount
-            document.subtotal = self._sum_line_item_field(parsed.line_items, "supply_amount") if deterministic_first and parsed.line_items else ai_result.subtotal
-            document.tax = self._sum_line_item_field(parsed.line_items, "tax_amount") if deterministic_first and parsed.line_items else ai_result.tax
+            document.subtotal = (parsed.subtotal or ai_result.subtotal) if deterministic_first else (ai_result.subtotal or parsed.subtotal)
+            document.tax = (parsed.tax or ai_result.tax) if deterministic_first else (ai_result.tax or parsed.tax)
             document.currency = ai_result.currency or parsed.currency
             document.merchant_name = sanitize_for_postgres(ai_result.merchant_name or parsed.merchant_name)
             document.vendor_name = sanitize_for_postgres((parsed.vendor_name or ai_result.vendor_name) if deterministic_first else (ai_result.vendor_name or parsed.vendor_name) or document.merchant_name)
@@ -97,28 +109,39 @@ class DocumentProcessor:
             document.document_number = sanitize_for_postgres((parsed.document_number or ai_result.document_number) if deterministic_first else (ai_result.document_number or parsed.document_number))
             document.issue_date = (parsed.issue_date or ai_result.issue_date or document.extracted_date) if deterministic_first else (ai_result.issue_date or parsed.issue_date or document.extracted_date)
             document.due_date = (parsed.due_date or ai_result.due_date) if deterministic_first else (ai_result.due_date or parsed.due_date)
+            if deterministic_first and self._is_manufacturing_parsed_type(parsed):
+                document.issue_date, document.due_date = self._normalize_manufacturing_dates(parsed, document.issue_date, document.due_date)
             document.line_items = sanitize_for_postgres((parsed.line_items or ai_result.line_items) if deterministic_first else (ai_result.line_items or parsed.line_items or []))
             document.low_confidence_fields = sanitize_for_postgres([] if deterministic_first and parsed.line_items else ai_result.low_confidence_fields or [])
             document.category = ai_result.category or parsed.category
             document.tags = sanitize_for_postgres(ai_result.tags or parsed.tags)
-            interpretation = self.category_interpreter.interpret(document, ai_result.cleaned_raw_text or raw_text)
+            interpretation = self._interpret_document(document, ai_result.cleaned_raw_text or raw_text, normalized, parsed, deterministic_first)
+            parser_only = self._is_parser_only_interpretation(interpretation)
             provider_chain = self._provider_chain(
                 normalized,
                 route,
-                ai_result.provider_chain or [ai_result.provider],
+                [] if parser_only else ai_result.provider_chain or [ai_result.provider],
                 interpretation.provider_chain,
             )
             document.provider_chain = "+".join(provider_chain)
+            document.refinement_provider = self._refinement_provider_for_interpretation(interpretation)
             document.title = self._apply_title_hint(document.title, interpretation)
             document.category = self._apply_category_hint(document.category, interpretation)
             document.document_type = self._refined_document_type(document.document_type, interpretation)
+            if deterministic_first and self._is_manufacturing_parsed_type(parsed):
+                document.document_type = parsed.document_type
+                document.category = parsed.category or parsed.document_type.value
+                document.tags = [parsed.document_type.value]
+                document.line_items = sanitize_for_postgres(self.item_master_matcher.match_line_items(db, document.line_items or []))
             document.title = self._clean_final_title(document.title, interpretation)
             document.merchant_name = self._clean_final_merchant(document.merchant_name)
             if interpretation.summary_hint:
                 document.summary = sanitize_for_postgres(interpretation.summary_hint)
             document.tags = self._merge_tags(document.tags, interpretation, document.document_type)
+            if deterministic_first and self._is_manufacturing_parsed_type(parsed):
+                document.tags = [parsed.document_type.value]
             document.ai_extraction_notes = sanitize_for_postgres(self._notes(
-                (ingestion_notes + quality_notes + ai_result.extraction_notes)
+                (ingestion_notes + quality_notes + ai_fallback_notes + ai_result.extraction_notes)
                 + self._interpretation_notes(interpretation)
             ))
             document.ingestion_metadata = sanitize_for_postgres(self._ingestion_metadata(
@@ -128,6 +151,7 @@ class DocumentProcessor:
                 structured_quality,
                 interpretation,
             ))
+            document.review_required = document.review_required or self._manufacturing_review_required(document)
             workflow = self.workflow_enrichment.enrich(document, ai_result.cleaned_raw_text or raw_text, interpretation)
             document.workflow_summary = sanitize_for_postgres(workflow.workflow_summary)
             if self._is_manufacturing_type(document):
@@ -139,8 +163,9 @@ class DocumentProcessor:
             document.follow_up_required = workflow.follow_up_required
             document.workflow_metadata = sanitize_for_postgres(workflow.workflow_metadata or None)
             document.review_required = document.review_required or bool(workflow.warnings)
-            document.review_required = document.review_required or self._manufacturing_review_required(document)
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
+            if parser_only:
+                logger.info("Parser-only processing completed for document %s.", document.id)
         except Exception as exc:
             db.rollback()
             document = db.get(Document, document.id) or document
@@ -150,6 +175,69 @@ class DocumentProcessor:
         db.commit()
         db.refresh(document)
         return document
+
+    def _interpret_document(
+        self,
+        document: Document,
+        text: str,
+        normalized: NormalizedDocument,
+        parsed: object,
+        deterministic_first: bool,
+    ) -> CategoryInterpretation:
+        if self._should_skip_ai_interpretation(normalized, parsed, deterministic_first):
+            logger.info(
+                "Skipping AI interpretation because deterministic parser result is sufficient for document %s.",
+                document.id,
+            )
+            interpretation = self.heuristic_interpreter.interpret(document, text)
+            interpretation.provider = "rule_based_structuring"
+            interpretation.provider_chain = ["rule_based_structuring", "interpretation_skipped_rule_based_ready"]
+            interpretation.refinement_status = "parser_only_rule_based_ready"
+            interpretation.diagnostics.append("AI interpretation skipped; deterministic parser result used.")
+            return interpretation
+        try:
+            logger.info("Running AI interpretation for document %s.", document.id)
+            interpretation = self.category_interpreter.interpret(document, text)
+            if self._interpretation_used_ai(interpretation):
+                logger.info("AI interpretation completed for document %s with provider %s.", document.id, interpretation.provider)
+            else:
+                logger.info("AI interpretation skipped or fell back to heuristics for document %s.", document.id)
+            return interpretation
+        except Exception as exc:
+            logger.warning("AI interpretation failed; using parser fallback for document %s: %s", document.id, exc)
+            interpretation = self.heuristic_interpreter.interpret(document, text)
+            interpretation.provider = "rule_based_structuring"
+            interpretation.provider_chain = ["rule_based_structuring", "interpretation_fallback_heuristic"]
+            interpretation.refinement_status = "interpretation_fallback_heuristic"
+            interpretation.diagnostics.append(f"AI interpretation failed; parser result used: {exc}")
+            return interpretation
+
+    def _should_skip_ai_interpretation(self, normalized: NormalizedDocument, parsed: object, deterministic_first: bool) -> bool:
+        if not deterministic_first:
+            return False
+        source_type = (normalized.source_file_type or "").lower()
+        extraction_method = (normalized.extraction_method or "").lower()
+        if source_type not in {"txt", "text"} and "txt_direct" not in extraction_method:
+            return False
+        return self._is_manufacturing_parsed_type(parsed) and bool(getattr(parsed, "line_items", None))
+
+    def _is_parser_only_interpretation(self, interpretation: CategoryInterpretation) -> bool:
+        chain = set(interpretation.provider_chain or [])
+        return "interpretation_skipped_rule_based_ready" in chain or interpretation.provider == "rule_based_structuring"
+
+    def _interpretation_used_ai(self, interpretation: CategoryInterpretation) -> bool:
+        chain = " ".join(interpretation.provider_chain or []).lower()
+        provider = (interpretation.provider or "").lower()
+        if "skipped" in chain or "fallback" in chain or provider in {"rule_based_structuring", "heuristic_interpretation", "null_interpretation"}:
+            return False
+        return any(token in chain or token in provider for token in ["ai_interpretation_", "gemma", "gguf", "llama", "openai"])
+
+    def _refinement_provider_for_interpretation(self, interpretation: CategoryInterpretation) -> str | None:
+        if self._is_parser_only_interpretation(interpretation):
+            return "rule_based_structuring"
+        if self._interpretation_used_ai(interpretation):
+            return interpretation.provider
+        return None
 
     def _confidence(self, normalized: NormalizedDocument) -> Decimal | None:
         if normalized.ocr_confidence is None:
@@ -250,6 +338,40 @@ class DocumentProcessor:
             "packing_list",
         } and bool(getattr(parsed, "line_items", None))
 
+    def _is_manufacturing_parsed_type(self, parsed: object) -> bool:
+        doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
+        return doc_type in {
+            "purchase_order",
+            "quotation",
+            "transaction_statement",
+            "delivery_note",
+            "invoice",
+            "packing_list",
+        }
+
+    def _normalize_manufacturing_dates(self, parsed: object, issue_date, due_date) -> tuple:
+        doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
+        fields = getattr(parsed, "business_fields", {}) or {}
+        if doc_type == "quotation":
+            return issue_date, self._date_from_metadata(fields.get("valid_until")) or due_date
+        if doc_type == "delivery_note":
+            return issue_date, self._date_from_metadata(fields.get("delivery_date")) or due_date
+        if doc_type == "invoice":
+            return issue_date, self._date_from_metadata(fields.get("payment_due_date")) or due_date
+        if doc_type == "transaction_statement":
+            return issue_date, None
+        return issue_date, due_date
+
+    def _date_from_metadata(self, value):
+        if not value:
+            return None
+        from datetime import date
+
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            return None
+
     def _sum_line_item_field(self, line_items: list[dict], field: str) -> Decimal | None:
         total = Decimal("0")
         found = False
@@ -289,20 +411,34 @@ class DocumentProcessor:
             return False
         low_confidence = list(document.low_confidence_fields or [])
         if not document.line_items:
-            low_confidence.append("line_items")
+            low_confidence.append("missing_line_items")
             document.low_confidence_fields = sorted(set(low_confidence))
             return True
         for index, item in enumerate(document.line_items, start=1):
+            code_suffix = f":item_{index}"
             if item.get("item_name") in (None, "", []):
-                low_confidence.append(f"line_items[{index}].item_name")
+                low_confidence.append(f"missing_item_name{code_suffix}")
             if item.get("quantity") in (None, "", []):
-                low_confidence.append(f"line_items[{index}].quantity")
+                low_confidence.append(f"missing_quantity{code_suffix}")
             if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
-                low_confidence.append(f"line_items[{index}].unit_price")
-                low_confidence.append(f"line_items[{index}].line_total")
+                low_confidence.append(f"missing_price_or_total{code_suffix}")
+            if item.get("item_code") in (None, "", []):
+                low_confidence.append(f"missing_item_code{code_suffix}")
+            match_status = item.get("item_master_match_status")
+            if match_status == "skipped_no_item_master" and item.get("item_code") in (None, "", []):
+                low_confidence.append("item_matching_skipped")
+            elif match_status in {"needs_review", "unmatched"}:
+                low_confidence.append(f"item_master_match_required{code_suffix}")
         if self._manufacturing_total_mismatch(document):
-            low_confidence.append("extracted_amount")
-            low_confidence.append("line_items.line_total")
+            low_confidence.append("amount_mismatch")
+        if not document.document_number:
+            low_confidence.append("missing_document_number")
+        if not (document.issue_date or document.extracted_date):
+            low_confidence.append("missing_issue_date")
+        if doc_type == "purchase_order" and not document.due_date:
+            low_confidence.append("missing_due_date")
+        if doc_type == "invoice" and not document.due_date:
+            low_confidence.append("missing_payment_due_date")
         document.low_confidence_fields = sorted(set(low_confidence))
         return bool(document.low_confidence_fields)
 
