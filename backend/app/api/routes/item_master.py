@@ -96,14 +96,6 @@ async def upload_item_master(
     return ItemMasterUploadResult(**result)
 
 
-@router.get("/items/{item_id}", response_model=ItemMasterRead)
-def get_item_master_item(item_id: UUID, db: Session = Depends(get_db)) -> ItemMasterRead:
-    item = db.scalar(select(ItemMaster).options(selectinload(ItemMaster.alias_records)).where(ItemMaster.id == item_id))
-    if not item:
-        raise HTTPException(status_code=404, detail="품목을 찾을 수 없습니다")
-    return ItemMasterRead.model_validate(item)
-
-
 @router.post("/items", response_model=ItemMasterRead, status_code=201)
 def create_item_master_item(payload: ItemMasterCreate, db: Session = Depends(get_db)) -> ItemMasterRead:
     code = payload.internal_item_code.strip()
@@ -124,6 +116,14 @@ def create_item_master_item(payload: ItemMasterCreate, db: Session = Depends(get
     db.add(item)
     db.commit()
     db.refresh(item)
+    return ItemMasterRead.model_validate(item)
+
+
+@router.get("/items/{item_id}", response_model=ItemMasterRead)
+def get_item_master_item(item_id: UUID, db: Session = Depends(get_db)) -> ItemMasterRead:
+    item = db.scalar(select(ItemMaster).options(selectinload(ItemMaster.alias_records)).where(ItemMaster.id == item_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="품목을 찾을 수 없습니다")
     return ItemMasterRead.model_validate(item)
 
 
@@ -216,17 +216,6 @@ def deactivate_item_alias(alias_id: UUID, db: Session = Depends(get_db)) -> Resp
         raise HTTPException(status_code=404, detail="별칭을 찾을 수 없습니다")
     alias.active = False
     db.add(alias)
-    db.commit()
-    return Response(status_code=204)
-
-
-@router.delete("/{item_id}")
-def deactivate_item_master(item_id: UUID, db: Session = Depends(get_db)) -> Response:
-    item = db.get(ItemMaster, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="품목을 찾을 수 없습니다")
-    item.active = False
-    db.add(item)
     db.commit()
     return Response(status_code=204)
 
