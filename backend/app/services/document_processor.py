@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.document import Document, ProcessingStatus
 from app.services.ai_document_understanding import LocalDocumentAIService, get_document_ai_service
 from app.services.ai_escalation import should_escalate_to_ai
+from app.services.ai_merge import AIResultMerger
 from app.services.category_interpretation import CategoryInterpretation, CategoryInterpretationService
 from app.services.category_taxonomy import clean_tags_for_context, normalize_category
 from app.services.document_router import LightweightDocumentRouter
@@ -36,6 +37,7 @@ class DocumentProcessor:
         self.category_interpreter = DocumentInterpretationService()
         self.workflow_enrichment = DocumentWorkflowEnrichmentService()
         self.item_master_matcher = ItemMasterMatcher()
+        self.ai_merger = AIResultMerger()
 
     def process(self, db: Session, document: Document) -> Document:
         document.processing_status = ProcessingStatus.processing
@@ -69,6 +71,9 @@ class DocumentProcessor:
                 ai_result.provider = ai_result.extraction_provider
                 ai_result.provider_chain = [normalized.extraction_method or route.route_label, "heuristic_fallback"]
                 ai_result.merge_strategy = route.route_label
+            if self._is_manufacturing_parsed_type(parsed):
+                merge = self.ai_merger.merge(parsed, ai_result)
+                ai_result = merge.result
             structured_quality = self.quality.evaluate_structured_result(document, ai_result, extraction_quality)
             ingestion_notes = self._ingestion_notes(normalized, route)
 
@@ -243,8 +248,8 @@ class DocumentProcessor:
         extraction_method = (normalized.extraction_method or "").lower()
         return (
             source_type in {"pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp"}
+            and (normalized.primary_image_path is not None or "ocr" in extraction_method or normalized.heavy_ai_candidate)
             or "ocr" in extraction_method
-            or "pdf" in extraction_method
             or normalized.heavy_ai_candidate
             or normalized.partial_support
         )
@@ -342,8 +347,10 @@ class DocumentProcessor:
         if ai_escalation:
             metadata["ai_escalation_decision"] = {
                 "should_escalate": ai_escalation.should_escalate,
+                "severity": ai_escalation.severity,
+                "confidence": ai_escalation.confidence,
                 "reasons": ai_escalation.reasons,
-                "quality_signals": ai_escalation.quality_signals,
+                "signals": ai_escalation.signals,
             }
         return metadata
 

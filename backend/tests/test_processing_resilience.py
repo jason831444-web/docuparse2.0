@@ -219,3 +219,70 @@ def test_ai_interpretation_path_keeps_ai_provider_metadata(tmp_path):
     assert result.processing_status in {ProcessingStatus.ready, ProcessingStatus.needs_review}
     assert "ai_interpretation_gemma_gguf" in (result.provider_chain or "")
     assert result.refinement_provider == "ai_interpretation_gemma_gguf"
+
+
+def test_complete_text_layer_pdf_manufacturing_document_skips_ai_interpretation(tmp_path):
+    from app.services.document_processor import DocumentProcessor
+
+    def pdf_escape(text: str) -> str:
+        return "(" + text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ")"
+
+    def write_pdf(path: Path, lines: list[str]) -> None:
+        ops = ["BT", "/F1 9 Tf", "40 780 Td"]
+        for index, line in enumerate(lines):
+            if index:
+                ops.append("0 -13 Td")
+            ops.append(f"{pdf_escape(line)} Tj")
+        ops.append("ET")
+        stream = "\n".join(ops).encode("latin-1", errors="replace")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        ]
+        output = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for number, obj in enumerate(objects, start=1):
+            offsets.append(len(output))
+            output += f"{number} 0 obj\n".encode() + obj + b"\nendobj\n"
+        xref = len(output)
+        output += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+        for offset in offsets[1:]:
+            output += f"{offset:010d} 00000 n \n".encode()
+        output += f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+        path.write_bytes(output)
+
+    path = tmp_path / "quote.pdf"
+    write_pdf(path, [
+        "Quotation",
+        "Quotation No: QT-PDF-SKIP",
+        "Quotation Date: 2026-07-10",
+        "Valid Until: 2026-07-25",
+        "Supplier: Test Metals",
+        "Customer: Future Factory",
+        "Item Name | Item Code | Spec | Qty | Unit | Unit Price | Supply Amount | VAT | Line Total",
+        "SUS304 Plate 3T | SUS304-3T | 3.0T 1000x2000 | 2 | EA | 37000 | 74000 | 7400 | 81400",
+        "Supply Amount Total: 74000",
+        "VAT Total: 7400",
+        "Grand Total: 81400",
+    ])
+    document = Document(
+        original_filename=path.name,
+        stored_file_path=str(path),
+        mime_type="application/pdf",
+        processing_status=ProcessingStatus.uploaded,
+    )
+    processor = DocumentProcessor()
+
+    class BrokenInterpreter:
+        def interpret(self, document, text):
+            raise AssertionError("complete text-layer PDF should skip AI interpretation")
+
+    processor.category_interpreter = BrokenInterpreter()
+    result = processor.process(FakeSession(document), document)
+
+    assert result.processing_status == ProcessingStatus.ready
+    assert "interpretation_skipped_rule_based_ready" in (result.provider_chain or "")
+    assert "ai_interpretation_" not in (result.provider_chain or "")

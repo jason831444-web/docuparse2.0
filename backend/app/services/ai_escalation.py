@@ -23,8 +23,14 @@ MANUFACTURING_TYPES = {
 @dataclass(frozen=True)
 class AIEscalationDecision:
     should_escalate: bool
+    severity: str = "info"
+    confidence: float = 0.0
     reasons: list[str] = field(default_factory=list)
-    quality_signals: dict[str, Any] = field(default_factory=dict)
+    signals: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def quality_signals(self) -> dict[str, Any]:
+        return self.signals
 
 
 def should_escalate_to_ai(
@@ -42,6 +48,14 @@ def should_escalate_to_ai(
     }
     method = (normalized.extraction_method or "").lower()
     source = (normalized.source_file_type or "").lower()
+    visual_or_ocr_source = (
+        normalized.heavy_ai_candidate
+        or normalized.partial_support
+        or normalized.primary_image_path is not None
+        or "ocr" in method
+        or "pdf_partial" in method
+        or source in {"png", "jpg", "jpeg", "tif", "tiff", "webp"}
+    )
 
     if normalized.partial_support:
         reasons.append("partial_file_support")
@@ -54,7 +68,7 @@ def should_escalate_to_ai(
         signals["extraction_quality_sufficient"] = extraction_quality.sufficient
         if extraction_quality.escalation_recommended:
             reasons.append("quality_gate_escalation_recommended")
-        if extraction_quality.score < 0.72:
+        if extraction_quality.score < 0.58 or (visual_or_ocr_source and extraction_quality.score < 0.72):
             reasons.append("low_extraction_quality_score")
 
     table_confidence = _metadata_number(normalized.file_metadata, "table_confidence")
@@ -62,13 +76,16 @@ def should_escalate_to_ai(
         signals["table_confidence"] = table_confidence
         if table_confidence < 0.70:
             reasons.append("low_table_confidence")
-    if "pdf_scanned" in method or "ocr" in method or source in {"pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp"}:
+    if "pdf_scanned" in method or "ocr" in method or source in {"png", "jpg", "jpeg", "tif", "tiff", "webp"}:
         signals["ocr_or_image_path"] = True
     if "pdf_partial" in method:
         reasons.append("pdf_partial_text")
 
     if parsed.document_type in MANUFACTURING_TYPES:
-        reasons.extend(_manufacturing_missing_required(parsed))
+        missing_required = _manufacturing_missing_required(parsed)
+        if missing_required:
+            signals["missing_required_fields"] = missing_required
+            reasons.append("missing_required_fields")
         reasons.extend(_line_item_quality_reasons(parsed))
         if _amount_mismatch(parsed):
             reasons.append("amount_mismatch")
@@ -90,27 +107,31 @@ def should_escalate_to_ai(
         "unknown_document_type_from_visual_source",
     }
     should_escalate = any(reason in blocking_reasons for reason in reasons)
+    severity = "warning" if should_escalate else "info"
+    confidence = _decision_confidence(signals, reasons)
     return AIEscalationDecision(
         should_escalate=should_escalate,
+        severity=severity,
+        confidence=confidence,
         reasons=list(dict.fromkeys(reasons)),
-        quality_signals=signals,
+        signals=signals,
     )
 
 
 def _manufacturing_missing_required(parsed: ParsedDocument) -> list[str]:
     missing = []
     if not (parsed.vendor_name or parsed.merchant_name):
-        missing.append("missing_required_header")
+        missing.append("vendor_name")
     if not parsed.customer_name:
-        missing.append("missing_required_header")
+        missing.append("customer_name")
     if not parsed.document_number:
-        missing.append("missing_required_header")
+        missing.append("document_number")
     if not (parsed.issue_date or parsed.extracted_date):
-        missing.append("missing_required_header")
+        missing.append("issue_date")
     if parsed.document_type == DocumentType.purchase_order and not parsed.due_date:
-        missing.append("missing_required_header")
+        missing.append("due_date")
     if parsed.document_type == DocumentType.invoice and not parsed.due_date:
-        missing.append("missing_required_header")
+        missing.append("payment_due_date")
     return missing
 
 
@@ -165,3 +186,20 @@ def _metadata_number(metadata: dict[str, Any], key: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _decision_confidence(signals: dict[str, Any], reasons: list[str]) -> float:
+    score = 0.55
+    if signals.get("extraction_quality_score") is not None:
+        score = max(score, 1.0 - float(signals["extraction_quality_score"]))
+    if signals.get("ocr_confidence") is not None:
+        score = max(score, 1.0 - float(signals["ocr_confidence"]))
+    if signals.get("table_confidence") is not None:
+        score = max(score, 1.0 - float(signals["table_confidence"]))
+    if "missing_required_fields" in reasons:
+        score = max(score, 0.78)
+    if "incomplete_line_items" in reasons or "missing_line_items" in reasons:
+        score = max(score, 0.82)
+    if "amount_mismatch" in reasons:
+        score = max(score, 0.86)
+    return round(min(0.99, max(0.0, score if reasons else 0.15)), 3)

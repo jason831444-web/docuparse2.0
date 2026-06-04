@@ -1,6 +1,7 @@
 import type { DocumentRecord } from "@/types/document";
 
 export const DEFAULT_UPLOAD_CONCURRENCY = 3;
+export const RECOMMENDED_MAX_UPLOAD_FILES = 20;
 
 export type UploadQueueStatus = "queued" | "uploading" | "processing" | "done" | "needs_review" | "failed";
 
@@ -26,7 +27,7 @@ export function createUploadQueueItems<TFile extends UploadQueueFileLike>(
   now = Date.now(),
   randomToken = () => Math.random().toString(36).slice(2, 8)
 ): UploadQueueItem<TFile>[] {
-  return Array.from(files).map((file, index) => ({
+  return Array.from(files).slice(0, RECOMMENDED_MAX_UPLOAD_FILES).map((file, index) => ({
     id: `${now}-${index}-${file.name}-${file.size}-${randomToken()}`,
     file,
     status: "queued",

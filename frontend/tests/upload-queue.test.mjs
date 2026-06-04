@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
+  RECOMMENDED_MAX_UPLOAD_FILES,
   createUploadQueueItems,
   markUploadCompleted,
   markUploadFailed,
@@ -45,5 +46,12 @@ running = markUploadCompleted(running, queue[0].id, {
   processing_status: "needs_review",
 });
 assert.equal(running.find((item) => item.id === queue[0].id)?.status, "needs_review");
+
+const many = createUploadQueueItems(
+  Array.from({ length: RECOMMENDED_MAX_UPLOAD_FILES + 5 }, (_, index) => ({ name: `many-${index}.pdf`, size: index + 1 })),
+  999,
+  () => "many"
+);
+assert.equal(many.length, RECOMMENDED_MAX_UPLOAD_FILES);
 
 console.log("upload queue tests passed");

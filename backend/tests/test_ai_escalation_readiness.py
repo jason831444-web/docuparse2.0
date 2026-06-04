@@ -41,7 +41,8 @@ def test_text_layer_pdf_with_complete_manufacturing_data_does_not_escalate_to_ai
     decision = should_escalate_to_ai(normalized, parsed, quality)
 
     assert decision.should_escalate is False
-    assert decision.quality_signals["line_item_count"] == 1
+    assert decision.severity == "info"
+    assert decision.signals["line_item_count"] == 1
     assert "missing_line_items" not in decision.reasons
 
 
@@ -62,6 +63,8 @@ def test_scanned_pdf_with_low_ocr_confidence_escalates_to_ai_even_when_some_fiel
     decision = should_escalate_to_ai(normalized, parsed, quality)
 
     assert decision.should_escalate is True
+    assert decision.severity == "warning"
+    assert decision.confidence >= 0.48
     assert "low_ocr_confidence" in decision.reasons
 
 

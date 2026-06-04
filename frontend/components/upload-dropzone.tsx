@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
+  RECOMMENDED_MAX_UPLOAD_FILES,
   createUploadQueueItems,
   markUploadCompleted,
   markUploadFailed,
@@ -184,7 +185,7 @@ export function UploadDropzone() {
           파일을 끌어다 놓거나 클릭해서 업로드하세요
         </Button>
         <p className="mt-3 text-xs text-muted-foreground">
-          PDF, 이미지, 엑셀, 워드 문서를 지원합니다. 한 번에 최대 20개 이하 업로드를 권장합니다.
+          PDF, 이미지, 엑셀, 워드 문서를 지원합니다. 한 번에 최대 {RECOMMENDED_MAX_UPLOAD_FILES}개까지 추가할 수 있습니다.
         </p>
       </div>
 

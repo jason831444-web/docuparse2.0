@@ -60,7 +60,7 @@ LINE_ITEM_LABELS = {
     "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
     "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "거래처코드", "거래처품목코드", "vendor sku", "customer item code", "sku", "part no", "part number", "item code"],
     "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification", "dimension"],
-    "quantity": ["수량", "주문수량", "납품수량", "qty", "quantity"],
+    "quantity": ["수량", "주문수량", "납품수량", "delivery qty", "delivery quantity", "delivered qty", "qty", "quantity"],
     "unit": ["단위", "unit"],
     "unit_price": ["단가", "단 가", "개당가격", "unit price"],
     "supply_amount": ["공급가액", "공급액", "공급 금액", "supply amount", "subtotal", "amount"],
