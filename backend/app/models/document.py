@@ -139,8 +139,13 @@ class ItemAlias(Base):
     alias_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     normalized_alias_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     alias_spec: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vendor_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     source: Mapped[str | None] = mapped_column(String(80), nullable=True)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     item_master: Mapped[ItemMaster] = relationship("ItemMaster", back_populates="alias_records")

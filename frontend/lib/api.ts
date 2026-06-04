@@ -6,9 +6,15 @@ import type {
   DocumentStats,
   DocumentUpdate,
   FolderSummary,
+  CreateItemAliasPayload,
+  CreateItemMasterPayload,
+  ItemAliasRecord,
   ItemMasterListResponse,
+  ItemMasterRecord,
   ItemMasterStats,
   ItemMasterUploadResult,
+  UpdateItemAliasPayload,
+  UpdateItemMasterPayload,
 } from "@/types/document";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001/api";
@@ -82,16 +88,29 @@ export const api = {
   exportExcelUrl: () => `${API_BASE}/documents/export/xlsx`,
   exportJsonUrl: (id: string) => `${API_BASE}/documents/${id}/export/json`,
   itemMaster: {
-    list: (params: URLSearchParams) => request<ItemMasterListResponse>(`/item-master?${params.toString()}`, { cache: "no-store" }),
+    list: (params: URLSearchParams) => request<ItemMasterListResponse>(`/item-master/items?${params.toString()}`, { cache: "no-store" }),
     stats: () => request<ItemMasterStats>("/item-master/stats", { cache: "no-store" }),
+    get: (id: string) => request<ItemMasterRecord>(`/item-master/items/${id}`, { cache: "no-store" }),
+    create: (payload: CreateItemMasterPayload) =>
+      request<ItemMasterRecord>("/item-master/items", { method: "POST", body: JSON.stringify(payload) }),
+    update: (id: string, payload: UpdateItemMasterPayload) =>
+      request<ItemMasterRecord>(`/item-master/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
     upload: (file: File) => {
       const data = new FormData();
       data.append("file", file);
       return request<ItemMasterUploadResult>("/item-master/upload", { method: "POST", body: data });
     },
     remove: async (id: string) => {
-      const response = await fetch(`${API_BASE}/item-master/${id}`, { method: "DELETE" });
+      const response = await fetch(`${API_BASE}/item-master/items/${id}`, { method: "DELETE" });
       if (!response.ok) throw new Error("품목을 비활성화하지 못했습니다");
+    },
+    createAlias: (itemId: string, payload: CreateItemAliasPayload) =>
+      request<ItemAliasRecord>(`/item-master/items/${itemId}/aliases`, { method: "POST", body: JSON.stringify(payload) }),
+    updateAlias: (aliasId: string, payload: UpdateItemAliasPayload) =>
+      request<ItemAliasRecord>(`/item-master/aliases/${aliasId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    removeAlias: async (aliasId: string) => {
+      const response = await fetch(`${API_BASE}/item-master/aliases/${aliasId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("별칭을 비활성화하지 못했습니다");
     },
     clear: () => request<{ deleted_items: number; deleted_aliases: number }>("/item-master", { method: "DELETE" }),
   }

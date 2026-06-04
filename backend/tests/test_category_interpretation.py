@@ -332,9 +332,9 @@ def test_manufacturing_review_issues_and_item_matching_are_normalized():
     ambiguous_issues = ambiguous_workflow.workflow_metadata["normalized_review_issues"]
     codes = [issue["code"] for issue in ambiguous_issues]
     messages = [issue["message_ko"] for issue in ambiguous_issues]
-    assert messages.count("1번째 품목 품목코드 미확인") == 1
-    assert messages.count("2번째 품목 품목코드 미확인") == 1
-    assert messages.count("3번째 품목 품목코드 미확인") == 1
+    assert messages.count("1번째 품목 문서 품목코드 미확인") == 1
+    assert messages.count("2번째 품목 문서 품목코드 미확인") == 1
+    assert messages.count("3번째 품목 문서 품목코드 미확인") == 1
     assert messages.count("내부 품목 장부 매칭 필요") == 0
     assert messages.count("내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.") == 1
     assert "item_matching_skipped" in codes

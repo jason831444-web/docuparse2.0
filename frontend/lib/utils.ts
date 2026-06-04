@@ -193,13 +193,16 @@ export function reviewReasonLabel(value: string) {
     missing_quantity: `${prefix}수량이 비어 있습니다.`,
     missing_price_or_total: `${prefix}단가 또는 합계금액을 확인해야 합니다.`,
     missing_item_code: `${prefix}품목코드 미확인`,
-    item_master_match_required: "내부 품목 장부 매칭 필요",
+    missing_document_item_code: `${prefix}문서 품목코드 미확인`,
+    item_master_match_required: `${prefix}내부 품목코드 후보 확인 필요`,
+    internal_item_ambiguous: `${prefix}내부 품목코드 후보 확인 필요`,
+    internal_item_unmatched: `${prefix}내부 품목코드 미매칭`,
     amount_mismatch: "문서 합계금액과 품목 합계금액이 일치하지 않습니다.",
     missing_document_number: "문서번호 미확인",
     missing_issue_date: "날짜 미확인",
     missing_due_date: "납기일 미확인",
     missing_payment_due_date: "지급기한 미확인",
-    item_matching_skipped: "내부 품목 장부가 없어 품목코드 매칭을 건너뛰었습니다.",
+    item_matching_skipped: "내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.",
   };
   return labels[code] || value;
 }

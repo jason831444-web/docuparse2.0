@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 from typing import Any, Iterable
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.document import ItemAlias, ItemMaster
 
@@ -188,7 +188,7 @@ class ItemMasterMatcher:
         if not hasattr(db, "scalars"):
             masters = []
         else:
-            masters = list(db.scalars(select(ItemMaster).where(ItemMaster.active.is_(True))).all())
+            masters = list(db.scalars(select(ItemMaster).options(selectinload(ItemMaster.alias_records)).where(ItemMaster.active.is_(True))).all())
         return self.match_line_items_against_masters(line_items, masters)
 
     def match_line_items_against_masters(self, line_items: list[dict[str, Any]], masters: Iterable[Any]) -> list[dict[str, Any]]:
@@ -208,13 +208,22 @@ class ItemMasterMatcher:
             best = candidates[0] if candidates else None
             item["item_master_candidates"] = candidates[:5]
             item["item_master_match_confidence"] = best["score"] if best else None
-            if best and Decimal(str(best["score"])) >= self.auto_threshold and not self._is_ambiguous(best, candidates):
+            alias_tie = bool(best and best.get("alias_code_match") and sum(1 for candidate in candidates if candidate.get("alias_code_match")) > 1)
+            if best and best.get("direct_code_match"):
+                item["internal_item_code"] = best["internal_item_code"]
+                item["item_master_match_status"] = "direct_code_match"
+                item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_INTERNAL_CODE"
+            elif best and best.get("alias_code_match") and not alias_tie:
+                item["internal_item_code"] = best["internal_item_code"]
+                item["item_master_match_status"] = "alias_matched"
+                item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_ITEM_ALIAS"
+            elif best and Decimal(str(best["score"])) >= self.auto_threshold and not self._is_ambiguous(best, candidates):
                 item["internal_item_code"] = best["internal_item_code"]
                 item["item_master_match_status"] = "auto_matched"
                 item["item_master_match_reason"] = "HIGH_CONFIDENCE_MATCH"
             elif best and Decimal(str(best["score"])) >= self.review_threshold:
                 item["internal_item_code"] = item.get("internal_item_code") if self._looks_like_real_code(item.get("internal_item_code")) else None
-                item["item_master_match_status"] = "needs_review"
+                item["item_master_match_status"] = "ambiguous"
                 item["item_master_match_reason"] = "CANDIDATE_REVIEW_REQUIRED"
             else:
                 item["internal_item_code"] = item.get("internal_item_code") if self._looks_like_real_code(item.get("internal_item_code")) else None
@@ -246,36 +255,50 @@ class ItemMasterMatcher:
 
     def _rank_candidates(self, item: dict[str, Any], masters: list[Any]) -> list[dict[str, Any]]:
         candidates = [self._score_candidate(item, master) for master in masters]
+        exact_candidates = [candidate for candidate in candidates if candidate.get("direct_code_match") or candidate.get("alias_code_match")]
+        if exact_candidates:
+            return sorted(exact_candidates, key=lambda candidate: (candidate.get("direct_code_match") is True, Decimal(str(candidate["score"]))), reverse=True)
         candidates = [candidate for candidate in candidates if Decimal(str(candidate["score"])) >= Decimal("0.35")]
         return sorted(candidates, key=lambda candidate: Decimal(str(candidate["score"])), reverse=True)
 
     def _score_candidate(self, item: dict[str, Any], master: Any) -> dict[str, Any]:
         source_code = str(item.get("item_code") or "").strip()
+        source_code_normalized = normalize_item_text(source_code)
         internal_code = str(getattr(master, "internal_item_code", "") or "").strip()
+        alias_entries = self._active_alias_entries(master)
+        alias_values = [entry["name"] for entry in alias_entries]
+        alias_code_match = bool(source_code_normalized and any(source_code_normalized == normalize_item_text(alias) for alias in alias_values))
         if source_code and source_code.lower() == internal_code.lower():
+            name_score = Decimal("1")
+            alias_score = Decimal("1")
+        elif alias_code_match:
             name_score = Decimal("1")
             alias_score = Decimal("1")
         else:
             source_name = normalize_item_text(item.get("item_name"))
             master_name = getattr(master, "normalized_item_name", None) or normalize_item_text(getattr(master, "item_name", ""))
-            alias_names = [normalize_item_text(alias) for alias in (getattr(master, "aliases", None) or [])]
-            alias_score = max([self._similarity(source_name, alias) for alias in alias_names] or [Decimal("0")])
+            alias_scores = [self._alias_score(source_name, item.get("specification"), entry) for entry in alias_entries]
+            alias_score = max(alias_scores or [Decimal("0")])
             name_score = max(self._similarity(source_name, master_name), alias_score)
         spec_score = self._spec_score(item.get("specification"), getattr(master, "spec", None))
         unit_score = self._unit_score(item.get("unit"), getattr(master, "unit", None))
         price_score = self._price_score(item.get("unit_price"), getattr(master, "standard_price", None))
-        if source_code and source_code.lower() == internal_code.lower():
+        direct_code_match = bool(source_code and source_code.lower() == internal_code.lower())
+        if direct_code_match or alias_code_match:
             score = Decimal("1.00")
         else:
             score = (name_score * Decimal("0.55")) + (spec_score * Decimal("0.20")) + (unit_score * Decimal("0.15")) + (price_score * Decimal("0.10"))
         score = score.quantize(Decimal("0.001"))
         return {
+            "item_master_id": str(getattr(master, "id", "")) if getattr(master, "id", None) is not None else None,
             "internal_item_code": internal_code,
             "item_name": getattr(master, "item_name", None),
             "spec": getattr(master, "spec", None),
             "unit": getattr(master, "unit", None),
             "standard_price": str(getattr(master, "standard_price", "")) if getattr(master, "standard_price", None) is not None else None,
             "score": str(score),
+            "direct_code_match": direct_code_match,
+            "alias_code_match": alias_code_match,
             "score_breakdown": {
                 "name_score": str(name_score.quantize(Decimal("0.001"))),
                 "spec_score": str(spec_score.quantize(Decimal("0.001"))),
@@ -293,6 +316,24 @@ class ItemMasterMatcher:
         if source in target or target in source:
             return Decimal("0.88")
         return Decimal(str(SequenceMatcher(None, source, target).ratio()))
+
+    def _active_alias_entries(self, master: Any) -> list[dict[str, Any]]:
+        entries = [{"name": str(alias), "spec": None} for alias in (getattr(master, "aliases", None) or []) if str(alias).strip()]
+        for alias in getattr(master, "alias_records", None) or []:
+            if getattr(alias, "active", True) is False:
+                continue
+            entries.append({
+                "name": getattr(alias, "alias_name", None),
+                "spec": getattr(alias, "alias_spec", None),
+            })
+        return [entry for entry in entries if entry.get("name")]
+
+    def _alias_score(self, source_name: str, source_spec: object, alias: dict[str, Any]) -> Decimal:
+        name_score = self._similarity(source_name, normalize_item_text(alias.get("name")))
+        spec = alias.get("spec")
+        if spec:
+            return (name_score * Decimal("0.82")) + (self._spec_score(source_spec, spec) * Decimal("0.18"))
+        return name_score
 
     def _spec_score(self, source: object, target: object) -> Decimal:
         source_norm = normalize_spec_text(source)

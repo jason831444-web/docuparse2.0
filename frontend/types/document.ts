@@ -110,13 +110,14 @@ export interface ManufacturingLineItem {
   supply_amount?: string | number | null;
   tax_amount?: string | number | null;
   line_total?: string | number | null;
-  item_master_match_status?: "auto_matched" | "needs_review" | "unmatched" | "skipped_no_item_master" | string | null;
+  item_master_match_status?: "auto_matched" | "direct_code_match" | "alias_matched" | "user_selected" | "manual_confirmed" | "ambiguous" | "needs_review" | "unmatched" | "skipped_no_item_master" | string | null;
   item_master_match_confidence?: string | number | null;
   item_master_candidates?: ItemMasterCandidate[];
   item_master_match_reason?: string | null;
 }
 
 export interface ItemMasterCandidate {
+  item_master_id?: string | null;
   internal_item_code: string;
   item_name: string | null;
   spec: string | null;
@@ -138,7 +139,24 @@ export interface ItemMasterRecord {
   standard_price: string | null;
   active: boolean;
   aliases: string[];
+  alias_records: ItemAliasRecord[];
   last_uploaded_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ItemAliasRecord {
+  id: string;
+  item_master_id: string;
+  alias_name: string;
+  normalized_alias_name: string | null;
+  alias_spec: string | null;
+  vendor_name: string | null;
+  customer_name: string | null;
+  source: string | null;
+  confidence: string | null;
+  memo: string | null;
+  active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -154,7 +172,9 @@ export interface ItemMasterStats {
   total_items: number;
   active_items: number;
   inactive_items: number;
+  alias_count: number;
   last_uploaded_at: string | null;
+  last_updated_at: string | null;
 }
 
 export interface ItemMasterUploadResult {
@@ -163,6 +183,32 @@ export interface ItemMasterUploadResult {
   skipped: number;
   errors: string[];
 }
+
+export interface CreateItemMasterPayload {
+  internal_item_code: string;
+  item_name: string;
+  spec?: string | null;
+  unit?: string | null;
+  category?: string | null;
+  standard_price?: string | number | null;
+  active?: boolean;
+  aliases?: string[];
+}
+
+export type UpdateItemMasterPayload = Omit<Partial<CreateItemMasterPayload>, "internal_item_code">;
+
+export interface CreateItemAliasPayload {
+  alias_name: string;
+  alias_spec?: string | null;
+  vendor_name?: string | null;
+  customer_name?: string | null;
+  source?: string;
+  confidence?: string | number | null;
+  memo?: string | null;
+  active?: boolean;
+}
+
+export type UpdateItemAliasPayload = Partial<CreateItemAliasPayload>;
 
 export interface DocumentListResponse {
   items: DocumentRecord[];

@@ -50,17 +50,28 @@ def upgrade() -> None:
         sa.Column("alias_name", sa.String(length=255), nullable=False),
         sa.Column("normalized_alias_name", sa.String(length=255), nullable=True),
         sa.Column("alias_spec", sa.String(length=255), nullable=True),
+        sa.Column("vendor_name", sa.String(length=255), nullable=True),
+        sa.Column("customer_name", sa.String(length=255), nullable=True),
         sa.Column("source", sa.String(length=80), nullable=True),
         sa.Column("confidence", sa.Numeric(4, 3), nullable=True),
+        sa.Column("memo", sa.Text(), nullable=True),
+        sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
     op.create_index("ix_item_aliases_item_master_id", "item_aliases", ["item_master_id"])
     op.create_index("ix_item_aliases_alias_name", "item_aliases", ["alias_name"])
     op.create_index("ix_item_aliases_normalized_alias_name", "item_aliases", ["normalized_alias_name"])
+    op.create_index("ix_item_aliases_vendor_name", "item_aliases", ["vendor_name"])
+    op.create_index("ix_item_aliases_customer_name", "item_aliases", ["customer_name"])
+    op.create_index("ix_item_aliases_active", "item_aliases", ["active"])
 
 
 def downgrade() -> None:
     op.drop_index("ix_item_aliases_normalized_alias_name", table_name="item_aliases")
+    op.drop_index("ix_item_aliases_active", table_name="item_aliases")
+    op.drop_index("ix_item_aliases_customer_name", table_name="item_aliases")
+    op.drop_index("ix_item_aliases_vendor_name", table_name="item_aliases")
     op.drop_index("ix_item_aliases_alias_name", table_name="item_aliases")
     op.drop_index("ix_item_aliases_item_master_id", table_name="item_aliases")
     op.drop_table("item_aliases")

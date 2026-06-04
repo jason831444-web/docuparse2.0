@@ -142,7 +142,7 @@ class DocumentWorkflowEnrichmentService:
         review_reasons = self._manufacturing_review_reasons(document, business_fields)
         review_issues = self._normalized_review_issues(document, review_reasons)
         warnings = self._dedupe([issue["message_ko"] for issue in review_issues])
-        review_required = bool(warnings or document.review_required)
+        review_required = bool(document.review_required or any(self._is_blocking_review_issue(issue) for issue in review_issues))
         export_ready = not review_required
         summary = self._manufacturing_summary(
             doc_type,
@@ -256,13 +256,15 @@ class DocumentWorkflowEnrichmentService:
                 reasons.append(self._review_reason("missing_quantity", f"{index}번째 품목의 수량이 비어 있습니다.", "line_items.quantity", index - 1))
             if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 reasons.append(self._review_reason("missing_price_or_total", f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.", "line_items.unit_price", index - 1))
+            internal_code = item.get("internal_item_code")
             if item.get("item_code") in (None, "", []):
-                reasons.append(self._review_reason("missing_item_code", f"{index}번째 품목 품목코드 미확인", "line_items.item_code", index - 1))
+                severity = "info" if internal_code not in (None, "", []) else "warning"
+                reasons.append(self._review_reason("missing_document_item_code", f"{index}번째 품목 문서 품목코드 미확인", "line_items.item_code", index - 1, severity=severity))
             match_status = item.get("item_master_match_status")
-            if match_status == "needs_review":
-                reasons.append(self._review_reason("item_master_match_required", f"{index}번째 품목 내부 품목코드 후보 확인 필요", "line_items.internal_item_code", index - 1))
+            if match_status == "ambiguous":
+                reasons.append(self._review_reason("internal_item_ambiguous", f"{index}번째 품목 내부 품목코드 후보 확인 필요", "line_items.internal_item_code", index - 1))
             elif match_status == "unmatched":
-                reasons.append(self._review_reason("item_master_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1))
+                reasons.append(self._review_reason("internal_item_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1))
         if any(
             item.get("item_master_match_status") == "skipped_no_item_master" and item.get("item_code") in (None, "", [])
             for item in document.line_items or []
@@ -307,8 +309,11 @@ class DocumentWorkflowEnrichmentService:
             "missing_quantity": f"{prefix}수량이 비어 있습니다.",
             "missing_price_or_total": f"{prefix}단가 또는 합계금액을 확인해야 합니다.",
             "missing_item_code": f"{prefix}품목코드 미확인",
+            "missing_document_item_code": f"{prefix}문서 품목코드 미확인",
             "item_master_match_required": f"{prefix}내부 품목코드 후보 확인 필요" if prefix else "내부 품목 장부 매칭 필요",
+            "internal_item_ambiguous": f"{prefix}내부 품목코드 후보 확인 필요" if prefix else "내부 품목코드 후보 확인 필요",
             "item_master_unmatched": f"{prefix}내부 품목코드 미매칭" if prefix else "내부 품목코드 미매칭",
+            "internal_item_unmatched": f"{prefix}내부 품목코드 미매칭" if prefix else "내부 품목코드 미매칭",
             "item_matching_skipped": "내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.",
             "amount_mismatch": "문서 합계금액과 품목 합계금액이 일치하지 않습니다.",
             "missing_document_number": "문서번호 미확인",
@@ -323,8 +328,11 @@ class DocumentWorkflowEnrichmentService:
             "missing_quantity": "line_items.quantity",
             "missing_item_name": "line_items.item_name",
             "missing_item_code": "line_items.item_code",
+            "missing_document_item_code": "line_items.item_code",
             "item_master_match_required": "line_items.internal_item_code",
+            "internal_item_ambiguous": "line_items.internal_item_code",
             "item_master_unmatched": "line_items.internal_item_code",
+            "internal_item_unmatched": "line_items.internal_item_code",
             "item_matching_skipped": "line_items.internal_item_code",
             "missing_price_or_total": "line_items.unit_price",
             "amount_mismatch": "total_amount",
@@ -353,6 +361,26 @@ class DocumentWorkflowEnrichmentService:
         if actual is not None:
             reason["actual"] = str(actual)
         return reason
+
+    def _is_blocking_review_issue(self, issue: dict[str, Any]) -> bool:
+        if issue.get("severity") in {"info", "low"}:
+            return False
+        return issue.get("code") in {
+            "missing_vendor_name",
+            "missing_customer_name",
+            "missing_document_number",
+            "missing_issue_date",
+            "missing_due_date",
+            "missing_payment_due_date",
+            "missing_line_items",
+            "missing_item_name",
+            "missing_quantity",
+            "missing_price_or_total",
+            "amount_mismatch",
+            "internal_item_unmatched",
+            "internal_item_ambiguous",
+            "item_matching_skipped",
+        }
 
     def _dedupe_review_reasons(self, reasons: list[dict[str, Any]], by_message: bool = False) -> list[dict[str, Any]]:
         deduped: list[dict[str, Any]] = []

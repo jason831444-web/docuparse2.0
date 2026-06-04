@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Database, FileSpreadsheet, Loader2, Search, Upload } from "lucide-react";
+import { Database, Edit3, FileSpreadsheet, Loader2, Plus, Search, Tags, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,29 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { formatDateTime } from "@/lib/utils";
-import type { ItemMasterRecord, ItemMasterStats } from "@/types/document";
+import type { CreateItemAliasPayload, CreateItemMasterPayload, ItemAliasRecord, ItemMasterRecord, ItemMasterStats } from "@/types/document";
+
+const emptyItemForm: CreateItemMasterPayload = {
+  internal_item_code: "",
+  item_name: "",
+  spec: "",
+  unit: "EA",
+  category: "",
+  standard_price: "",
+  active: true,
+  aliases: [],
+};
+
+const emptyAliasForm: CreateItemAliasPayload = {
+  alias_name: "",
+  alias_spec: "",
+  vendor_name: "",
+  customer_name: "",
+  source: "manual",
+  confidence: "1",
+  memo: "",
+  active: true,
+};
 
 export default function ItemMasterPage() {
   const [items, setItems] = useState<ItemMasterRecord[]>([]);
@@ -21,6 +43,12 @@ export default function ItemMasterPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
+  const [showItemForm, setShowItemForm] = useState(false);
+  const [editingItem, setEditingItem] = useState<ItemMasterRecord | null>(null);
+  const [itemForm, setItemForm] = useState<CreateItemMasterPayload>(emptyItemForm);
+  const [aliasItem, setAliasItem] = useState<ItemMasterRecord | null>(null);
+  const [editingAlias, setEditingAlias] = useState<ItemAliasRecord | null>(null);
+  const [aliasForm, setAliasForm] = useState<CreateItemAliasPayload>(emptyAliasForm);
 
   const categories = useMemo(() => Array.from(new Set(items.map((item) => item.category).filter(Boolean) as string[])).sort(), [items]);
 
@@ -75,6 +103,107 @@ export default function ItemMasterPage() {
     }
   }
 
+  function openCreateItem() {
+    setShowItemForm(true);
+    setEditingItem(null);
+    setItemForm(emptyItemForm);
+  }
+
+  function openEditItem(item: ItemMasterRecord) {
+    setShowItemForm(true);
+    setEditingItem(item);
+    setItemForm({
+      internal_item_code: item.internal_item_code,
+      item_name: item.item_name,
+      spec: item.spec ?? "",
+      unit: item.unit ?? "",
+      category: item.category ?? "",
+      standard_price: item.standard_price ?? "",
+      active: item.active,
+      aliases: item.aliases ?? [],
+    });
+  }
+
+  async function saveItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      if (editingItem) {
+        await api.itemMaster.update(editingItem.id, {
+          item_name: itemForm.item_name,
+          spec: itemForm.spec,
+          unit: itemForm.unit,
+          category: itemForm.category,
+          standard_price: itemForm.standard_price,
+          active: itemForm.active,
+          aliases: itemForm.aliases,
+        });
+        toast.success("품목 정보를 수정했습니다");
+      } else {
+        await api.itemMaster.create(itemForm);
+        toast.success("품목을 추가했습니다");
+      }
+      setShowItemForm(false);
+      setEditingItem(null);
+      setItemForm(emptyItemForm);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "품목을 저장하지 못했습니다");
+    }
+  }
+
+  function openAliases(item: ItemMasterRecord) {
+    setAliasItem(item);
+    setEditingAlias(null);
+    setAliasForm(emptyAliasForm);
+  }
+
+  function openEditAlias(alias: ItemAliasRecord) {
+    setEditingAlias(alias);
+    setAliasForm({
+      alias_name: alias.alias_name,
+      alias_spec: alias.alias_spec ?? "",
+      vendor_name: alias.vendor_name ?? "",
+      customer_name: alias.customer_name ?? "",
+      source: alias.source ?? "manual",
+      confidence: alias.confidence ?? "1",
+      memo: alias.memo ?? "",
+      active: alias.active,
+    });
+  }
+
+  async function saveAlias(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!aliasItem) return;
+    try {
+      if (editingAlias) {
+        await api.itemMaster.updateAlias(editingAlias.id, aliasForm);
+        toast.success("별칭을 수정했습니다");
+      } else {
+        await api.itemMaster.createAlias(aliasItem.id, aliasForm);
+        toast.success("별칭을 추가했습니다");
+      }
+      const refreshed = await api.itemMaster.get(aliasItem.id);
+      setAliasItem(refreshed);
+      setEditingAlias(null);
+      setAliasForm(emptyAliasForm);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "별칭을 저장하지 못했습니다");
+    }
+  }
+
+  async function deactivateAlias(alias: ItemAliasRecord) {
+    if (!aliasItem) return;
+    try {
+      await api.itemMaster.removeAlias(alias.id);
+      const refreshed = await api.itemMaster.get(aliasItem.id);
+      setAliasItem(refreshed);
+      toast.success("별칭을 비활성화했습니다");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "별칭을 비활성화하지 못했습니다");
+    }
+  }
+
   return (
     <main className="shell py-8">
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
@@ -88,6 +217,10 @@ export default function ItemMasterPage() {
             회사 내부 품목코드 기준으로 문서 품목을 자동 매칭합니다. 발주서, 견적서, 거래명세서, 납품서, 인보이스에서 추출된 품목명을 내부 품목코드로 정규화합니다.
           </p>
         </div>
+        <Button type="button" onClick={openCreateItem}>
+          <Plus className="size-4" />
+          품목 추가
+        </Button>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1fr_0.8fr]">
@@ -125,7 +258,9 @@ export default function ItemMasterPage() {
               ["전체 품목 수", stats?.total_items ?? 0],
               ["활성 품목 수", stats?.active_items ?? 0],
               ["비활성 품목 수", stats?.inactive_items ?? 0],
+              ["alias 수", stats?.alias_count ?? 0],
               ["최근 업로드 시간", stats?.last_uploaded_at ? formatDateTime(stats.last_uploaded_at) : "없음"],
+              ["최근 수정 시간", stats?.last_updated_at ? formatDateTime(stats.last_updated_at) : "없음"],
             ].map(([label, value]) => (
               <div key={label} className="rounded-lg border bg-white p-4">
                 <p className="text-xs text-muted-foreground">{label}</p>
@@ -160,6 +295,50 @@ export default function ItemMasterPage() {
         </CardContent>
       </Card>
 
+      {showItemForm ? (
+        <Card className="mt-6 border-primary/30">
+          <CardHeader>
+            <CardTitle>{editingItem ? "품목 수정" : "품목 추가"}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={saveItem} className="grid gap-4 md:grid-cols-3">
+              <label className="grid gap-2 text-sm font-medium">
+                내부 품목코드
+                <Input value={itemForm.internal_item_code} disabled={!!editingItem} onChange={(event) => setItemForm({ ...itemForm, internal_item_code: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                품목명
+                <Input value={itemForm.item_name} onChange={(event) => setItemForm({ ...itemForm, item_name: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                규격
+                <Input value={itemForm.spec ?? ""} onChange={(event) => setItemForm({ ...itemForm, spec: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                단위
+                <Input value={itemForm.unit ?? ""} onChange={(event) => setItemForm({ ...itemForm, unit: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                카테고리
+                <Input value={itemForm.category ?? ""} onChange={(event) => setItemForm({ ...itemForm, category: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                표준단가
+                <Input type="number" min="0" step="0.01" value={itemForm.standard_price ?? ""} onChange={(event) => setItemForm({ ...itemForm, standard_price: event.target.value })} />
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" checked={itemForm.active ?? true} onChange={(event) => setItemForm({ ...itemForm, active: event.target.checked })} />
+                활성 품목
+              </label>
+              <div className="flex items-end gap-2 md:col-span-2">
+                <Button type="submit">저장</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowItemForm(false); setEditingItem(null); setItemForm(emptyItemForm); }}>취소</Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card className="mt-6 overflow-hidden">
         <CardHeader className="border-b bg-slate-50/70">
           <CardTitle>품목 테이블</CardTitle>
@@ -172,7 +351,7 @@ export default function ItemMasterPage() {
               <table className="min-w-[980px] w-full text-sm">
                 <thead className="bg-slate-50 text-left text-xs text-muted-foreground">
                   <tr>
-                    {["내부 품목코드", "품목명", "정규화 품목명", "규격", "단위", "카테고리", "표준단가", "활성 여부", "최근 수정일", ""].map((header) => (
+                    {["내부 품목코드", "품목명", "정규화 품목명", "규격", "단위", "카테고리", "표준단가", "별칭", "활성 여부", "최근 수정일", ""].map((header) => (
                       <th key={header} className="px-4 py-3 font-medium">{header}</th>
                     ))}
                   </tr>
@@ -187,12 +366,23 @@ export default function ItemMasterPage() {
                       <td className="px-4 py-3">{item.unit || "-"}</td>
                       <td className="px-4 py-3">{item.category || "-"}</td>
                       <td className="px-4 py-3">{item.standard_price ? Number(item.standard_price).toLocaleString("ko-KR") : "-"}</td>
+                      <td className="px-4 py-3">{item.alias_records?.filter((alias) => alias.active).length ?? 0}</td>
                       <td className="px-4 py-3">
                         <Badge variant={item.active ? "default" : "outline"}>{item.active ? "활성" : "비활성"}</Badge>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">{formatDateTime(item.updated_at)}</td>
-                      <td className="px-4 py-3 text-right">
-                        <Button type="button" variant="outline" size="sm" disabled={!item.active} onClick={() => deactivate(item.id)}>비활성화</Button>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-1">
+                          <Button type="button" variant="outline" size="sm" onClick={() => openEditItem(item)}>
+                            <Edit3 className="size-3.5" />
+                            수정
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" onClick={() => openAliases(item)}>
+                            <Tags className="size-3.5" />
+                            별칭
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" disabled={!item.active} onClick={() => deactivate(item.id)}>비활성화</Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -204,6 +394,81 @@ export default function ItemMasterPage() {
           )}
         </CardContent>
       </Card>
+
+      {aliasItem ? (
+        <Card className="mt-6 border-primary/30">
+          <CardHeader>
+            <CardTitle>별칭 관리: {aliasItem.internal_item_code}</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-5">
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="min-w-[760px] w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs text-muted-foreground">
+                  <tr>
+                    {["별칭", "규격", "거래처", "고객사", "출처", "활성", "메모", ""].map((header) => (
+                      <th key={header} className="px-3 py-2 font-medium">{header}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {aliasItem.alias_records?.length ? aliasItem.alias_records.map((alias) => (
+                    <tr key={alias.id} className="border-t">
+                      <td className="px-3 py-2 font-semibold">{alias.alias_name}</td>
+                      <td className="px-3 py-2">{alias.alias_spec || "-"}</td>
+                      <td className="px-3 py-2">{alias.vendor_name || "-"}</td>
+                      <td className="px-3 py-2">{alias.customer_name || "-"}</td>
+                      <td className="px-3 py-2">{alias.source || "-"}</td>
+                      <td className="px-3 py-2">{alias.active ? "활성" : "비활성"}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{alias.memo || "-"}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex justify-end gap-1">
+                          <Button type="button" variant="outline" size="sm" onClick={() => openEditAlias(alias)}>수정</Button>
+                          <Button type="button" variant="outline" size="sm" disabled={!alias.active} onClick={() => deactivateAlias(alias)}>비활성화</Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td className="px-3 py-8 text-center text-muted-foreground" colSpan={8}>등록된 별칭이 없습니다.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <form onSubmit={saveAlias} className="grid gap-3 md:grid-cols-3">
+              <label className="grid gap-2 text-sm font-medium">
+                별칭명
+                <Input value={aliasForm.alias_name} onChange={(event) => setAliasForm({ ...aliasForm, alias_name: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                별칭 규격
+                <Input value={aliasForm.alias_spec ?? ""} onChange={(event) => setAliasForm({ ...aliasForm, alias_spec: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                거래처
+                <Input value={aliasForm.vendor_name ?? ""} onChange={(event) => setAliasForm({ ...aliasForm, vendor_name: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                고객사
+                <Input value={aliasForm.customer_name ?? ""} onChange={(event) => setAliasForm({ ...aliasForm, customer_name: event.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                메모
+                <Input value={aliasForm.memo ?? ""} onChange={(event) => setAliasForm({ ...aliasForm, memo: event.target.value })} />
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" checked={aliasForm.active ?? true} onChange={(event) => setAliasForm({ ...aliasForm, active: event.target.checked })} />
+                활성 별칭
+              </label>
+              <div className="flex gap-2 md:col-span-3">
+                <Button type="submit">{editingAlias ? "별칭 수정" : "별칭 추가"}</Button>
+                <Button type="button" variant="outline" onClick={() => { setEditingAlias(null); setAliasForm(emptyAliasForm); }}>입력 초기화</Button>
+                <Button type="button" variant="outline" onClick={() => setAliasItem(null)}>닫기</Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
     </main>
   );
 }

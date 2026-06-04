@@ -57,13 +57,13 @@ CATEGORY_KEYWORDS = {
 }
 
 LINE_ITEM_LABELS = {
-    "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "product name", "item"],
-    "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "part no", "part number", "item code"],
+    "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
+    "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "거래처품목코드", "vendor sku", "sku", "part no", "part number", "item code"],
     "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification", "dimension"],
     "quantity": ["수량", "주문수량", "납품수량", "qty", "quantity"],
     "unit": ["단위", "unit"],
     "unit_price": ["단가", "단 가", "개당가격", "unit price"],
-    "supply_amount": ["공급가액", "공급액", "공급 금액", "supply amount", "amount"],
+    "supply_amount": ["공급가액", "공급액", "공급 금액", "supply amount", "subtotal", "amount"],
     "tax_amount": ["세액", "세 액", "부가세", "vat", "tax", "w세액"],
     "line_total": ["합계금액", "총액", "금액", "합계", "total", "line total"],
 }
@@ -113,9 +113,11 @@ class DocumentParser:
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
         line_items = self._extract_line_items(lines)
-        subtotal = self._extract_labeled_amount(joined, ["공급가액", "공급액", "공급 금액", "subtotal", "supply amount"])
-        tax = self._extract_labeled_amount(joined, ["세액", "세 액", "부가세", "vat", "tax", "w세액"])
-        amount = self._extract_labeled_amount(joined, ["합계금액", "총액", "공급대가", "청구금액", "total", "grand total"]) or self._line_items_total(line_items)
+        document_scope_text = self._document_scope_text(lines)
+        subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액", "공급액", "공급 금액", "subtotal total", "subtotal", "supply amount"])
+        tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "vat total", "vat", "tax", "w세액"])
+        amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "invoice total", "grand total", "total due"]) or self._line_items_total(line_items)
+        currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
@@ -127,7 +129,7 @@ class DocumentParser:
             title=self._guess_title(lines, doc_type, filename),
             extracted_date=issue_date or self._extract_date(joined),
             extracted_amount=amount,
-            currency="KRW" if amount is not None else None,
+            currency=currency,
             merchant_name=vendor_name or (self._guess_merchant(lines) if doc_type == DocumentType.receipt else None),
             vendor_name=vendor_name,
             customer_name=customer_name,
@@ -215,13 +217,36 @@ class DocumentParser:
     def _extract_labeled_amount(self, text: str, labels: list[str]) -> Decimal | None:
         label_pattern = "|".join(re.escape(label) for label in labels)
         matches = re.finditer(
-            rf"(?:^|\n)\s*(?:{label_pattern})\s*[:：]?\s*(?:KRW|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*(?:원|KRW)?",
+            rf"(?:^|\n)\s*(?:{label_pattern})\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*(?:원|KRW|USD)?",
             text,
             flags=re.IGNORECASE,
         )
         values = [self._to_decimal(match.group(1)) for match in matches]
         values = [value for value in values if value is not None]
         return values[-1] if values else None
+
+    def _extract_currency(self, text: str) -> str | None:
+        if re.search(r"\bUSD\b|\$", text, flags=re.IGNORECASE):
+            return "USD"
+        if re.search(r"\bKRW\b|₩|원", text, flags=re.IGNORECASE):
+            return "KRW"
+        return None
+
+    def _document_scope_text(self, lines: list[str]) -> str:
+        scoped: list[str] = []
+        in_explicit_item_block = False
+        for line in lines:
+            lowered = line.lower()
+            if "[item table start]" in lowered:
+                in_explicit_item_block = True
+                continue
+            if "[item table end]" in lowered:
+                in_explicit_item_block = False
+                continue
+            if in_explicit_item_block:
+                continue
+            scoped.append(line)
+        return "\n".join(scoped)
 
     def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
         label_pattern = "|".join(re.escape(label) for label in labels)
@@ -241,7 +266,10 @@ class DocumentParser:
         return self._extract_date(match.group(1)) if match else None
 
     def _extract_document_number(self, text: str) -> str | None:
-        labels = ["발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호", "po no", "quote no", "invoice no"]
+        labels = [
+            "발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호",
+            "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
+        ]
         label_pattern = "|".join(re.escape(label) for label in labels)
         match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", text, flags=re.IGNORECASE)
         return match.group(1).strip()[:80] if match else None
@@ -249,7 +277,7 @@ class DocumentParser:
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
         if doc_type == DocumentType.quotation:
-            fields["quotation_date"] = self._date_string(self._extract_labeled_date(text, ["견적일", "quotation date"]))
+            fields["quotation_date"] = self._date_string(self._extract_labeled_date(text, ["견적일", "quotation date", "quote date"]))
             fields["valid_until"] = self._date_string(self._extract_labeled_date(text, ["유효기간", "견적유효기간", "valid until", "expires"]))
             fields["delivery_terms"] = self._extract_labeled_text(text, ["납기조건", "delivery terms"])
             fields["payment_terms"] = self._extract_labeled_text(text, ["결제조건", "payment terms"])
@@ -260,27 +288,27 @@ class DocumentParser:
             fields["receiving_location"] = self._extract_labeled_text(text, ["입고장소", "납품장소", "receiving location"])
             fields["receiver_name"] = self._extract_labeled_text(text, ["수령자", "인수자", "receiver"])
         elif doc_type == DocumentType.invoice:
-            fields["payment_due_date"] = self._date_string(self._extract_labeled_date(text, ["지급기한", "결제기한", "payment due date", "due date"]))
+            fields["payment_due_date"] = self._date_string(self._extract_labeled_date(text, ["지급기한", "결제기한", "payment due date", "payment due", "due date"]))
             fields["business_registration_numbers"] = re.findall(r"\b\d{3}-\d{2}-\d{5}\b", text)
         return {key: value for key, value in fields.items() if value not in (None, "", [])}
 
     def _extract_issue_date(self, text: str, doc_type: DocumentType) -> date | None:
         labels_by_type = {
-            DocumentType.purchase_order: ["발행일", "작성일", "발주일", "issue date"],
-            DocumentType.quotation: ["견적일", "발행일", "작성일", "quotation date"],
+            DocumentType.purchase_order: ["발행일", "발행일자", "작성일", "발주일", "issue date", "date"],
+            DocumentType.quotation: ["견적일", "발행일", "작성일", "quotation date", "quote date", "date"],
             DocumentType.transaction_statement: ["발행일", "작성일", "issue date"],
             DocumentType.delivery_note: ["발행일", "작성일", "issue date"],
-            DocumentType.invoice: ["발행일", "작성일", "invoice date"],
+            DocumentType.invoice: ["발행일", "발행일자", "작성일", "invoice date", "issue date", "date"],
         }
         labels = labels_by_type.get(doc_type, ["발행일", "작성일", "일자", "issue date"])
         return self._extract_labeled_date(text, labels)
 
     def _extract_due_date(self, text: str, doc_type: DocumentType) -> date | None:
         labels_by_type = {
-            DocumentType.purchase_order: ["납기일", "납품예정일", "납품 예정일", "delivery due date", "due date"],
+            DocumentType.purchase_order: ["납기일", "납기 요청", "납품예정일", "납품 예정일", "requested delivery date", "due delivery", "delivery due", "delivery due date", "due date"],
             DocumentType.quotation: ["유효기간", "견적유효기간", "valid until", "expiration date"],
             DocumentType.delivery_note: ["납품일", "납품일자", "delivery date"],
-            DocumentType.invoice: ["지급기한", "결제기한", "payment due date", "due date"],
+            DocumentType.invoice: ["지급기한", "결제기한", "payment due date", "payment due", "due date"],
         }
         labels = labels_by_type.get(doc_type)
         return self._extract_labeled_date(text, labels) if labels else None
@@ -289,7 +317,8 @@ class DocumentParser:
         return value.isoformat() if value else None
 
     def _extract_line_items(self, lines: list[str]) -> list[dict]:
-        items = self._extract_key_value_line_items(lines)
+        item_block_lines = self._explicit_item_block_lines(lines)
+        items = self._extract_key_value_line_items(item_block_lines or lines)
         items.extend(self._extract_table_line_items(lines))
         for line in lines:
             normalized = re.sub(r"\s+", " ", line).strip()
@@ -304,21 +333,41 @@ class DocumentParser:
                 items.append(self._normalize_line_item(item))
         return self._dedupe_line_items(items)[:80]
 
+    def _explicit_item_block_lines(self, lines: list[str]) -> list[str]:
+        blocks: list[str] = []
+        in_block = False
+        for line in lines:
+            lowered = line.lower()
+            if "[item table start]" in lowered:
+                in_block = True
+                continue
+            if "[item table end]" in lowered:
+                in_block = False
+                continue
+            if in_block:
+                blocks.append(line)
+        return blocks
+
     def _extract_key_value_line_items(self, lines: list[str]) -> list[dict]:
         current: dict = {}
         items: list[dict] = []
         seen_item_field = False
+        last_field: str | None = None
         for line in lines:
             parsed = self._parse_labeled_line(line)
             if not parsed:
+                if last_field == "item_name" and current.get("item_name") and not self._looks_like_item_block_boundary(line):
+                    current["item_name"] = f"{current['item_name']} {self._clean_value(line) or ''}".strip()
                 continue
             field, value = parsed
             if field not in LINE_ITEM_LABELS:
+                last_field = None
                 continue
             if field == "item_name" and seen_item_field and self._line_item_has_identity(current):
                 items.append(self._normalize_line_item(current))
                 current = {}
             seen_item_field = True
+            last_field = field
             if field == "quantity":
                 quantity, unit = self._parse_quantity_and_unit(value)
                 current[field] = quantity
@@ -331,6 +380,14 @@ class DocumentParser:
         if self._line_item_has_identity(current):
             items.append(self._normalize_line_item(current))
         return items
+
+    def _looks_like_item_block_boundary(self, line: str) -> bool:
+        lowered = line.lower().strip()
+        if not lowered:
+            return True
+        if "[item table" in lowered:
+            return True
+        return bool(re.search(r"(공급가액\s*합계|세액\s*합계|총\s*합계|grand total|invoice total|subtotal total|vat total)", lowered, flags=re.IGNORECASE))
 
     def _extract_table_line_items(self, lines: list[str]) -> list[dict]:
         items: list[dict] = []
@@ -372,7 +429,7 @@ class DocumentParser:
         return [part.strip() for part in re.split(r"\s{2,}", stripped) if part.strip()]
 
     def _parse_labeled_line(self, line: str) -> tuple[str, str] | None:
-        match = re.match(r"\s*([^:：|]+?)\s*[:：]\s*(.+?)\s*$", line)
+        match = re.match(r"\s*([^:：|]+?)\s*[:：]\s*(.*?)\s*$", line)
         if not match:
             return None
         field = self._line_item_field_for_label(match.group(1))
@@ -388,9 +445,12 @@ class DocumentParser:
         return bool(item.get("item_name") or item.get("item_code"))
 
     def _normalize_line_item(self, item: dict) -> dict:
+        item_code = self._clean_code_value(item.get("item_code"))
         normalized = {
             "item_name": self._clean_value(item.get("item_name")),
-            "item_code": self._clean_value(item.get("item_code")),
+            "item_code": item_code,
+            "document_item_code": item_code,
+            "source_item_code": item_code,
             "specification": self._clean_value(item.get("specification")),
             "quantity": item.get("quantity"),
             "unit": self._clean_value(item.get("unit")),
@@ -399,16 +459,26 @@ class DocumentParser:
             "tax_amount": item.get("tax_amount"),
             "line_total": item.get("line_total"),
         }
+        if not normalized["unit"] and isinstance(normalized["quantity"], str):
+            _, unit = self._parse_quantity_and_unit(normalized["quantity"])
+            normalized["unit"] = unit
         if isinstance(normalized["quantity"], str):
             quantity, unit = self._parse_quantity_and_unit(normalized["quantity"])
             normalized["quantity"] = quantity
             normalized["unit"] = normalized["unit"] or unit
         for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
-            if isinstance(normalized[field], str):
-                normalized[field] = self._normalize_number(normalized[field])
+            normalized[field] = self._normalize_number(normalized[field])
         if normalized["quantity"] is None and normalized["unit"]:
             normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
         return {key: value for key, value in normalized.items() if value not in (None, "")}
+
+    def _clean_code_value(self, value: object) -> str | None:
+        cleaned = self._clean_value(value)
+        if not cleaned:
+            return None
+        if re.search(r"(미확인|신뢰도|검토|비어|missing|required)", cleaned, flags=re.IGNORECASE):
+            return None
+        return cleaned
 
     def _dedupe_line_items(self, items: list[dict]) -> list[dict]:
         deduped: list[dict] = []
@@ -478,6 +548,10 @@ class DocumentParser:
             return None
 
     def _normalize_number(self, value: object) -> int | float | None:
+        if value in (None, "", []):
+            return None
+        if re.search(r"(미확인|비어 있습니다|품목코드|검토|missing|required)", str(value), flags=re.IGNORECASE):
+            return None
         decimal = self._to_decimal(str(value))
         return self._number_value(decimal) if decimal is not None else None
 

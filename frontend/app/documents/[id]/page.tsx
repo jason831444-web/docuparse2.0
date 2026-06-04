@@ -78,6 +78,11 @@ function cleanLineItems(items: ManufacturingLineItem[]) {
 function itemMasterStatusLabel(status: string | null | undefined) {
   return {
     auto_matched: "자동 매칭됨",
+    direct_code_match: "직접 코드 매칭",
+    alias_matched: "별칭 매칭됨",
+    user_selected: "사용자 선택",
+    manual_confirmed: "사용자 확정",
+    ambiguous: "후보 확인 필요",
     needs_review: "검토 필요",
     unmatched: "미매칭",
     skipped_no_item_master: "품목마스터 없음",
@@ -85,8 +90,8 @@ function itemMasterStatusLabel(status: string | null | undefined) {
 }
 
 function itemMasterStatusClass(status: string | null | undefined) {
-  if (status === "auto_matched") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  if (status === "needs_review") return "border-amber-300 bg-amber-50 text-amber-800";
+  if (status === "auto_matched" || status === "direct_code_match" || status === "alias_matched" || status === "user_selected" || status === "manual_confirmed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "needs_review" || status === "ambiguous") return "border-amber-300 bg-amber-50 text-amber-800";
   if (status === "unmatched" || status === "skipped_no_item_master") return "border-slate-300 bg-slate-50 text-slate-700";
   return "border-slate-200 bg-white text-slate-600";
 }
@@ -152,6 +157,7 @@ export default function DocumentDetailPage() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("original");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
+  const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
@@ -290,16 +296,36 @@ export default function DocumentDetailPage() {
     form.setValue("line_items", items, { shouldDirty: true });
   }
 
-  function selectItemMasterCandidate(index: number, candidate: NonNullable<ManufacturingLineItem["item_master_candidates"]>[number]) {
+  async function selectItemMasterCandidate(index: number, candidate: NonNullable<ManufacturingLineItem["item_master_candidates"]>[number]) {
     const items = [...(form.getValues("line_items") || [])];
+    const currentItem = items[index] || {};
     items[index] = {
-      ...(items[index] || {}),
+      ...currentItem,
       internal_item_code: candidate.internal_item_code,
-      item_master_match_status: "auto_matched",
-      item_master_match_confidence: candidate.score,
+      item_master_match_status: "user_selected",
+      item_master_match_confidence: "1",
       item_master_match_reason: "USER_SELECTED_CANDIDATE",
     };
     form.setValue("line_items", items, { shouldDirty: true });
+    if ((aliasSaveRows[index] ?? true) && candidate.item_master_id && currentItem.item_name) {
+      try {
+        await api.itemMaster.createAlias(candidate.item_master_id, {
+          alias_name: String(currentItem.item_name),
+          alias_spec: currentItem.specification ? String(currentItem.specification) : null,
+          vendor_name: document?.vendor_name ?? document?.merchant_name ?? null,
+          customer_name: document?.customer_name ?? null,
+          source: "document_selection",
+          confidence: "1",
+          memo: `문서 ${document?.document_number || document?.original_filename || ""}에서 선택됨`.trim(),
+          active: true,
+        });
+        toast.success("후보를 선택하고 별칭으로 저장했습니다");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "별칭 저장에 실패했습니다. 선택 내용은 문서에 반영되었습니다");
+      }
+    } else {
+      toast.success("선택한 내부 품목코드를 문서에 반영했습니다");
+    }
   }
 
   function removeLineItem(index: number) {
@@ -732,6 +758,14 @@ export default function DocumentDetailPage() {
                               ) : null}
                               {item.item_master_candidates?.length ? (
                                 <div className="mt-2 grid gap-1">
+                                  <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                    <input
+                                      type="checkbox"
+                                      checked={aliasSaveRows[index] ?? true}
+                                      onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [index]: event.target.checked })}
+                                    />
+                                    이 선택을 별칭으로 저장
+                                  </label>
                                   {item.item_master_candidates.slice(0, 3).map((candidate) => (
                                     <div key={candidate.internal_item_code} className="rounded-md border bg-white p-2 text-xs">
                                       <div className="flex items-center justify-between gap-2">

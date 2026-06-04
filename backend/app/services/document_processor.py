@@ -162,7 +162,7 @@ class DocumentProcessor:
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
             document.workflow_metadata = sanitize_for_postgres(workflow.workflow_metadata or None)
-            document.review_required = document.review_required or bool(workflow.warnings)
+            document.review_required = document.review_required or bool((workflow.workflow_metadata or {}).get("review_required"))
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
             if parser_only:
                 logger.info("Parser-only processing completed for document %s.", document.id)
@@ -422,12 +422,12 @@ class DocumentProcessor:
                 low_confidence.append(f"missing_quantity{code_suffix}")
             if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 low_confidence.append(f"missing_price_or_total{code_suffix}")
-            if item.get("item_code") in (None, "", []):
+            if item.get("item_code") in (None, "", []) and item.get("internal_item_code") in (None, "", []):
                 low_confidence.append(f"missing_item_code{code_suffix}")
             match_status = item.get("item_master_match_status")
             if match_status == "skipped_no_item_master" and item.get("item_code") in (None, "", []):
                 low_confidence.append("item_matching_skipped")
-            elif match_status in {"needs_review", "unmatched"}:
+            elif match_status in {"ambiguous", "needs_review", "unmatched"}:
                 low_confidence.append(f"item_master_match_required{code_suffix}")
         if self._manufacturing_total_mismatch(document):
             low_confidence.append("amount_mismatch")
