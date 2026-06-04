@@ -181,7 +181,7 @@ def test_multiple_txt_manufacturing_documents_finish_without_ai_interpretation(t
 
     assert statuses[0] == ProcessingStatus.ready
     assert statuses[1] == ProcessingStatus.needs_review
-    assert statuses[2] == ProcessingStatus.needs_review
+    assert statuses[2] == ProcessingStatus.ready
 
 
 def test_ai_interpretation_path_keeps_ai_provider_metadata(tmp_path):

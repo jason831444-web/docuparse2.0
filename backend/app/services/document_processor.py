@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.document import Document, ProcessingStatus
 from app.services.ai_document_understanding import LocalDocumentAIService, get_document_ai_service
+from app.services.ai_escalation import should_escalate_to_ai
 from app.services.category_interpretation import CategoryInterpretation, CategoryInterpretationService
 from app.services.category_taxonomy import clean_tags_for_context, normalize_category
 from app.services.document_router import LightweightDocumentRouter
@@ -115,7 +116,17 @@ class DocumentProcessor:
             document.low_confidence_fields = sanitize_for_postgres([] if deterministic_first and parsed.line_items else ai_result.low_confidence_fields or [])
             document.category = ai_result.category or parsed.category
             document.tags = sanitize_for_postgres(ai_result.tags or parsed.tags)
-            interpretation = self._interpret_document(document, ai_result.cleaned_raw_text or raw_text, normalized, parsed, deterministic_first)
+            ai_escalation = should_escalate_to_ai(normalized, parsed, extraction_quality)
+            interpretation = self._interpret_document(
+                document,
+                ai_result.cleaned_raw_text or raw_text,
+                normalized,
+                parsed,
+                deterministic_first,
+                ai_escalation.should_escalate and self._is_ai_escalation_source(normalized),
+            )
+            if deterministic_first and self._is_manufacturing_parsed_type(parsed):
+                interpretation = self._normalize_manufacturing_interpretation(interpretation, parsed)
             parser_only = self._is_parser_only_interpretation(interpretation)
             provider_chain = self._provider_chain(
                 normalized,
@@ -130,6 +141,7 @@ class DocumentProcessor:
             document.document_type = self._refined_document_type(document.document_type, interpretation)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.document_type = parsed.document_type
+                document.ai_document_type = parsed.document_type
                 document.category = parsed.category or parsed.document_type.value
                 document.tags = [parsed.document_type.value]
                 document.line_items = sanitize_for_postgres(self.item_master_matcher.match_line_items(db, document.line_items or []))
@@ -150,6 +162,7 @@ class DocumentProcessor:
                 extraction_quality,
                 structured_quality,
                 interpretation,
+                ai_escalation,
             ))
             document.review_required = document.review_required or self._manufacturing_review_required(document)
             workflow = self.workflow_enrichment.enrich(document, ai_result.cleaned_raw_text or raw_text, interpretation)
@@ -162,7 +175,8 @@ class DocumentProcessor:
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
             document.workflow_metadata = sanitize_for_postgres(workflow.workflow_metadata or None)
-            document.review_required = document.review_required or bool((workflow.workflow_metadata or {}).get("review_required"))
+            workflow_review_required = bool((workflow.workflow_metadata or {}).get("review_required"))
+            document.review_required = workflow_review_required if self._is_manufacturing_type(document) else document.review_required or workflow_review_required
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
             if parser_only:
                 logger.info("Parser-only processing completed for document %s.", document.id)
@@ -183,8 +197,9 @@ class DocumentProcessor:
         normalized: NormalizedDocument,
         parsed: object,
         deterministic_first: bool,
+        ai_escalation_required: bool = False,
     ) -> CategoryInterpretation:
-        if self._should_skip_ai_interpretation(normalized, parsed, deterministic_first):
+        if self._should_skip_ai_interpretation(normalized, parsed, deterministic_first, ai_escalation_required):
             logger.info(
                 "Skipping AI interpretation because deterministic parser result is sufficient for document %s.",
                 document.id,
@@ -212,14 +227,27 @@ class DocumentProcessor:
             interpretation.diagnostics.append(f"AI interpretation failed; parser result used: {exc}")
             return interpretation
 
-    def _should_skip_ai_interpretation(self, normalized: NormalizedDocument, parsed: object, deterministic_first: bool) -> bool:
+    def _should_skip_ai_interpretation(self, normalized: NormalizedDocument, parsed: object, deterministic_first: bool, ai_escalation_required: bool = False) -> bool:
         if not deterministic_first:
+            return False
+        if ai_escalation_required:
             return False
         source_type = (normalized.source_file_type or "").lower()
         extraction_method = (normalized.extraction_method or "").lower()
-        if source_type not in {"txt", "text"} and "txt_direct" not in extraction_method:
+        if source_type not in {"txt", "text", "pdf"} and "txt_direct" not in extraction_method and "pdf_text" not in extraction_method:
             return False
         return self._is_manufacturing_parsed_type(parsed) and bool(getattr(parsed, "line_items", None))
+
+    def _is_ai_escalation_source(self, normalized: NormalizedDocument) -> bool:
+        source_type = (normalized.source_file_type or "").lower()
+        extraction_method = (normalized.extraction_method or "").lower()
+        return (
+            source_type in {"pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp"}
+            or "ocr" in extraction_method
+            or "pdf" in extraction_method
+            or normalized.heavy_ai_candidate
+            or normalized.partial_support
+        )
 
     def _is_parser_only_interpretation(self, interpretation: CategoryInterpretation) -> bool:
         chain = set(interpretation.provider_chain or [])
@@ -260,6 +288,7 @@ class DocumentProcessor:
         extraction_quality: QualityEvaluation,
         structured_quality: QualityEvaluation,
         interpretation: CategoryInterpretation | None = None,
+        ai_escalation=None,
     ) -> dict:
         metadata = {
             "source_file_type": normalized.source_file_type,
@@ -309,6 +338,12 @@ class DocumentProcessor:
                 "refinement_status": interpretation.refinement_status,
                 "diagnostics": interpretation.diagnostics,
                 "ai_assisted": interpretation.ai_assisted,
+            }
+        if ai_escalation:
+            metadata["ai_escalation_decision"] = {
+                "should_escalate": ai_escalation.should_escalate,
+                "reasons": ai_escalation.reasons,
+                "quality_signals": ai_escalation.quality_signals,
             }
         return metadata
 
@@ -371,6 +406,19 @@ class DocumentProcessor:
             return date.fromisoformat(str(value)[:10])
         except ValueError:
             return None
+
+    def _normalize_manufacturing_interpretation(self, interpretation: CategoryInterpretation, parsed: object) -> CategoryInterpretation:
+        doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
+        if not doc_type:
+            return interpretation
+        if interpretation.profile != doc_type or interpretation.category != doc_type or interpretation.subtype != doc_type:
+            interpretation.diagnostics.append(
+                f"Manufacturing profile normalized from category={interpretation.category}, profile={interpretation.profile}, subtype={interpretation.subtype} to {doc_type}."
+            )
+        interpretation.category = doc_type
+        interpretation.profile = doc_type
+        interpretation.subtype = doc_type
+        return interpretation
 
     def _sum_line_item_field(self, line_items: list[dict], field: str) -> Decimal | None:
         total = Decimal("0")
@@ -473,8 +521,16 @@ class DocumentProcessor:
                 return True
         if not found:
             return False
-        tolerance = max(Decimal("1"), abs(document.extracted_amount) * Decimal("0.02"))
+        tolerance = self._amount_tolerance(document.currency)
         return abs(document.extracted_amount - line_total) > tolerance
+
+    def _amount_tolerance(self, currency: str | None) -> Decimal:
+        normalized = (currency or "KRW").upper()
+        if normalized == "USD":
+            return Decimal("0.05")
+        if normalized == "KRW":
+            return Decimal("10")
+        return Decimal("1")
 
     def _apply_title_hint(self, current_title: str | None, interpretation: CategoryInterpretation) -> str | None:
         if not interpretation.title_hint:

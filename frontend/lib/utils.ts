@@ -56,6 +56,17 @@ export function primaryCategoryLabel(document: { category?: string | null; workf
   return titleCaseLabel(document.category || profile || null);
 }
 
+export function profileLabelForDocument(document: { document_type?: string | null; workflow_metadata?: Record<string, unknown> | null }) {
+  const manufacturingProfiles = new Set(["purchase_order", "quotation", "transaction_statement", "delivery_note", "invoice", "packing_list", "inspection_report", "contract"]);
+  const interpretation = (document.workflow_metadata?.category_interpretation ?? {}) as Record<string, unknown>;
+  const profile = typeof interpretation.profile === "string" ? interpretation.profile : null;
+  const documentType = document.document_type || null;
+  if (documentType && manufacturingProfiles.has(documentType) && profile && profile !== documentType && manufacturingProfiles.has(profile)) {
+    return titleCaseLabel(documentType);
+  }
+  return titleCaseLabel(profile || documentType);
+}
+
 export function extractionMethodLabel(document: { provider_chain?: string | null; extraction_method?: string | null; extraction_provider?: string | null; refinement_provider?: string | null }) {
   const chain = `${document.provider_chain || ""}+${document.extraction_method || ""}+${document.extraction_provider || ""}+${document.refinement_provider || ""}`.toLowerCase();
   const parts: string[] = [];
@@ -134,6 +145,10 @@ export interface NormalizedReviewIssue {
   field?: string;
   item_index?: number;
   severity?: string;
+  document_total?: string | number | null;
+  line_total_sum?: string | number | null;
+  difference?: string | number | null;
+  currency?: string | null;
 }
 
 export function normalizedReviewIssues(document: {
@@ -159,6 +174,10 @@ export function normalizedReviewIssues(document: {
           field: typeof issue.field === "string" ? issue.field : undefined,
           item_index: typeof issue.item_index === "number" ? issue.item_index : undefined,
           severity: typeof issue.severity === "string" ? issue.severity : undefined,
+          document_total: typeof issue.document_total === "string" || typeof issue.document_total === "number" ? issue.document_total : undefined,
+          line_total_sum: typeof issue.line_total_sum === "string" || typeof issue.line_total_sum === "number" ? issue.line_total_sum : undefined,
+          difference: typeof issue.difference === "string" || typeof issue.difference === "number" ? issue.difference : undefined,
+          currency: typeof issue.currency === "string" ? issue.currency : undefined,
         };
     if (!normalized.message_ko) return;
     const messageKey = normalized.message_ko.replace(/\s+/g, " ").trim();
@@ -181,6 +200,82 @@ export function normalizedReviewIssues(document: {
   (document.low_confidence_fields || []).forEach((field) => add({ code: field.split(":", 1)[0], message_ko: reviewReasonLabel(field), field }));
   if (document.review_required && !issues.length) add({ code: "review_required", message_ko: "검토 필요 항목을 확인하세요.", field: "document" });
   return issues;
+}
+
+export function reviewIssueAmountLines(issue: NormalizedReviewIssue) {
+  if (issue.code !== "amount_mismatch") return [];
+  const currency = issue.currency || "KRW";
+  const lines: string[] = [];
+  if (issue.document_total !== undefined && issue.document_total !== null && issue.document_total !== "") {
+    lines.push(`문서 총액: ${formatMoney(issue.document_total, currency)}`);
+  }
+  if (issue.line_total_sum !== undefined && issue.line_total_sum !== null && issue.line_total_sum !== "") {
+    lines.push(`품목 합계: ${formatMoney(issue.line_total_sum, currency)}`);
+  }
+  if (issue.difference !== undefined && issue.difference !== null && issue.difference !== "") {
+    lines.push(`차이: ${formatMoney(issue.difference, currency)}`);
+  }
+  return lines;
+}
+
+export function reviewIssueSummary(issue: NormalizedReviewIssue) {
+  if (issue.code === "amount_mismatch") return "문서 총액과 품목 합계 불일치";
+  return issue.message_ko;
+}
+
+export function displayWarningsWithoutReviewDuplicates(
+  warnings: string[],
+  issues: NormalizedReviewIssue[]
+) {
+  const issueMessages = new Set(issues.map((issue) => issue.message_ko.replace(/\s+/g, " ").trim()));
+  const hasAmountMismatch = issues.some((issue) => issue.code === "amount_mismatch");
+  return (warnings || []).filter((warning) => {
+    const normalized = warning.replace(/\s+/g, " ").trim();
+    if (issueMessages.has(normalized)) return false;
+    if (hasAmountMismatch && normalized.includes("합계") && normalized.includes("일치하지 않습니다")) return false;
+    return true;
+  });
+}
+
+export function isBlockingReviewIssue(issue: NormalizedReviewIssue) {
+  if (issue.severity === "info" || issue.severity === "low") return false;
+  return [
+    "missing_vendor_name",
+    "missing_customer_name",
+    "missing_document_number",
+    "missing_issue_date",
+    "missing_due_date",
+    "missing_payment_due_date",
+    "missing_line_items",
+    "missing_item_name",
+    "missing_quantity",
+    "missing_price_or_total",
+    "amount_mismatch",
+    "invalid_line_amount",
+    "internal_item_unmatched",
+    "internal_item_ambiguous",
+    "item_matching_skipped",
+    "review_required",
+    "validation_warning",
+  ].includes(issue.code);
+}
+
+export function blockingReviewIssues(document: {
+  workflow_metadata?: Record<string, unknown> | null;
+  warnings?: string[];
+  low_confidence_fields?: string[];
+  review_required?: boolean;
+}) {
+  return normalizedReviewIssues(document).filter(isBlockingReviewIssue);
+}
+
+export function informationalReviewIssues(document: {
+  workflow_metadata?: Record<string, unknown> | null;
+  warnings?: string[];
+  low_confidence_fields?: string[];
+  review_required?: boolean;
+}) {
+  return normalizedReviewIssues(document).filter((issue) => !isBlockingReviewIssue(issue));
 }
 
 export function reviewReasonLabel(value: string) {

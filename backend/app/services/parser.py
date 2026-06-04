@@ -218,14 +218,25 @@ class DocumentParser:
 
     def _extract_labeled_amount(self, text: str, labels: list[str]) -> Decimal | None:
         label_pattern = "|".join(re.escape(label) for label in labels)
-        matches = re.finditer(
-            rf"(?:^|\n)\s*(?:{label_pattern})\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*(?:원|KRW|USD)?",
-            text,
-            flags=re.IGNORECASE,
-        )
-        values = [self._to_decimal(match.group(1)) for match in matches]
+        values: list[Decimal] = []
+        for line in text.splitlines():
+            if self._looks_like_computed_or_note_amount(line):
+                continue
+            match = re.search(
+                rf"(?:^|\s)(?:{label_pattern})\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*(?:원|KRW|USD)?",
+                line,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                value = self._to_decimal(match.group(1))
+                if value is not None:
+                    values.append(value)
         values = [value for value in values if value is not None]
         return values[-1] if values else None
+
+    def _looks_like_computed_or_note_amount(self, line: str) -> bool:
+        lowered = line.lower()
+        return bool(re.search(r"(실제\s*품목\s*합계|품목\s*합계는|line\s*item\s*(?:sum|total)|computed)", lowered, flags=re.IGNORECASE))
 
     def _extract_currency(self, text: str) -> str | None:
         if re.search(r"\bUSD\b|\$", text, flags=re.IGNORECASE):
@@ -298,7 +309,7 @@ class DocumentParser:
         labels_by_type = {
             DocumentType.purchase_order: ["발행일", "발행일자", "작성일", "발주일", "발주일자", "issue date", "date"],
             DocumentType.quotation: ["견적일", "발행일", "작성일", "quotation date", "quote date", "date"],
-            DocumentType.transaction_statement: ["발행일", "작성일", "issue date"],
+            DocumentType.transaction_statement: ["거래일자", "거래일", "발행일", "작성일", "transaction date", "issue date"],
             DocumentType.delivery_note: ["발행일", "작성일", "issue date"],
             DocumentType.invoice: ["발행일", "발행일자", "작성일", "계산서일자", "invoice date", "issue date", "date"],
         }
@@ -322,7 +333,10 @@ class DocumentParser:
         item_block_lines = self._explicit_item_block_lines(lines)
         items = self._extract_key_value_line_items(item_block_lines or lines)
         items.extend(self._extract_table_line_items(lines))
-        for line in lines:
+        table_row_indexes = self._table_row_indexes(lines)
+        for line_index, line in enumerate(lines):
+            if line_index in table_row_indexes:
+                continue
             normalized = re.sub(r"\s+", " ", line).strip()
             if not normalized or not self._looks_like_item_line(normalized):
                 continue
@@ -334,6 +348,40 @@ class DocumentParser:
             if item and item.get("item_name"):
                 items.append(self._normalize_line_item(item))
         return self._dedupe_line_items(items)[:80]
+
+    def _table_row_indexes(self, lines: list[str]) -> set[int]:
+        row_indexes: set[int] = set()
+        for index, line in enumerate(lines):
+            headers = self._split_table_line(line)
+            mapped_headers = [self._line_item_field_for_label(header) for header in headers]
+            if len(headers) < 3 or sum(bool(header) for header in mapped_headers) < 3:
+                continue
+            for row_index, row in enumerate(lines[index + 1:], start=index + 1):
+                cells = self._split_table_line(row)
+                if len(cells) < 3:
+                    break
+                if sum(bool(self._line_item_field_for_label(cell)) for cell in cells) >= 3:
+                    break
+                if self._looks_like_table_data_row(cells, mapped_headers):
+                    row_indexes.add(row_index)
+                    continue
+                break
+            if row_indexes:
+                break
+        return row_indexes
+
+    def _looks_like_table_data_row(self, cells: list[str], mapped_headers: list[str | None]) -> bool:
+        if len(cells) < 3:
+            return False
+        mapped_count = sum(bool(header) for header in mapped_headers)
+        if mapped_count < 3:
+            return False
+        normalized = self._normalize_line_item({
+            field: cell
+            for field, cell in zip(mapped_headers, cells + [""] * max(0, len(mapped_headers) - len(cells)))
+            if field
+        })
+        return bool(normalized.get("item_name") or normalized.get("item_code"))
 
     def _explicit_item_block_lines(self, lines: list[str]) -> list[str]:
         blocks: list[str] = []
@@ -486,6 +534,8 @@ class DocumentParser:
         total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
         if tax is not None and total is not None and tax > total:
             warnings.append("invalid_tax_greater_than_total")
+        if supply is not None and tax is not None and supply > 0 and tax > supply:
+            warnings.append("invalid_tax_greater_than_supply")
         if supply is not None and total is not None and supply > total:
             warnings.append("invalid_supply_greater_than_total")
         if supply is not None and tax is not None and total is not None and abs((supply + tax) - total) > max(Decimal("1"), abs(total) * Decimal("0.02")):

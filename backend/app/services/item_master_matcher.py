@@ -209,15 +209,21 @@ class ItemMasterMatcher:
             item["item_master_candidates"] = candidates[:5]
             item["item_master_match_confidence"] = best["score"] if best else None
             alias_tie = bool(best and (best.get("alias_code_match") or best.get("alias_name_match")) and sum(1 for candidate in candidates if candidate.get("alias_code_match") or candidate.get("alias_name_match")) > 1)
+            material_ambiguous = bool(best and self._has_broad_material_ambiguity(item, candidates))
             if best and best.get("direct_code_match"):
                 item["internal_item_code"] = best["internal_item_code"]
                 item["item_master_match_status"] = "direct_code_match"
                 item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_INTERNAL_CODE"
             elif best and (best.get("alias_code_match") or best.get("alias_name_match")) and not alias_tie:
-                item["internal_item_code"] = best["internal_item_code"]
-                item["item_master_match_status"] = "alias_matched"
-                item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_ITEM_ALIAS"
-            elif best and Decimal(str(best["score"])) >= self.auto_threshold and not self._is_ambiguous(best, candidates):
+                if material_ambiguous and not best.get("alias_code_match"):
+                    item["internal_item_code"] = None
+                    item["item_master_match_status"] = "ambiguous"
+                    item["item_master_match_reason"] = "BROAD_MATERIAL_GRADE_REVIEW_REQUIRED"
+                else:
+                    item["internal_item_code"] = best["internal_item_code"]
+                    item["item_master_match_status"] = "alias_matched"
+                    item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_ITEM_ALIAS"
+            elif best and Decimal(str(best["score"])) >= self.auto_threshold and not self._is_ambiguous(best, candidates) and not material_ambiguous:
                 item["internal_item_code"] = best["internal_item_code"]
                 item["item_master_match_status"] = "auto_matched"
                 item["item_master_match_reason"] = "HIGH_CONFIDENCE_MATCH"
@@ -372,6 +378,39 @@ class ItemMasterMatcher:
         best_score = Decimal(str(best["score"]))
         second_score = Decimal(str(candidates[1]["score"]))
         return best_score - second_score <= Decimal("0.03")
+
+    def _has_broad_material_ambiguity(self, item: dict[str, Any], candidates: list[dict[str, Any]]) -> bool:
+        source = f"{item.get('item_name') or ''} {item.get('specification') or ''}"
+        if self._explicit_material_grade(source):
+            return False
+        if not self._mentions_broad_stainless_or_plate(source):
+            return False
+        grades = {
+            grade
+            for candidate in candidates[:6]
+            if Decimal(str(candidate.get("score", "0"))) >= Decimal("0.35")
+            for grade in [self._explicit_material_grade(" ".join(str(candidate.get(key) or "") for key in ["internal_item_code", "item_name", "spec"]))]
+            if grade
+        }
+        return len(grades) >= 2
+
+    def _mentions_broad_stainless_or_plate(self, value: object) -> bool:
+        text = str(value or "").lower()
+        return bool(re.search(r"(스텐|스테인리스|스테인레스|sus(?!\\s*\\d)|stainless|plate|철판|판재)", text))
+
+    def _explicit_material_grade(self, value: object) -> str | None:
+        compact = normalize_item_text(value)
+        patterns = [
+            ("sus304", r"sus304|sts304|스테인리스304|스텐304|304"),
+            ("sus316", r"sus316|sts316|스테인리스316|스텐316|316"),
+            ("ss400", r"ss400"),
+            ("al6061", r"al6061|6061"),
+            ("s45c", r"s45c"),
+        ]
+        for grade, pattern in patterns:
+            if re.search(pattern, compact):
+                return grade
+        return None
 
     def _looks_like_real_code(self, value: object) -> bool:
         text = str(value or "").strip()

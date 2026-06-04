@@ -141,8 +141,8 @@ class DocumentWorkflowEnrichmentService:
         total = self._korean_money(document.extracted_amount, document.currency or "KRW")
         review_reasons = self._manufacturing_review_reasons(document, business_fields)
         review_issues = self._normalized_review_issues(document, review_reasons)
-        warnings = self._dedupe([issue["message_ko"] for issue in review_issues])
-        review_required = bool(document.review_required or any(self._is_blocking_review_issue(issue) for issue in review_issues))
+        warnings = self._dedupe([issue["message_ko"] for issue in review_issues if self._is_blocking_review_issue(issue)])
+        review_required = any(self._is_blocking_review_issue(issue) for issue in review_issues)
         export_ready = not review_required
         summary = self._manufacturing_summary(
             doc_type,
@@ -259,6 +259,8 @@ class DocumentWorkflowEnrichmentService:
             for warning in item.get("validation_warnings") or []:
                 if warning == "invalid_tax_greater_than_total":
                     reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 세액이 합계금액보다 큽니다.", "line_items.tax_amount", index - 1))
+                elif warning == "invalid_tax_greater_than_supply":
+                    reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 세액이 공급가액보다 큽니다.", "line_items.tax_amount", index - 1))
                 elif warning == "invalid_supply_greater_than_total":
                     reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 공급가액이 합계금액보다 큽니다.", "line_items.supply_amount", index - 1))
                 elif warning == "invalid_line_total":
@@ -278,12 +280,22 @@ class DocumentWorkflowEnrichmentService:
         ):
             reasons.append(self._review_reason("item_matching_skipped", "내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.", "line_items.internal_item_code", severity="info"))
         if self._manufacturing_total_mismatch(document):
+            line_total_sum = self._line_items_total(document)
+            document_total = document.extracted_amount
+            difference = abs(document_total - line_total_sum) if document_total is not None and line_total_sum is not None else None
+            currency = document.currency or "KRW"
             reasons.append(self._review_reason(
                 "amount_mismatch",
-                "문서 합계금액과 품목 합계금액이 일치하지 않습니다.",
+                self._amount_mismatch_message(document_total, line_total_sum, difference, currency),
                 "total_amount",
-                expected=self._line_items_total(document),
-                actual=document.extracted_amount,
+                expected=line_total_sum,
+                actual=document_total,
+                extra={
+                    "document_total": str(document_total) if document_total is not None else None,
+                    "line_total_sum": str(line_total_sum) if line_total_sum is not None else None,
+                    "difference": str(difference) if difference is not None else None,
+                    "currency": currency,
+                },
             ))
         return self._dedupe_review_reasons(reasons)
 
@@ -293,18 +305,40 @@ class DocumentWorkflowEnrichmentService:
         metadata = document.workflow_metadata or {}
         for message in self._string_list(metadata.get("validation_warnings")):
             normalized_message = self._normalize_review_message(message)
+            if self._is_legacy_amount_mismatch_message(message) and any(issue.get("code") == "amount_mismatch" for issue in issues):
+                continue
             if normalized_message not in known_messages:
                 issues.append(self._review_reason("validation_warning", message, "document"))
                 known_messages.add(normalized_message)
         for field in list(document.low_confidence_fields or []):
+            code = field.split(":", 1)[0]
+            item_index = self._low_confidence_item_index(field)
+            if code == "amount_mismatch" and any(issue.get("code") == "amount_mismatch" for issue in issues):
+                continue
+            if code == "missing_item_code":
+                if any(issue.get("code") == "missing_document_item_code" and issue.get("item_index") == item_index for issue in issues):
+                    continue
+                field = field.replace("missing_item_code", "missing_document_item_code", 1)
+                code = "missing_document_item_code"
+            if code == "item_master_match_required" and any(
+                issue.get("code") in {"internal_item_ambiguous", "internal_item_unmatched"} and issue.get("item_index") == item_index
+                for issue in issues
+            ):
+                continue
             message = self._low_confidence_message(field)
             normalized_message = self._normalize_review_message(message)
             if normalized_message not in known_messages:
-                issues.append(self._review_reason(field.split(":", 1)[0], message, self._low_confidence_field(field)))
+                issues.append(self._review_reason(code, message, self._low_confidence_field(field), item_index=item_index))
                 known_messages.add(normalized_message)
-        if document.review_required and not issues:
-            issues.append(self._review_reason("review_required", "검토 필요 항목을 확인하세요.", "document"))
         return self._dedupe_review_reasons(issues, by_message=True)
+
+    def _is_legacy_amount_mismatch_message(self, message: str) -> bool:
+        return "문서 합계금액" in message and "품목 합계금액" in message and "일치하지 않습니다" in message
+
+    def _low_confidence_item_index(self, value: str) -> int | None:
+        _, _, item_token = value.partition(":")
+        item_number = item_token.replace("item_", "")
+        return int(item_number) - 1 if item_number.isdigit() else None
 
     def _low_confidence_message(self, value: str) -> str:
         code, _, item_token = value.partition(":")
@@ -354,6 +388,7 @@ class DocumentWorkflowEnrichmentService:
         severity: str = "warning",
         expected: Decimal | None = None,
         actual: Decimal | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         reason: dict[str, Any] = {
             "code": code,
@@ -367,6 +402,8 @@ class DocumentWorkflowEnrichmentService:
             reason["expected"] = str(expected)
         if actual is not None:
             reason["actual"] = str(actual)
+        if extra:
+            reason.update({key: value for key, value in extra.items() if value is not None})
         return reason
 
     def _is_blocking_review_issue(self, issue: dict[str, Any]) -> bool:
@@ -431,8 +468,16 @@ class DocumentWorkflowEnrichmentService:
                 return True
         if not found:
             return False
-        tolerance = max(Decimal("1"), abs(document.extracted_amount) * Decimal("0.02"))
+        tolerance = self._amount_tolerance(document.currency)
         return abs(document.extracted_amount - line_total) > tolerance
+
+    def _amount_tolerance(self, currency: str | None) -> Decimal:
+        normalized = (currency or "KRW").upper()
+        if normalized == "USD":
+            return Decimal("0.05")
+        if normalized == "KRW":
+            return Decimal("10")
+        return Decimal("1")
 
     def _line_items_total(self, document: Document) -> Decimal | None:
         total = Decimal("0")
@@ -612,6 +657,12 @@ class DocumentWorkflowEnrichmentService:
         amount = f"{int(value):,}" if value == value.to_integral_value() else f"{float(value):,.2f}"
         suffix = "원" if currency.upper() == "KRW" else f" {currency.upper()}"
         return f"{amount}{suffix}"
+
+    def _amount_mismatch_message(self, document_total: Decimal | None, line_total_sum: Decimal | None, difference: Decimal | None, currency: str) -> str:
+        document_total_text = self._korean_money(document_total, currency) or "미확인"
+        line_total_text = self._korean_money(line_total_sum, currency) or "미확인"
+        difference_text = self._korean_money(difference, currency) or "미확인"
+        return f"문서 총액 {document_total_text}과 품목 합계 {line_total_text}이 일치하지 않습니다. 차이 {difference_text}."
 
     def _with_particle(self, value: str) -> str:
         last = value[-1] if value else ""

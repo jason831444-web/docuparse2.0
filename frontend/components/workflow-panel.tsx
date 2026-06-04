@@ -2,7 +2,7 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { businessFieldDate, businessIssueDate, documentFieldLabels, formatDate, formatMoney, normalizedReviewIssues, primaryCategoryLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, primaryCategoryLabel, reviewIssueSummary } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
@@ -14,6 +14,18 @@ function ListBlock({ title, items, warning = false }: { title: string; items: st
         {items.map((item) => <li key={item}>{item}</li>)}
       </ul>
     </div>
+  );
+}
+
+function InfoDetails({ items }: { items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <details className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+      <summary className="cursor-pointer text-xs font-medium text-slate-600">참고 정보 {items.length}건</summary>
+      <ul className="mt-2 space-y-1 text-xs">
+        {items.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+    </details>
   );
 }
 
@@ -34,7 +46,10 @@ function ValueGrid({ values }: { values: Array<[string, string | null | undefine
 
 export function WorkflowPanel({ document }: { document: DocumentRecord }) {
   const labels = documentFieldLabels(document.document_type);
-  const reviewItems = normalizedReviewIssues(document).map((issue) => issue.message_ko);
+  const blockingIssues = blockingReviewIssues(document);
+  const reviewItems = blockingIssues.map(reviewIssueSummary);
+  const infoItems = informationalReviewIssues(document).map((issue) => issue.message_ko);
+  const warningItems = displayWarningsWithoutReviewDuplicates(document.warnings, blockingIssues);
   const roleDate = businessFieldDate(document);
   const issueDate = businessIssueDate(document);
   const exportReady = !document.review_required && document.processing_status === "confirmed";
@@ -68,7 +83,8 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
         />
         {document.workflow_summary ? <p className="rounded-md border bg-white p-3 text-sm">{document.workflow_summary}</p> : null}
         <ListBlock title="검토 필요 항목" items={reviewItems} warning />
-        <ListBlock title="처리 경고" items={document.warnings} warning />
+        <ListBlock title="처리 경고" items={warningItems} warning />
+        <InfoDetails items={infoItems} />
         <ListBlock title="주요 날짜" items={document.key_dates} />
       </CardContent>
     </Card>

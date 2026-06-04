@@ -397,7 +397,8 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
         follow_up_required=workflow.follow_up_required,
         urgency_level=workflow.urgency_level,
     )
-    document.review_required = document.review_required or bool(workflow.warnings)
+    workflow_metadata = workflow.workflow_metadata or {}
+    document.review_required = bool(workflow_metadata.get("review_required")) if "review_required" in workflow_metadata else bool(workflow.warnings)
     if document.processing_status not in {ProcessingStatus.processing, ProcessingStatus.queued, ProcessingStatus.failed, ProcessingStatus.confirmed}:
         document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
     db.add(document)

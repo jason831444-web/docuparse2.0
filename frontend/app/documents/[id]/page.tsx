@@ -32,48 +32,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
-import { businessFieldDate, documentFieldLabels, documentSummaryDetailed, extractionMethodLabel, formatDateTime, normalizedReviewIssues, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
+import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
+import { blockingReviewIssues, businessFieldDate, documentFieldLabels, documentSummaryDetailed, extractionMethodLabel, formatDateTime, informationalReviewIssues, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueSummary, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
-
-const numericLineItemFields = new Set<keyof ManufacturingLineItem>(["quantity", "unit_price", "supply_amount", "tax_amount", "line_total"]);
-const warningTextPattern = /(비어 있습니다|미확인|신뢰도 낮음|확인 필요|장부 매칭|검토 필요)/;
-
-function cleanLineItemValue(field: keyof ManufacturingLineItem, value: unknown) {
-  if (value === null || value === undefined) return "";
-  const text = String(value).trim();
-  if (!text || warningTextPattern.test(text)) return "";
-  if (numericLineItemFields.has(field)) {
-    const numeric = text.replace(/[,₩원\s]/g, "");
-    return /^-?\d+(\.\d+)?$/.test(numeric) ? numeric : "";
-  }
-  if ((field === "item_code" || field === "internal_item_code") && warningTextPattern.test(text)) return "";
-  return text;
-}
-
-function cleanLineItems(items: ManufacturingLineItem[]) {
-  return (items || []).map((item) => ({
-    ...item,
-    item_name: cleanLineItemValue("item_name", item.item_name),
-    item_code: cleanLineItemValue("item_code", item.item_code),
-    source_item_name: item.source_item_name ?? item.item_name ?? null,
-    source_item_code: item.source_item_code ?? item.item_code ?? null,
-    internal_item_code: cleanLineItemValue("internal_item_code", item.internal_item_code),
-    specification: cleanLineItemValue("specification", item.specification),
-    quantity: cleanLineItemValue("quantity", item.quantity),
-    unit: cleanLineItemValue("unit", item.unit),
-    unit_price: cleanLineItemValue("unit_price", item.unit_price),
-    supply_amount: cleanLineItemValue("supply_amount", item.supply_amount),
-    tax_amount: cleanLineItemValue("tax_amount", item.tax_amount),
-    line_total: cleanLineItemValue("line_total", item.line_total),
-    item_master_match_status: item.item_master_match_status ?? null,
-    item_master_match_confidence: item.item_master_match_confidence ?? null,
-    item_master_candidates: item.item_master_candidates ?? [],
-    item_master_match_reason: item.item_master_match_reason ?? null,
-  }));
-}
 
 function itemMasterStatusLabel(status: string | null | undefined) {
   return {
@@ -145,6 +109,18 @@ function InfoGrid({ items }: { items: Array<[string, string | null | undefined]>
         </div>
       ))}
     </div>
+  );
+}
+
+function InfoIssueDetails({ items }: { items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+      <summary className="cursor-pointer text-xs font-medium text-slate-600">참고 정보 {items.length}건</summary>
+      <ul className="mt-2 space-y-1 text-xs">
+        {items.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+    </details>
   );
 }
 
@@ -362,13 +338,14 @@ export default function DocumentDetailPage() {
 
   const isImage = document.mime_type.startsWith("image/");
   const categoryLabel = primaryCategoryLabel(document);
-  const categoryProfile = readString(categoryInterpretation?.profile);
+  const categoryProfileLabel = profileLabelForDocument(document);
   const titleHint = readString(categoryInterpretation?.title_hint);
   const surfacedFields = readList(categoryInterpretation?.surfaced_fields);
   const isConfirmed = document.processing_status === "confirmed";
   const selectedCategory = form.watch("category") ?? "";
   const lineItems = form.watch("line_items") ?? [];
-  const reviewIssues = normalizedReviewIssues(document);
+  const blockingIssues = blockingReviewIssues(document);
+  const infoIssues = informationalReviewIssues(document);
   const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
 
@@ -430,7 +407,7 @@ export default function DocumentDetailPage() {
         <Card>
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">AI 분류 프로필</p>
-            <p className="mt-1 font-semibold">{categoryProfile ? titleCaseLabel(categoryProfile) : "표시된 값 없음"}</p>
+            <p className="mt-1 font-semibold">{categoryProfileLabel}</p>
           </CardContent>
         </Card>
         <Card>
@@ -527,7 +504,7 @@ export default function DocumentDetailPage() {
                 <InfoGrid
                   items={[
                     ["문서 유형", categoryLabel],
-                    ["분류 프로필", categoryProfile ? titleCaseLabel(categoryProfile) : null],
+                    ["분류 프로필", categoryProfileLabel],
                     ["제목 후보", titleHint],
                   ]}
                 />
@@ -587,9 +564,22 @@ export default function DocumentDetailPage() {
                   ["문서 유형", categoryLabel],
                   ["처리 상태", titleCaseLabel(document.processing_status)],
                   ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
-                  ["검토 필요 항목", reviewIssues.length ? reviewIssues.map((issue) => issue.message_ko).join(", ") : "없음"],
+                  ["검토 필요 항목", blockingIssues.length ? blockingIssues.map(reviewIssueSummary).join(", ") : "없음"],
                 ]}
               />
+              <InfoIssueDetails items={infoIssues.map((issue) => issue.message_ko)} />
+              {blockingIssues.some((issue) => reviewIssueAmountLines(issue).length) ? (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  {blockingIssues.filter((issue) => reviewIssueAmountLines(issue).length).map((issue) => (
+                    <div key={`${issue.code}-${issue.message_ko}`}>
+                      <p className="font-medium">{issue.message_ko}</p>
+                      <div className="mt-2 grid gap-1 text-xs sm:grid-cols-3">
+                        {reviewIssueAmountLines(issue).map((line) => <span key={line}>{line}</span>)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           <Card className="overflow-hidden">
@@ -723,9 +713,10 @@ export default function DocumentDetailPage() {
                                 field === "quantity" ? `missing_quantity:${itemCode}` : null,
                                 field === "unit_price" || field === "line_total" ? `missing_price_or_total:${itemCode}` : null,
                               ].filter(Boolean);
-                              const fieldIssues = reviewIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
+                              const fieldBlockingIssues = blockingIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
+                              const fieldInfoIssues = infoIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
                               const low =
-                                fieldIssues.length > 0 ||
+                                fieldBlockingIssues.length > 0 ||
                                 structuredLowCodes.some((code) => lowConfidenceFields.includes(code as string)) ||
                                 lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) ||
                                 (field === "line_total" && lowConfidenceFields.includes("missing_line_items"));
@@ -737,10 +728,15 @@ export default function DocumentDetailPage() {
                                     value={String(item?.[field] ?? "")}
                                     onChange={(event) => updateLineItem(index, field, event.target.value)}
                                   />
-                                  {fieldIssues.length ? (
+                                  {fieldBlockingIssues.length || fieldInfoIssues.length ? (
                                     <div className="mt-1 flex flex-wrap gap-1">
-                                      {fieldIssues.map((issue) => (
+                                      {fieldBlockingIssues.map((issue) => (
                                         <Badge key={`${issue.code}-${issue.message_ko}`} className="border-amber-300 bg-amber-50 text-[11px] text-amber-800">
+                                          {numericLineItemFields.has(field) ? "확인 필요" : issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
+                                        </Badge>
+                                      ))}
+                                      {fieldInfoIssues.map((issue) => (
+                                        <Badge key={`${issue.code}-${issue.message_ko}`} variant="outline" className="bg-white text-[11px] text-slate-600">
                                           {issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
                                         </Badge>
                                       ))}

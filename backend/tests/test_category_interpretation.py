@@ -285,8 +285,13 @@ def test_manufacturing_review_issues_and_item_matching_are_normalized():
     mismatch_workflow = service.enrich(mismatch_document, mismatch_text)
     mismatch_issues = mismatch_workflow.workflow_metadata["normalized_review_issues"]
     assert [issue["code"] for issue in mismatch_issues] == ["amount_mismatch"]
-    assert [issue["message_ko"] for issue in mismatch_issues].count("문서 합계금액과 품목 합계금액이 일치하지 않습니다.") == 1
-    assert mismatch_workflow.warnings == ["문서 합계금액과 품목 합계금액이 일치하지 않습니다."]
+    assert [issue["message_ko"] for issue in mismatch_issues].count(
+        "문서 총액 250,000원과 품목 합계 220,000원이 일치하지 않습니다. 차이 30,000원."
+    ) == 1
+    assert mismatch_issues[0]["document_total"] == "250000"
+    assert mismatch_issues[0]["line_total_sum"] == "220000"
+    assert mismatch_issues[0]["difference"] == "30000"
+    assert mismatch_workflow.warnings == ["문서 총액 250,000원과 품목 합계 220,000원이 일치하지 않습니다. 차이 30,000원."]
 
     missing_quantity_text = (root / "08_missing_quantity_needs_review.txt").read_text()
     missing_quantity = parser.parse(missing_quantity_text, "08_missing_quantity_needs_review.txt")
