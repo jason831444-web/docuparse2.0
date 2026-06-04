@@ -420,8 +420,10 @@ class DocumentProcessor:
                 low_confidence.append(f"missing_item_name{code_suffix}")
             if item.get("quantity") in (None, "", []):
                 low_confidence.append(f"missing_quantity{code_suffix}")
-            if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+            if doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 low_confidence.append(f"missing_price_or_total{code_suffix}")
+            if item.get("validation_warnings"):
+                low_confidence.append(f"invalid_line_amount{code_suffix}")
             if item.get("item_code") in (None, "", []) and item.get("internal_item_code") in (None, "", []):
                 low_confidence.append(f"missing_item_code{code_suffix}")
             match_status = item.get("item_master_match_status")

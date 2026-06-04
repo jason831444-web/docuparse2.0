@@ -1,0 +1,13 @@
+세금계산서/인보이스
+
+계산서번호: INV-GEN-2001
+계산서일자: 2026-07-21
+지급기한: 2026-08-05
+공급자: 성진테스트전자
+공급받는자: 네오팩토리
+청구금액: 2,904,000원
+
+No, Item Name, Vendor SKU, Spec, Qty, Unit, Unit Price, Supply Amount, VAT, Line Total
+1, Cable Harness 500mm, CBL-HAR-500, 500mm, 1200, EA, 2200, 2640000, 264000, 2904000
+
+Invoice Total: KRW 2904000

@@ -264,7 +264,7 @@ def test_active_alias_records_are_used_and_inactive_aliases_are_ignored():
         masters,
     )[0]
 
-    assert active_match["item_master_match_status"] == "auto_matched"
+    assert active_match["item_master_match_status"] == "alias_matched"
     assert active_match["internal_item_code"] == "CANON-001"
     assert inactive_match["item_master_match_status"] in {"ambiguous", "unmatched"}
     assert inactive_match.get("internal_item_code") in (None, "")

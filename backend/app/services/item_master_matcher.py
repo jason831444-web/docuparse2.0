@@ -192,7 +192,7 @@ class ItemMasterMatcher:
         return self.match_line_items_against_masters(line_items, masters)
 
     def match_line_items_against_masters(self, line_items: list[dict[str, Any]], masters: Iterable[Any]) -> list[dict[str, Any]]:
-        master_list = list(masters)
+        master_list = [master for master in masters if getattr(master, "active", True) is not False]
         if not line_items:
             return []
         if not master_list:
@@ -208,12 +208,12 @@ class ItemMasterMatcher:
             best = candidates[0] if candidates else None
             item["item_master_candidates"] = candidates[:5]
             item["item_master_match_confidence"] = best["score"] if best else None
-            alias_tie = bool(best and best.get("alias_code_match") and sum(1 for candidate in candidates if candidate.get("alias_code_match")) > 1)
+            alias_tie = bool(best and (best.get("alias_code_match") or best.get("alias_name_match")) and sum(1 for candidate in candidates if candidate.get("alias_code_match") or candidate.get("alias_name_match")) > 1)
             if best and best.get("direct_code_match"):
                 item["internal_item_code"] = best["internal_item_code"]
                 item["item_master_match_status"] = "direct_code_match"
                 item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_INTERNAL_CODE"
-            elif best and best.get("alias_code_match") and not alias_tie:
+            elif best and (best.get("alias_code_match") or best.get("alias_name_match")) and not alias_tie:
                 item["internal_item_code"] = best["internal_item_code"]
                 item["item_master_match_status"] = "alias_matched"
                 item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_ITEM_ALIAS"
@@ -299,6 +299,7 @@ class ItemMasterMatcher:
             "score": str(score),
             "direct_code_match": direct_code_match,
             "alias_code_match": alias_code_match,
+            "alias_name_match": bool(not direct_code_match and not alias_code_match and alias_score >= Decimal("0.96")),
             "score_breakdown": {
                 "name_score": str(name_score.quantize(Decimal("0.001"))),
                 "spec_score": str(spec_score.quantize(Decimal("0.001"))),

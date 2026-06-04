@@ -26,8 +26,8 @@ DATE_PATTERNS = [
 
 MANUFACTURING_TYPE_INDICATORS = [
     (DocumentType.delivery_note, ["납품서", "납품번호", "납품일", "납품수량", "입고장소", "수령자", "delivery note"]),
+    (DocumentType.invoice, ["세금계산서", "계산서번호", "인보이스번호", "청구서번호", "청구금액", "지급기한", "결제기한", "사업자등록번호", "공급받는자", "invoice"]),
     (DocumentType.quotation, ["견적서", "견적번호", "견적일", "유효기간", "견적유효기간", "납기조건", "결제조건", "quotation", "quote"]),
-    (DocumentType.invoice, ["세금계산서", "계산서번호", "인보이스번호", "청구서번호", "지급기한", "결제기한", "사업자등록번호", "invoice"]),
     (DocumentType.purchase_order, ["발주서", "발주번호", "발주처", "납기일", "purchase order", "po no"]),
     (DocumentType.transaction_statement, ["거래명세서", "거래명세서번호", "거래일자", "transaction statement"]),
 ]
@@ -58,7 +58,7 @@ CATEGORY_KEYWORDS = {
 
 LINE_ITEM_LABELS = {
     "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
-    "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "거래처품목코드", "vendor sku", "sku", "part no", "part number", "item code"],
+    "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "거래처코드", "거래처품목코드", "vendor sku", "customer item code", "sku", "part no", "part number", "item code"],
     "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification", "dimension"],
     "quantity": ["수량", "주문수량", "납품수량", "qty", "quantity"],
     "unit": ["단위", "unit"],
@@ -122,8 +122,10 @@ class DocumentParser:
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
         due_date = self._extract_due_date(joined, doc_type)
-        vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급자", "거래처", "매입처", "vendor", "supplier"])
-        customer_name = self._extract_labeled_text(joined, ["고객사", "수요처", "발주처", "납품처", "구매자", "customer", "buyer"])
+        vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급자", "판매자", "매입처", "발행처", "청구처", "vendor", "supplier", "seller"])
+        customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "구매처", "발주처", "수신처", "납품처", "수요처", "구매자", "customer", "buyer", "bill to"])
+        if customer_name and vendor_name and customer_name == vendor_name:
+            customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "구매처", "발주처", "수신처", "납품처", "customer", "buyer", "bill to"])
         return ParsedDocument(
             document_type=doc_type,
             title=self._guess_title(lines, doc_type, filename),
@@ -294,18 +296,18 @@ class DocumentParser:
 
     def _extract_issue_date(self, text: str, doc_type: DocumentType) -> date | None:
         labels_by_type = {
-            DocumentType.purchase_order: ["발행일", "발행일자", "작성일", "발주일", "issue date", "date"],
+            DocumentType.purchase_order: ["발행일", "발행일자", "작성일", "발주일", "발주일자", "issue date", "date"],
             DocumentType.quotation: ["견적일", "발행일", "작성일", "quotation date", "quote date", "date"],
             DocumentType.transaction_statement: ["발행일", "작성일", "issue date"],
             DocumentType.delivery_note: ["발행일", "작성일", "issue date"],
-            DocumentType.invoice: ["발행일", "발행일자", "작성일", "invoice date", "issue date", "date"],
+            DocumentType.invoice: ["발행일", "발행일자", "작성일", "계산서일자", "invoice date", "issue date", "date"],
         }
         labels = labels_by_type.get(doc_type, ["발행일", "작성일", "일자", "issue date"])
         return self._extract_labeled_date(text, labels)
 
     def _extract_due_date(self, text: str, doc_type: DocumentType) -> date | None:
         labels_by_type = {
-            DocumentType.purchase_order: ["납기일", "납기 요청", "납품예정일", "납품 예정일", "requested delivery date", "due delivery", "delivery due", "delivery due date", "due date"],
+            DocumentType.purchase_order: ["납기일", "납기요청일", "납기 요청", "납품요청일", "납품예정일", "납품 예정일", "requested delivery date", "due delivery", "delivery due", "delivery due date", "due date"],
             DocumentType.quotation: ["유효기간", "견적유효기간", "valid until", "expiration date"],
             DocumentType.delivery_note: ["납품일", "납품일자", "delivery date"],
             DocumentType.invoice: ["지급기한", "결제기한", "payment due date", "payment due", "due date"],
@@ -426,6 +428,8 @@ class DocumentParser:
             return [part.strip() for part in stripped.split("\t")]
         if "," in stripped and len(stripped.split(",")) >= 4:
             return [part.strip() for part in stripped.split(",")]
+        if " / " in stripped and len(stripped.split(" / ")) >= 3:
+            return [part.strip() for part in stripped.split(" / ")]
         return [part.strip() for part in re.split(r"\s{2,}", stripped) if part.strip()]
 
     def _parse_labeled_line(self, line: str) -> tuple[str, str] | None:
@@ -470,11 +474,29 @@ class DocumentParser:
             normalized[field] = self._normalize_number(normalized[field])
         if normalized["quantity"] is None and normalized["unit"]:
             normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
+        warnings = self._line_item_amount_warnings(normalized)
+        if warnings:
+            normalized["validation_warnings"] = warnings
         return {key: value for key, value in normalized.items() if value not in (None, "")}
+
+    def _line_item_amount_warnings(self, item: dict) -> list[str]:
+        warnings: list[str] = []
+        supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+        tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
+        total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+        if tax is not None and total is not None and tax > total:
+            warnings.append("invalid_tax_greater_than_total")
+        if supply is not None and total is not None and supply > total:
+            warnings.append("invalid_supply_greater_than_total")
+        if supply is not None and tax is not None and total is not None and abs((supply + tax) - total) > max(Decimal("1"), abs(total) * Decimal("0.02")):
+            warnings.append("invalid_line_total")
+        return warnings
 
     def _clean_code_value(self, value: object) -> str | None:
         cleaned = self._clean_value(value)
         if not cleaned:
+            return None
+        if cleaned in {"-", "—", "–", "N/A", "n/a", "없음"}:
             return None
         if re.search(r"(미확인|신뢰도|검토|비어|missing|required)", cleaned, flags=re.IGNORECASE):
             return None

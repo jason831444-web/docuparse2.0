@@ -254,8 +254,15 @@ class DocumentWorkflowEnrichmentService:
                 reasons.append(self._review_reason("missing_item_name", f"{index}번째 품목의 품목명이 비어 있습니다.", "line_items.item_name", index - 1))
             if item.get("quantity") in (None, "", []):
                 reasons.append(self._review_reason("missing_quantity", f"{index}번째 품목의 수량이 비어 있습니다.", "line_items.quantity", index - 1))
-            if item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+            if doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 reasons.append(self._review_reason("missing_price_or_total", f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.", "line_items.unit_price", index - 1))
+            for warning in item.get("validation_warnings") or []:
+                if warning == "invalid_tax_greater_than_total":
+                    reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 세액이 합계금액보다 큽니다.", "line_items.tax_amount", index - 1))
+                elif warning == "invalid_supply_greater_than_total":
+                    reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 공급가액이 합계금액보다 큽니다.", "line_items.supply_amount", index - 1))
+                elif warning == "invalid_line_total":
+                    reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 공급가액, 세액, 합계금액 계산이 맞지 않습니다.", "line_items.line_total", index - 1))
             internal_code = item.get("internal_item_code")
             if item.get("item_code") in (None, "", []):
                 severity = "info" if internal_code not in (None, "", []) else "warning"
@@ -377,6 +384,7 @@ class DocumentWorkflowEnrichmentService:
             "missing_quantity",
             "missing_price_or_total",
             "amount_mismatch",
+            "invalid_line_amount",
             "internal_item_unmatched",
             "internal_item_ambiguous",
             "item_matching_skipped",

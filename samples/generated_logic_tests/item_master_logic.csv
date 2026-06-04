@@ -1,0 +1,7 @@
+internal_item_code,item_name,spec,unit,category,standard_price,active,aliases
+INT-PCB-12P,PCB Connector 12P,12핀,EA,전자부품,300,true,"CON-PCB-12P|PCB-CON-12"
+INT-CBL-500,Cable Harness 500mm,500mm,EA,전자부품,2200,true,"CBL-HAR-500|Harness 500"
+INT-BRG-H-100,베어링 하우징,100mm,EA,가공품,12000,true,"BRG-H-100|Bearing Housing 100"
+INT-SUS304-2T-A,SUS304 판재 2T,1000x2000,EA,원자재,25000,true,"SUS-304 판재|SUS304 2T PLATE"
+INT-SUS304-2T-B,SUS304 판재 2T,1000x2000,EA,원자재,25000,true,"SUS-304 판재|SUS304 2T PLATE"
+INT-INACTIVE-PLATE,비활성 판재,1000x2000,EA,원자재,25000,false,"SUS-304 판재"
