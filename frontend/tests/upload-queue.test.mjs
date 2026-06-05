@@ -8,8 +8,10 @@ import {
   markUploadFailed,
   markUploadStarted,
   nextQueuedUploadIds,
+  restoreUploadQueue,
   retryUploadItem,
   runningUploadCount,
+  serializeUploadQueue,
 } from "../lib/upload-queue.ts";
 
 const files = Array.from({ length: 5 }, (_, index) => ({
@@ -53,5 +55,26 @@ const many = createUploadQueueItems(
   () => "many"
 );
 assert.equal(many.length, RECOMMENDED_MAX_UPLOAD_FILES);
+
+const persisted = serializeUploadQueue([
+  { ...queue[0], status: "queued", updatedAt: 2000 },
+  { ...queue[1], status: "uploading", updatedAt: 2000 },
+  { ...queue[2], status: "processing", documentId: "doc-processing", documentTitle: "처리 문서", updatedAt: 2000 },
+  { ...queue[3], status: "done", documentId: "doc-done", documentTitle: "완료 문서", updatedAt: 2000 },
+  { ...queue[4], status: "failed", error: "boom", updatedAt: 2000 },
+], 2000);
+
+const restored = restoreUploadQueue(persisted, 2500);
+assert.equal(restored.find((item) => item.id === queue[0].id)?.status, "needs_reselect");
+assert.equal(restored.find((item) => item.id === queue[1].id)?.status, "interrupted");
+assert.equal(restored.find((item) => item.id === queue[2].id)?.status, "processing");
+assert.equal(restored.find((item) => item.id === queue[2].id)?.documentId, "doc-processing");
+assert.equal(restored.find((item) => item.id === queue[3].id)?.status, "done");
+assert.equal(restored.find((item) => item.id === queue[3].id)?.documentId, "doc-done");
+assert.equal(restored.find((item) => item.id === queue[4].id)?.status, "failed");
+assert.deepEqual(nextQueuedUploadIds(restored, DEFAULT_UPLOAD_CONCURRENCY), [], "restored file metadata must not start upload without a File object");
+
+const stale = restoreUploadQueue({ ...persisted, items: persisted.items.map((item) => ({ ...item, updatedAt: 1 })) }, 1000 * 60 * 60 * 24 * 4);
+assert.equal(stale.length, 0);
 
 console.log("upload queue tests passed");

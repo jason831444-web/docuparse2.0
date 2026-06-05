@@ -17,9 +17,13 @@ import {
   markUploadStarted,
   nextQueuedUploadIds,
   removeQueuedUploadItem,
+  restoreUploadQueue,
   retryUploadItem,
   runningUploadCount,
+  serializeUploadQueue,
+  UPLOAD_QUEUE_STORAGE_KEY,
   type UploadQueueItem,
+  type UploadQueueFileLike,
 } from "@/lib/upload-queue";
 import { cn } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
@@ -78,7 +82,8 @@ export function UploadDropzone() {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeIds = useRef(new Set<string>());
   const [dragging, setDragging] = useState(false);
-  const [queue, setQueue] = useState<UploadQueueItem[]>([]);
+  const [queue, setQueue] = useState<UploadQueueItem<UploadQueueFileLike>[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const activeCount = useMemo(() => runningUploadCount(queue), [queue]);
   const hasPendingWork = queue.some((item) => item.status === "queued" || item.status === "uploading" || item.status === "processing");
 
@@ -117,6 +122,42 @@ export function UploadDropzone() {
   }
 
   useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(UPLOAD_QUEUE_STORAGE_KEY);
+      setQueue(stored ? restoreUploadQueue(JSON.parse(stored)) : []);
+    } catch {
+      setQueue([]);
+    } finally {
+      setHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem(UPLOAD_QUEUE_STORAGE_KEY, JSON.stringify(serializeUploadQueue(queue)));
+  }, [hydrated, queue]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    queue
+      .filter((item) => item.status === "processing" && item.documentId && !activeIds.current.has(item.id))
+      .forEach((item) => {
+        activeIds.current.add(item.id);
+        void (async () => {
+          try {
+            const latest = await api.get(item.documentId as string);
+            const document = await waitForCompletion(latest);
+            setQueue((current) => markUploadCompleted(current, item.id, document));
+          } catch (error) {
+            setQueue((current) => markUploadFailed(current, item.id, error instanceof Error ? error.message : "처리 상태 확인에 실패했습니다"));
+          } finally {
+            activeIds.current.delete(item.id);
+          }
+        })();
+      });
+  }, [hydrated, queue, waitForCompletion]);
+
+  useEffect(() => {
     const available = DEFAULT_UPLOAD_CONCURRENCY - activeIds.current.size;
     if (available <= 0) return;
     const nextIds = nextQueuedUploadIds(queue, DEFAULT_UPLOAD_CONCURRENCY)
@@ -124,7 +165,7 @@ export function UploadDropzone() {
       .slice(0, available);
     nextIds.forEach((id) => {
       const item = queue.find((candidate) => candidate.id === id);
-      if (item) void uploadQueueItem(item as UploadQueueItem<File>);
+      if (item && item.fileAvailable !== false) void uploadQueueItem(item as UploadQueueItem<File>);
     });
   }, [queue, uploadQueueItem]);
 
@@ -145,6 +186,8 @@ export function UploadDropzone() {
     done: "완료",
     needs_review: "검토 필요",
     failed: "실패",
+    needs_reselect: "파일 재선택 필요",
+    interrupted: "중단됨",
   };
 
   return (
@@ -216,13 +259,13 @@ export function UploadDropzone() {
                       <Link href={`/documents/${item.documentId}`}>열기</Link>
                     </Button>
                   ) : null}
-                  {item.status === "failed" ? (
+                  {item.status === "failed" && item.fileAvailable !== false ? (
                     <Button size="sm" variant="outline" onClick={() => setQueue((current) => retryUploadItem(current, item.id))}>
                       <RotateCcw className="size-4" />
                       다시 시도
                     </Button>
                   ) : null}
-                  {item.status === "queued" ? (
+                  {["queued", "needs_reselect", "interrupted"].includes(item.status) ? (
                     <Button size="sm" variant="ghost" onClick={() => setQueue((current) => removeQueuedUploadItem(current, item.id))}>
                       <X className="size-4" />
                       제거

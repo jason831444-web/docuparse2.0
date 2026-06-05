@@ -124,6 +124,49 @@ function InfoIssueDetails({ items }: { items: string[] }) {
   );
 }
 
+function ProcessingMetadataDetails({ document }: { document: DocumentRecord }) {
+  const metadata = (document.workflow_metadata ?? {}) as Record<string, unknown>;
+  const ingestion = (document.ingestion_metadata ?? {}) as Record<string, unknown>;
+  const quality = (metadata.quality ?? {}) as Record<string, unknown>;
+  const escalation = (metadata.ai_escalation_decision ?? ingestion.ai_escalation_decision ?? null) as Record<string, unknown> | null;
+  const interpretation = (metadata.category_interpretation ?? ingestion.category_interpretation ?? null) as Record<string, unknown> | null;
+  const diagnostics = (interpretation?.diagnostics ?? {}) as Record<string, unknown>;
+  const rows = ([
+    ["추출 방식", document.extraction_method],
+    ["추출 제공자", document.extraction_provider],
+    ["보정 제공자", document.refinement_provider],
+    ["Provider chain", document.provider_chain],
+    ["OCR 신뢰도", ingestion.ocr_confidence ?? metadata.ocr_confidence],
+    ["표 신뢰도", ingestion.table_confidence ?? (ingestion.quality as Record<string, unknown> | undefined)?.table_confidence],
+    ["AI 보정 필요", escalation?.should_escalate],
+    ["AI 보정 사유", Array.isArray(escalation?.reasons) ? escalation?.reasons.join(", ") : escalation?.reasons],
+    ["AI 보정 신호", escalation?.signals],
+    ["AI 시도", diagnostics.ai_attempted ?? diagnostics.ai_assisted ?? interpretation?.ai_assisted],
+    ["AI 성공", diagnostics.ai_succeeded],
+    ["AI 실패 사유", diagnostics.ai_failed_reason],
+    ["AI 출력 없음", diagnostics.ai_output_empty],
+    ["병합 충돌", metadata.merge_conflicts ?? diagnostics.merge_conflicts],
+    ["프로필 정규화", interpretation?.profile ? `${interpretation.profile} → ${document.document_type}` : null],
+    ["추출 품질", quality],
+  ] as Array<[string, unknown]>).filter((row): row is [string, unknown] => row[1] !== undefined && row[1] !== null && row[1] !== "");
+  if (!rows.length) return null;
+  return (
+    <details className="rounded-lg border bg-slate-50 p-4 text-sm">
+      <summary className="cursor-pointer font-medium text-slate-700">처리 정보 자세히 보기</summary>
+      <div className="mt-3 grid gap-2">
+        {rows.map(([label, value]) => (
+          <div key={label} className="grid gap-1 rounded-md border bg-white px-3 py-2 sm:grid-cols-[10rem_1fr]">
+            <span className="text-xs font-medium text-muted-foreground">{label}</span>
+            <span className="break-words text-xs text-slate-700">
+              {typeof value === "object" ? JSON.stringify(value, null, 2) : String(value)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -538,6 +581,7 @@ export default function DocumentDetailPage() {
                     </div>
                   </div>
                 ) : null}
+                <ProcessingMetadataDetails document={document} />
               </CardContent>
             </Card>
           ) : null}

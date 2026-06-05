@@ -1,0 +1,11 @@
+﻿file,kind,expected
+01_image_po_clean_korean.pdf,purchase_order,"Ready, 4 items, total 594000"
+02_image_quotation_ambiguous_stainless.pdf,quotation,"Needs Review, ambiguous first item, 3 items"
+03_image_invoice_vendor_sku.pdf,invoice,"Ready, 3 items, no duplicate SKU rows"
+04_image_delivery_note_no_prices.pdf,delivery_note,"Ready, 4 items, no price, no generic warning"
+05_image_transaction_statement_similar_lines.pdf,transaction_statement,"Ready, 4 items, total 517000"
+06_image_invoice_usd_vendor_sku.pdf,invoice,"Needs Review only if unknown item, 3 items, no amount mismatch"
+07_image_po_malformed_amount_columns.pdf,purchase_order,"Needs Review, invalid_line_amount, amount_mismatch"
+08_image_quote_missing_quantity.pdf,quotation,"Needs Review, quantity empty/null, no placeholder text in data field"
+09_image_po_mixed_korean_english_noise.pdf,purchase_order,"Ready, 3 items, total 403700"
+10_image_poor_ocr_distorted_invoice.pdf,invoice,AI escalation expected; missing/incomplete line items

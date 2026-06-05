@@ -30,4 +30,25 @@ assert.equal(item.supply_amount, "450000");
 assert.equal(item.tax_amount, "45000");
 assert.equal(item.line_total, "495000");
 
+const [malformed] = cleanLineItems([
+  {
+    item_name: "SUS316 PLATE 2T",
+    item_code: "확인 필요",
+    internal_item_code: "후보 확인 필요",
+    quantity: "1",
+    unit_price: "42,000",
+    supply_amount: "4,200",
+    tax_amount: "46,200",
+    line_total: "4,200",
+  },
+]);
+
+assert.equal(malformed.item_code, "");
+assert.equal(malformed.internal_item_code, "");
+assert.equal(malformed.quantity, "1");
+assert.equal(malformed.unit_price, "42000");
+assert.equal(malformed.supply_amount, "4200");
+assert.equal(malformed.tax_amount, "46200");
+assert.equal(malformed.line_total, "4200");
+
 console.log("line item sanitation tests passed");

@@ -14,6 +14,7 @@ except ImportError:
     fuzz = _FuzzFallback()
 
 from app.models.document import DocumentType
+from app.services.ocr_table_reconstructor import reconstruct_ocr_line_items
 
 
 DATE_PATTERNS = [
@@ -333,6 +334,7 @@ class DocumentParser:
         item_block_lines = self._explicit_item_block_lines(lines)
         items = self._extract_key_value_line_items(item_block_lines or lines)
         items.extend(self._extract_table_line_items(lines))
+        items.extend(self._normalize_line_item(candidate.item) for candidate in reconstruct_ocr_line_items(lines))
         table_row_indexes = self._table_row_indexes(lines)
         for line_index, line in enumerate(lines):
             if line_index in table_row_indexes:
@@ -693,6 +695,8 @@ class DocumentParser:
         lowered = value.lower()
         if self._is_placeholder_title(value):
             return -100
+        if reconstruct_ocr_line_items([value]):
+            return -80
         if len(value) < 4 or len(value) > 120:
             return -40
         if re.search(r"^\d+([./-]\d+)*$", value):

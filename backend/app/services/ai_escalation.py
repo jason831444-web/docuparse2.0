@@ -6,6 +6,7 @@ from typing import Any
 
 from app.models.document import DocumentType
 from app.services.file_ingestion import NormalizedDocument
+from app.services.ocr_table_reconstructor import reconstruct_ocr_line_items
 from app.services.parser import ParsedDocument
 from app.services.quality_evaluation import QualityEvaluation
 
@@ -78,6 +79,11 @@ def should_escalate_to_ai(
             reasons.append("low_table_confidence")
     if "pdf_scanned" in method or "ocr" in method or source in {"png", "jpg", "jpeg", "tif", "tiff", "webp"}:
         signals["ocr_or_image_path"] = True
+        if not parsed.line_items:
+            ocr_candidates = reconstruct_ocr_line_items((normalized.normalized_text or "").splitlines())
+            if ocr_candidates:
+                signals["ocr_line_item_candidate_count"] = len(ocr_candidates)
+                reasons.append("ocr_line_item_candidates_not_parsed")
     if "pdf_partial" in method:
         reasons.append("pdf_partial_text")
 
@@ -105,6 +111,7 @@ def should_escalate_to_ai(
         "incomplete_line_items",
         "amount_mismatch",
         "unknown_document_type_from_visual_source",
+        "ocr_line_item_candidates_not_parsed",
     }
     should_escalate = any(reason in blocking_reasons for reason in reasons)
     severity = "warning" if should_escalate else "info"
