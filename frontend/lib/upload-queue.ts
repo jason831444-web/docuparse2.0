@@ -102,12 +102,30 @@ export function markUploadFailed(items: UploadQueueItem<UploadQueueFileLike>[], 
   return items.map((item) => item.id === id ? { ...item, status: "failed" as const, error, updatedAt: Date.now() } : item);
 }
 
+export function explainUploadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return "백엔드에 연결하지 못했습니다. 서버가 실행 중인지 확인한 뒤 다시 시도하세요.";
+  }
+  if (/abort|aborted|timeout|timed out/i.test(message)) {
+    return "요청 시간이 초과되었거나 업로드가 중단되었습니다. 파일을 다시 선택해 시도하세요.";
+  }
+  if (/file.*missing|reselect|파일.*다시/i.test(message)) {
+    return "새로고침 후에는 파일을 다시 선택해야 합니다.";
+  }
+  return message || "업로드에 실패했습니다";
+}
+
 export function retryUploadItem(items: UploadQueueItem<UploadQueueFileLike>[], id: string) {
   return items.map((item) => item.id === id && item.status === "failed" && item.fileAvailable !== false ? { ...item, status: "queued" as const, error: null, updatedAt: Date.now() } : item);
 }
 
 export function removeQueuedUploadItem(items: UploadQueueItem<UploadQueueFileLike>[], id: string) {
   return items.filter((item) => !(item.id === id && ["queued", "needs_reselect", "interrupted"].includes(item.status)));
+}
+
+export function clearUploadQueue(items: UploadQueueItem<UploadQueueFileLike>[]) {
+  return items.filter((item) => item.status === "uploading" || item.status === "processing");
 }
 
 export function serializeUploadQueue(items: UploadQueueItem<UploadQueueFileLike>[], now = Date.now()): SerializedUploadQueue {

@@ -2,8 +2,8 @@
 # Install only on machines intended to run PaddleOCR-VL / Qwen2.5-VL locally.
 
 # PaddleOCR-VL provider
-paddleocr==3.5.0
-paddlepaddle>=3.0.0
+# Basic PaddleOCR lives in requirements-ocr.txt and can be enabled without
+# installing the heavier local multimodal stack.
 paddlex[ocr]==3.5.1
 
 # Text interpretation + Qwen2.5-VL provider

@@ -54,6 +54,13 @@ class DocumentProcessor:
             route = self.router.route(normalized, parsed, extraction_quality)
             analysis_path = normalized.primary_image_path or stored_path
             ai_fallback_notes: list[str] = []
+            ai_provider_diagnostics = {
+                "document_ai_attempted": bool(route.heavy_ai_required and normalized.primary_image_path),
+                "document_ai_succeeded": False,
+                "document_ai_provider": None,
+                "document_ai_failed_reason": None,
+                "document_ai_fallback_provider": None,
+            }
             if route.heavy_ai_required and normalized.primary_image_path:
                 try:
                     ai_result = get_document_ai_service().analyze(
@@ -62,9 +69,13 @@ class DocumentProcessor:
                         parsed,
                         document.original_filename,
                     )
+                    ai_provider_diagnostics["document_ai_succeeded"] = True
+                    ai_provider_diagnostics["document_ai_provider"] = ai_result.provider
                 except Exception as exc:
                     ai_fallback_notes.append(f"AI extraction failed; parser result used: {exc}")
+                    ai_provider_diagnostics["document_ai_failed_reason"] = str(exc)
                     ai_result = self.lightweight_ai.analyze(analysis_path, raw_text, parsed, document.original_filename)
+                    ai_provider_diagnostics["document_ai_fallback_provider"] = ai_result.provider
             else:
                 ai_result = self.lightweight_ai.analyze(analysis_path, raw_text, parsed, document.original_filename)
                 ai_result.extraction_provider = normalized.extraction_method or route.route_label
@@ -168,6 +179,7 @@ class DocumentProcessor:
                 structured_quality,
                 interpretation,
                 ai_escalation,
+                ai_provider_diagnostics,
             ))
             document.review_required = document.review_required or self._manufacturing_review_required(document)
             workflow = self.workflow_enrichment.enrich(document, ai_result.cleaned_raw_text or raw_text, interpretation)
@@ -294,6 +306,7 @@ class DocumentProcessor:
         structured_quality: QualityEvaluation,
         interpretation: CategoryInterpretation | None = None,
         ai_escalation=None,
+        ai_provider_diagnostics: dict | None = None,
     ) -> dict:
         metadata = {
             "source_file_type": normalized.source_file_type,
@@ -352,6 +365,8 @@ class DocumentProcessor:
                 "reasons": ai_escalation.reasons,
                 "signals": ai_escalation.signals,
             }
+        if ai_provider_diagnostics:
+            metadata["ai_provider_diagnostics"] = ai_provider_diagnostics
         return metadata
 
     def _provider_chain(

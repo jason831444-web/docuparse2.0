@@ -1,0 +1,5 @@
+# Optional OCR/table runtime used by the staged OCR provider.
+# Kept separate from Qwen/Torch-heavy AI dependencies so Docker can enable
+# PaddleOCR without forcing local multimodal model installs.
+paddleocr==3.5.0
+paddlepaddle>=3.0.0

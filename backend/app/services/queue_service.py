@@ -8,18 +8,20 @@ from app.services.document_processor import DocumentProcessor
 
 
 class DocumentQueue(Protocol):
-    def enqueue(self, db: Session, document: Document) -> Document:
+    def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         ...
 
 
 class InlineDocumentQueue:
     """Local development queue: enqueue means process immediately in-process."""
 
-    def enqueue(self, db: Session, document: Document) -> Document:
+    def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         document.processing_status = ProcessingStatus.queued
         db.add(document)
         db.commit()
         db.refresh(document)
+        if not process_inline:
+            return document
         return DocumentProcessor().process(db, document)
 
 
@@ -30,7 +32,7 @@ class DeferredLocalDocumentQueue:
     queued rows, or developers can call the reprocess endpoint manually.
     """
 
-    def enqueue(self, db: Session, document: Document) -> Document:
+    def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         document.processing_status = ProcessingStatus.queued
         db.add(document)
         db.commit()
@@ -41,7 +43,7 @@ class DeferredLocalDocumentQueue:
 class ExternalDocumentQueue:
     """Deployment scaffold for Redis/SQS/Celery/RQ style queueing."""
 
-    def enqueue(self, db: Session, document: Document) -> Document:
+    def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         document.processing_status = ProcessingStatus.queued
         document.ingestion_metadata = {
             **(document.ingestion_metadata or {}),

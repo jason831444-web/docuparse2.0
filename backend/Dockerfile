@@ -15,8 +15,10 @@ RUN apt-get update \
         $([ "$INSTALL_LLAMA_CPP_DEPS" = "true" ] && echo "build-essential cmake") \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-ai.txt requirements-llama.txt ./
+COPY requirements.txt requirements-ocr.txt requirements-ai.txt requirements-llama.txt ./
 RUN pip install -r requirements.txt
+ARG INSTALL_OCR_DEPS=true
+RUN if [ "$INSTALL_OCR_DEPS" = "true" ]; then pip install -r requirements-ocr.txt; fi
 ARG INSTALL_AI_DEPS=false
 RUN if [ "$INSTALL_AI_DEPS" = "true" ]; then pip install -r requirements-ai.txt; fi
 RUN if [ "$INSTALL_LLAMA_CPP_DEPS" = "true" ]; then pip install -r requirements-llama.txt; fi

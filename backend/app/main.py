@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes.documents import router as documents_router
 from app.api.routes.item_master import router as item_master_router
 from app.core.config import get_settings
+from app.services.ocr import provider_health
 
 settings = get_settings()
 
@@ -21,8 +22,10 @@ app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads"
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict:
+    providers = provider_health()
+    providers["openai_vision_configured"] = bool(settings.openai_api_key)
+    return {"status": "ok", "providers": providers}
 
 
 app.include_router(documents_router, prefix=settings.api_prefix)

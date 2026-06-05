@@ -42,6 +42,8 @@ def cleanup_ocr_line(line: str) -> str:
     text = str(line or "")
     text = text.replace("×", "x")
     text = re.sub(r"\bS\$\s*US", "SUS", text, flags=re.IGNORECASE)
+    text = re.sub(r"\$US(?=\d)", "SUS", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bSSUS(?=\d)", "SUS", text, flags=re.IGNORECASE)
     text = re.sub(r"\bS\$\s*U", "SU", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<=\d)\s*[xX]\s*(?=\d)", "x", text)
     text = re.sub(r"[,，](?=\s*[A-Za-z가-힣])", " ", text)
@@ -54,7 +56,7 @@ def _parse_priced_row(line: str) -> dict | None:
     tokens = _tokenize(line)
     if len(tokens) < 7:
         return None
-    amount_positions = [(index, _to_decimal(token)) for index, token in enumerate(tokens)]
+    amount_positions = [(index, _to_decimal(token)) for index, token in enumerate(tokens) if _is_numeric_token(token)]
     amount_positions = [(index, value) for index, value in amount_positions if value is not None]
     if len(amount_positions) < 4:
         return None
@@ -62,29 +64,35 @@ def _parse_priced_row(line: str) -> dict | None:
     unit_price_pos, supply_pos, tax_pos, total_pos = [position for position, _ in last_amounts]
     if total_pos != len(tokens) - 1:
         return None
-    unit_pos = unit_price_pos - 1
-    quantity_pos = unit_price_pos - 2
-    if quantity_pos < 0 or unit_pos < 0:
+    unit_pos = None
+    for candidate_pos in range(unit_price_pos - 1, max(-1, unit_price_pos - 5), -1):
+        if candidate_pos >= 0 and _unit(tokens[candidate_pos]):
+            unit_pos = candidate_pos
+            break
+    if unit_pos is None:
         return None
     unit = _unit(tokens[unit_pos])
-    quantity = _to_decimal(tokens[quantity_pos])
-    if unit is None or quantity is None:
+    quantity_pos = unit_pos - 1
+    quantity = _to_decimal(tokens[quantity_pos]) if quantity_pos >= 0 and _is_numeric_token(tokens[quantity_pos]) else None
+    if unit is None:
         return None
-    prefix = _strip_leading_line_number(tokens[:quantity_pos])
+    prefix = _strip_leading_line_number(tokens[:quantity_pos] if quantity is not None else tokens[:unit_pos])
     item_name, item_code, specification = _split_identity(prefix)
     if not item_name and not item_code:
         return None
-    return {
+    item = {
         "item_name": item_name,
         "item_code": item_code,
         "specification": specification,
-        "quantity": _number_value(quantity),
         "unit": unit,
         "unit_price": _number_value(last_amounts[0][1]),
         "supply_amount": _number_value(last_amounts[1][1]),
         "tax_amount": _number_value(last_amounts[2][1]),
         "line_total": _number_value(last_amounts[3][1]),
     }
+    if quantity is not None:
+        item["quantity"] = _number_value(quantity)
+    return item
 
 
 def _parse_no_price_row(line: str) -> dict | None:
@@ -166,7 +174,7 @@ def _looks_like_header_or_note(line: str) -> bool:
 
 
 def _has_reliable_table_delimiter(line: str) -> bool:
-    if "|" in line or "\t" in line:
+    if line.count("|") >= 4 or "\t" in line:
         return True
     if " / " in line:
         return True
@@ -187,6 +195,8 @@ def _looks_like_code(token: str) -> bool:
 
 
 def _looks_like_spec_token(token: str) -> bool:
+    if re.match(r"^(?:SUS|SS)[-_]?\d{3,4}$", token.strip(), flags=re.IGNORECASE):
+        return False
     return bool(SPEC_PATTERN.search(token.strip()))
 
 
@@ -194,8 +204,17 @@ def _tokenize(line: str) -> list[str]:
     return [token for token in re.split(r"\s+", line.strip()) if token]
 
 
+def _is_numeric_token(token: str) -> bool:
+    return bool(re.fullmatch(r"(?:KRW|USD|₩|\$)?[-+]?\d[\d,]*(?:\.\d+)?(?:원|KRW|USD)?", token.strip(), flags=re.IGNORECASE))
+
+
 def _unit(token: str) -> str | None:
-    match = re.fullmatch(UNIT_PATTERN, token.strip(), flags=re.IGNORECASE)
+    if re.search(r"[€E]A$", token.strip(), flags=re.IGNORECASE):
+        return "EA"
+    normalized = re.sub(r"[^A-Za-z가-힣]", "", token.strip())
+    if normalized.lower() == "ea":
+        normalized = "EA"
+    match = re.fullmatch(UNIT_PATTERN, normalized, flags=re.IGNORECASE)
     return match.group(0).upper() if match else None
 
 

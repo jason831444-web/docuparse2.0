@@ -106,6 +106,7 @@ def should_escalate_to_ai(
         "low_extraction_quality_score",
         "low_table_confidence",
         "pdf_partial_text",
+        "missing_required_fields",
         "missing_required_header",
         "missing_line_items",
         "incomplete_line_items",

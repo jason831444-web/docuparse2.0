@@ -10,7 +10,9 @@ import { api } from "@/lib/api";
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
   RECOMMENDED_MAX_UPLOAD_FILES,
+  clearUploadQueue,
   createUploadQueueItems,
+  explainUploadError,
   markUploadCompleted,
   markUploadFailed,
   markUploadProcessing,
@@ -107,7 +109,7 @@ export function UploadDropzone() {
       const document = await waitForCompletion(uploaded);
       setQueue((current) => markUploadCompleted(current, item.id, document));
     } catch (error) {
-      setQueue((current) => markUploadFailed(current, item.id, error instanceof Error ? error.message : "업로드에 실패했습니다"));
+      setQueue((current) => markUploadFailed(current, item.id, explainUploadError(error)));
     } finally {
       activeIds.current.delete(item.id);
     }
@@ -237,9 +239,14 @@ export function UploadDropzone() {
           <div className="flex items-center justify-between border-b px-4 py-3">
             <div>
               <p className="text-sm font-semibold">업로드 대기열</p>
-              <p className="text-xs text-muted-foreground">일부 파일이 실패해도 나머지 파일은 계속 처리됩니다.</p>
+              <p className="text-xs text-muted-foreground">일부 파일이 실패해도 나머지 파일은 계속 처리됩니다. 새로고침 전 서버에 올라간 문서는 자동으로 상태 확인을 재개합니다.</p>
             </div>
-            <span className="text-xs text-muted-foreground">처리 중 {activeCount} / {DEFAULT_UPLOAD_CONCURRENCY}</span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">처리 중 {activeCount} / {DEFAULT_UPLOAD_CONCURRENCY}</span>
+              <Button size="sm" variant="ghost" onClick={() => setQueue((current) => clearUploadQueue(current))}>
+                대기열 모두 지우기
+              </Button>
+            </div>
           </div>
           <div className="divide-y">
             {queue.map((item) => (
@@ -263,6 +270,12 @@ export function UploadDropzone() {
                     <Button size="sm" variant="outline" onClick={() => setQueue((current) => retryUploadItem(current, item.id))}>
                       <RotateCcw className="size-4" />
                       다시 시도
+                    </Button>
+                  ) : null}
+                  {item.status === "failed" && item.fileAvailable === false ? (
+                    <Button size="sm" variant="outline" onClick={() => inputRef.current?.click()}>
+                      <FileUp className="size-4" />
+                      파일 다시 선택
                     </Button>
                   ) : null}
                   {["queued", "needs_reselect", "interrupted"].includes(item.status) ? (

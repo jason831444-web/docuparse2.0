@@ -156,6 +156,16 @@ class DocumentParser:
             threshold = 1 if document_type != DocumentType.transaction_statement else 2
             if strong_hits >= 1 or content_hits >= threshold:
                 return document_type
+        if re.search(r"\bINV[-_ ]?\d{4}|\b(?:invoice|tax)\s*(?:no|number)", content, flags=re.IGNORECASE):
+            return DocumentType.invoice
+        if re.search(r"\bQT[-_ ]?\d{4}|\b(?:quotation|quote)\s*(?:no|number)", content, flags=re.IGNORECASE):
+            return DocumentType.quotation
+        if re.search(r"\bPO[-_ ]?\d{4}|\b(?:po|purchase\s+order)\s*(?:no|number)", content, flags=re.IGNORECASE):
+            return DocumentType.purchase_order
+        if re.search(r"\bDN[-_ ]?\d{4}|\bdelivery\s+note\s*(?:no|number)", content, flags=re.IGNORECASE):
+            return DocumentType.delivery_note
+        if re.search(r"\bTS[-_ ]?\d{4}|\btransaction\s+statement\s*(?:no|number)", content, flags=re.IGNORECASE):
+            return DocumentType.transaction_statement
         haystack = f"{filename}\n{text}".lower()
         if self._score_korean_manufacturing(haystack, ["포장명세서", "packing list"]) >= 1:
             return DocumentType.packing_list
@@ -268,7 +278,25 @@ class DocumentParser:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if not match:
             return None
-        return re.sub(r"\s+", " ", match.group(1)).strip(" -:：")[:120] or None
+        value = re.sub(r"\s+", " ", match.group(1)).strip(" -:：")
+        value = self._truncate_at_business_label_boundary(value)
+        if self._looks_like_instruction_or_note(value):
+            return None
+        return value[:120] or None
+
+    def _truncate_at_business_label_boundary(self, value: str) -> str:
+        boundary_labels = [
+            "공급업체", "공급자", "판매자", "매입처", "발행처", "청구처",
+            "공급받는자", "고객사", "구매처", "발주처", "수신처", "납품처", "수요처", "구매자",
+            "supplier", "vendor", "seller", "customer", "buyer", "bill to", "ship to",
+            "item name", "vendor sku", "품목명", "품목코드",
+        ]
+        label_pattern = "|".join(re.escape(label) for label in boundary_labels)
+        match = re.search(rf"\s+(?:{label_pattern})\s*[:：]?\s+", value, flags=re.IGNORECASE)
+        return value[: match.start()].strip(" -:：") if match else value
+
+    def _looks_like_instruction_or_note(self, value: str) -> bool:
+        return bool(re.search(r"(must\s+not|should\s+not|do\s+not|주의|참고|note|warning|column)", value, flags=re.IGNORECASE))
 
     def _extract_labeled_date(self, text: str, labels: list[str]) -> date | None:
         label_pattern = "|".join(re.escape(label) for label in labels)

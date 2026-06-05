@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
   RECOMMENDED_MAX_UPLOAD_FILES,
+  clearUploadQueue,
   createUploadQueueItems,
+  explainUploadError,
   markUploadCompleted,
   markUploadFailed,
   markUploadStarted,
@@ -76,5 +78,17 @@ assert.deepEqual(nextQueuedUploadIds(restored, DEFAULT_UPLOAD_CONCURRENCY), [], 
 
 const stale = restoreUploadQueue({ ...persisted, items: persisted.items.map((item) => ({ ...item, updatedAt: 1 })) }, 1000 * 60 * 60 * 24 * 4);
 assert.equal(stale.length, 0);
+
+assert.match(explainUploadError(new Error("Failed to fetch")), /백엔드에 연결하지 못했습니다/);
+assert.match(explainUploadError(new Error("The operation was aborted")), /중단/);
+
+const clearable = clearUploadQueue([
+  { ...queue[0], status: "done" },
+  { ...queue[1], status: "needs_reselect" },
+  { ...queue[2], status: "interrupted" },
+  { ...queue[3], status: "processing" },
+  { ...queue[4], status: "uploading" },
+]);
+assert.deepEqual(clearable.map((item) => item.status), ["processing", "uploading"]);
 
 console.log("upload queue tests passed");

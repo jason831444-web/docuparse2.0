@@ -129,6 +129,8 @@ function ProcessingMetadataDetails({ document }: { document: DocumentRecord }) {
   const ingestion = (document.ingestion_metadata ?? {}) as Record<string, unknown>;
   const quality = (metadata.quality ?? {}) as Record<string, unknown>;
   const escalation = (metadata.ai_escalation_decision ?? ingestion.ai_escalation_decision ?? null) as Record<string, unknown> | null;
+  const providerDiagnostics = (metadata.ai_provider_diagnostics ?? ingestion.ai_provider_diagnostics ?? null) as Record<string, unknown> | null;
+  const fileMetadata = (ingestion.file_metadata ?? {}) as Record<string, unknown>;
   const interpretation = (metadata.category_interpretation ?? ingestion.category_interpretation ?? null) as Record<string, unknown> | null;
   const diagnostics = (interpretation?.diagnostics ?? {}) as Record<string, unknown>;
   const rows = ([
@@ -136,8 +138,17 @@ function ProcessingMetadataDetails({ document }: { document: DocumentRecord }) {
     ["추출 제공자", document.extraction_provider],
     ["보정 제공자", document.refinement_provider],
     ["Provider chain", document.provider_chain],
+    ["PDF 페이지 수", fileMetadata.page_count],
+    ["파일 크기", fileMetadata.size_bytes],
+    ["텍스트 레이어", fileMetadata.text_layer_exists],
+    ["이미지 전용 PDF", fileMetadata.image_only],
+    ["OCR 엔진", fileMetadata.ocr_engine],
     ["OCR 신뢰도", ingestion.ocr_confidence ?? metadata.ocr_confidence],
-    ["표 신뢰도", ingestion.table_confidence ?? (ingestion.quality as Record<string, unknown> | undefined)?.table_confidence],
+    ["OCR provider attempted", fileMetadata.ocr_provider_attempted],
+    ["OCR provider succeeded", fileMetadata.ocr_provider_succeeded],
+    ["OCR provider failed reason", fileMetadata.ocr_provider_failed_reason],
+    ["표 신뢰도", fileMetadata.table_confidence ?? (fileMetadata.quality as Record<string, unknown> | undefined)?.table_confidence],
+    ["Line item completeness", (escalation?.signals as Record<string, unknown> | undefined)?.line_item_completeness],
     ["AI 보정 필요", escalation?.should_escalate],
     ["AI 보정 사유", Array.isArray(escalation?.reasons) ? escalation?.reasons.join(", ") : escalation?.reasons],
     ["AI 보정 신호", escalation?.signals],
@@ -145,6 +156,7 @@ function ProcessingMetadataDetails({ document }: { document: DocumentRecord }) {
     ["AI 성공", diagnostics.ai_succeeded],
     ["AI 실패 사유", diagnostics.ai_failed_reason],
     ["AI 출력 없음", diagnostics.ai_output_empty],
+    ["Document AI provider", providerDiagnostics],
     ["병합 충돌", metadata.merge_conflicts ?? diagnostics.merge_conflicts],
     ["프로필 정규화", interpretation?.profile ? `${interpretation.profile} → ${document.document_type}` : null],
     ["추출 품질", quality],

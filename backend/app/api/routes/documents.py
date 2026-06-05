@@ -6,11 +6,11 @@ from typing import Annotated
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import String, and_, asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models.document import CategoryFolder, Document, DocumentType, ProcessingStatus
 from app.schemas.document import (
     ActivitySummary,
@@ -29,6 +29,7 @@ from app.services.persistence_safety import sanitize_for_postgres
 from app.services.queue_service import get_document_queue
 from app.services.storage import get_storage_service
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
+from app.services.document_processor import DocumentProcessor
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -64,8 +65,20 @@ def _search_filter(search: str):
     return and_(*per_term)
 
 
+def _process_document_in_background(document_id: UUID) -> None:
+    with SessionLocal() as db:
+        document = db.get(Document, document_id)
+        if not document:
+            return
+        DocumentProcessor().process(db, document)
+
+
 @router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
-def upload_document(file: Annotated[UploadFile, File(...)], db: Session = Depends(get_db)) -> DocumentRead:
+def upload_document(
+    file: Annotated[UploadFile, File(...)],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> DocumentRead:
     storage = get_storage_service()
     try:
         stored_path = storage.save_upload(file)
@@ -81,7 +94,8 @@ def upload_document(file: Annotated[UploadFile, File(...)], db: Session = Depend
     db.add(document)
     db.commit()
     db.refresh(document)
-    document = get_document_queue().enqueue(db, document)
+    document = get_document_queue().enqueue(db, document, process_inline=False)
+    background_tasks.add_task(_process_document_in_background, document.id)
     return _to_read(document)
 
 
