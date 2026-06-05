@@ -27,13 +27,19 @@ class PdfExtractionService:
         text, page_count, warnings = self._extract_text(path)
         result.warnings.extend(warnings)
         result.metadata["page_count"] = page_count
+        result.metadata["file_size_bytes"] = path.stat().st_size if path.exists() else None
 
         if len(text.strip()) >= 80:
             result.text = text
             result.blocks = [{"type": "pdf_text", "content": text[:20000]}]
+            result.metadata["text_layer_exists"] = True
+            result.metadata["image_only"] = False
+            result.metadata["ocr_engine"] = None
             return result
 
         result.warnings.append("PDF text layer was sparse; OCR was attempted on rendered pages.")
+        result.metadata["text_layer_exists"] = bool(text.strip())
+        result.metadata["image_only"] = not bool(text.strip())
         rendered = self._render_pages(path, max_pages=self.settings.pdf_ocr_max_pages)
         result.rendered_page_images = rendered
         if not rendered:
@@ -44,8 +50,31 @@ class PdfExtractionService:
 
         ocr_texts = []
         confidences = []
+        provider_attempted: list[str] = []
+        provider_failed_reason: dict[str, str] = {}
+        provider_succeeded: str | None = None
+        table_block_count = 0
+        worker_elapsed_ms = 0
+        worker_url_used: str | None = None
+        worker_available: bool | None = None
+        fallback_used = False
         for index, image_path in enumerate(rendered, start=1):
-            page_text, confidence = self.ocr.extract_text(image_path)
+            if hasattr(self.ocr, "extract"):
+                ocr_result = self.ocr.extract(image_path)
+                page_text, confidence = ocr_result.text, ocr_result.confidence
+                provider_attempted.extend(ocr_result.provider_attempted)
+                provider_failed_reason.update(ocr_result.provider_failed_reason)
+                provider_succeeded = provider_succeeded or ocr_result.provider_succeeded
+                table_block_count += len(ocr_result.table_blocks)
+                worker_elapsed_ms += ocr_result.elapsed_ms or 0
+                worker_url_used = worker_url_used or ocr_result.ocr_worker_url_used
+                worker_available = ocr_result.ocr_worker_available if worker_available is None else worker_available
+                fallback_used = fallback_used or ocr_result.ocr_fallback_used
+            else:
+                page_text, confidence = self.ocr.extract_text(image_path)
+                provider_name = getattr(self.ocr, "engine_name", self.ocr.__class__.__name__)
+                provider_attempted.append(provider_name)
+                provider_succeeded = provider_succeeded or provider_name
             confidences.append(confidence)
             if page_text.strip():
                 ocr_texts.append(f"Page {index}\n{page_text.strip()}")
@@ -53,6 +82,16 @@ class PdfExtractionService:
         result.blocks = [{"type": "pdf_page_ocr", "page": index + 1, "image_path": str(image), "content": ocr_texts[index] if index < len(ocr_texts) else ""} for index, image in enumerate(rendered)]
         result.ocr_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         result.extraction_method = "pdf_scanned_page_ocr"
+        result.metadata["ocr_engine"] = provider_succeeded or getattr(self.ocr, "engine_name", self.ocr.__class__.__name__)
+        result.metadata["ocr_page_count"] = len(rendered)
+        result.metadata["ocr_provider_attempted"] = list(dict.fromkeys(provider_attempted))
+        result.metadata["ocr_provider_succeeded"] = provider_succeeded
+        result.metadata["ocr_provider_failed_reason"] = provider_failed_reason
+        result.metadata["ocr_table_block_count"] = table_block_count
+        result.metadata["ocr_worker_url_used"] = worker_url_used
+        result.metadata["ocr_worker_elapsed_ms"] = worker_elapsed_ms or None
+        result.metadata["ocr_worker_available"] = worker_available
+        result.metadata["ocr_fallback_used"] = fallback_used
         if page_count and len(rendered) < page_count:
             result.warnings.append(f"OCR was limited to the first {len(rendered)} of {page_count} PDF pages.")
         if not result.text:

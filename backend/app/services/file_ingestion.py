@@ -72,7 +72,8 @@ class FileIngestionService:
         )
 
     def _image(self, path: Path, detected: DetectedFileType) -> NormalizedDocument:
-        text, confidence = self.ocr.extract_text(path)
+        result = self._ocr_result(path)
+        text, confidence = result["text"], result["confidence"]
         warnings = []
         if confidence < 0.68:
             warnings.append("Image OCR confidence is low or borderline; vision extraction may be needed.")
@@ -81,13 +82,50 @@ class FileIngestionService:
             mime_type=detected.mime_type,
             extraction_method="image_ocr_fast_path",
             normalized_text=self._normalize_text(text),
-            raw_extracted_blocks=[{"type": "image_ocr_text", "content": text}],
+            raw_extracted_blocks=[{"type": "image_ocr_text", "content": text, "table_blocks": result["table_blocks"]}],
             extraction_warnings=warnings,
-            file_metadata=self._metadata(path, detected),
+            file_metadata={**self._metadata(path, detected), **result["metadata"]},
             ocr_confidence=confidence,
             primary_image_path=path,
             heavy_ai_candidate=True,
         )
+
+    def _ocr_result(self, path: Path) -> dict[str, Any]:
+        if hasattr(self.ocr, "extract"):
+            result = self.ocr.extract(path)
+            return {
+                "text": result.text,
+                "confidence": result.confidence,
+                "table_blocks": result.table_blocks,
+                "metadata": {
+                    "ocr_engine": result.engine_name,
+                    "ocr_confidence": result.confidence,
+                    "ocr_provider_attempted": result.provider_attempted,
+                    "ocr_provider_succeeded": result.provider_succeeded,
+                    "ocr_provider_failed_reason": result.provider_failed_reason,
+                    "ocr_table_block_count": len(result.table_blocks),
+                    "ocr_line_candidate_count": len(result.line_candidates),
+                    "ocr_worker_url_used": result.ocr_worker_url_used,
+                    "ocr_worker_elapsed_ms": result.elapsed_ms,
+                    "ocr_worker_available": result.ocr_worker_available,
+                    "ocr_fallback_used": result.ocr_fallback_used,
+                },
+            }
+        text, confidence = self.ocr.extract_text(path)
+        return {
+            "text": text,
+            "confidence": confidence,
+            "table_blocks": [],
+            "metadata": {
+                "ocr_engine": getattr(self.ocr, "engine_name", self.ocr.__class__.__name__),
+                "ocr_confidence": confidence,
+                "ocr_provider_attempted": [getattr(self.ocr, "engine_name", self.ocr.__class__.__name__)],
+                "ocr_provider_succeeded": getattr(self.ocr, "engine_name", self.ocr.__class__.__name__),
+                "ocr_provider_failed_reason": {},
+                "ocr_table_block_count": 0,
+                "ocr_line_candidate_count": 0,
+            },
+        }
 
     def _pdf(self, path: Path, detected: DetectedFileType) -> NormalizedDocument:
         result = self.pdf.extract(path)
@@ -98,7 +136,7 @@ class FileIngestionService:
             normalized_text=self._normalize_text(result.text),
             raw_extracted_blocks=result.blocks,
             extraction_warnings=result.warnings,
-            file_metadata={**self._metadata(path, detected), **result.metadata},
+            file_metadata={**self._metadata(path, detected), "ocr_engine": getattr(self.ocr, "engine_name", self.ocr.__class__.__name__) if "ocr" in result.extraction_method else None, **result.metadata},
             ocr_confidence=result.ocr_confidence,
             primary_image_path=result.rendered_page_images[0] if result.rendered_page_images else None,
             rendered_image_paths=result.rendered_page_images,

@@ -1,15 +1,54 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 import pytesseract
 from PIL import Image
 
+from app.core.config import get_settings
 
-class OCRService:
-    """Tesseract-backed OCR service. Swap this class for cloud OCR or a vision model later."""
+_paddleocr_runtime_disabled_reason: str | None = None
 
-    def extract_text(self, image_path: Path) -> tuple[str, float]:
+
+@dataclass
+class OCRProviderAttempt:
+    provider: str
+    succeeded: bool
+    failed_reason: str | None = None
+
+
+@dataclass
+class OCRResult:
+    text: str
+    confidence: float
+    engine_name: str
+    provider_attempted: list[str] = field(default_factory=list)
+    provider_succeeded: str | None = None
+    provider_failed_reason: dict[str, str] = field(default_factory=dict)
+    table_blocks: list[dict[str, Any]] = field(default_factory=list)
+    line_candidates: list[dict[str, Any]] = field(default_factory=list)
+    elapsed_ms: int | None = None
+    ocr_worker_url_used: str | None = None
+    ocr_worker_available: bool | None = None
+    ocr_fallback_used: bool = False
+
+
+class TesseractOCRProvider:
+    engine_name = "tesseract"
+
+    def extract(self, image_path: Path) -> OCRResult:
         processed = self._preprocess(image_path)
         text = pytesseract.image_to_string(processed)
         data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT)
@@ -19,7 +58,13 @@ class OCRService:
             if value not in ("-1", -1) and str(value).strip()
         ]
         avg_confidence = max(0.0, min(1.0, (sum(confidences) / len(confidences) / 100) if confidences else 0.0))
-        return text.strip(), avg_confidence
+        return OCRResult(
+            text=text.strip(),
+            confidence=avg_confidence,
+            engine_name=self.engine_name,
+            provider_attempted=[self.engine_name],
+            provider_succeeded=self.engine_name,
+        )
 
     def _preprocess(self, image_path: Path) -> Image.Image:
         image = cv2.imread(str(image_path))
@@ -36,3 +81,306 @@ class OCRService:
             11,
         )
         return Image.fromarray(np.asarray(threshold))
+
+
+class PaddleOCRProvider:
+    engine_name = "paddleocr"
+
+    def __init__(self) -> None:
+        self._ocr: Any | None = None
+
+    @classmethod
+    def is_available(cls) -> bool:
+        return importlib.util.find_spec("paddleocr") is not None
+
+    def extract(self, image_path: Path) -> OCRResult:
+        global _paddleocr_runtime_disabled_reason
+        if _paddleocr_runtime_disabled_reason:
+            raise RuntimeError(f"paddleocr runtime disabled after previous failure: {_paddleocr_runtime_disabled_reason}")
+        if not self.is_available():
+            raise RuntimeError("paddleocr package is not installed")
+        timeout = float(os.getenv("PADDLEOCR_TIMEOUT_SECONDS", "20"))
+        command = [
+            sys.executable,
+            "-m",
+            "app.services.paddleocr_worker",
+            str(image_path),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"paddleocr subprocess timed out after {timeout:.0f}s") from exc
+        if completed.returncode != 0:
+            stderr = (completed.stderr or completed.stdout or "").strip()
+            message = f"paddleocr subprocess failed with code {completed.returncode}: {stderr[-800:]}"
+            if completed.returncode < 0 or "Segmentation fault" in stderr or "SIGSEGV" in stderr:
+                _paddleocr_runtime_disabled_reason = message
+            raise RuntimeError(message)
+        payload = self._parse_worker_payload(completed.stdout)
+        text = str(payload.get("text") or "")
+        confidence = _clamp_confidence(payload.get("confidence"))
+        table_blocks = payload.get("table_blocks") if isinstance(payload.get("table_blocks"), list) else []
+        return OCRResult(
+            text=text.strip(),
+            confidence=confidence,
+            engine_name=self.engine_name,
+            provider_attempted=[self.engine_name],
+            provider_succeeded=self.engine_name,
+            table_blocks=table_blocks,
+        )
+
+    def _parse_worker_payload(self, output: str) -> dict[str, Any]:
+        for line in reversed((output or "").splitlines()):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+        raise RuntimeError(f"paddleocr subprocess did not return JSON output: {(output or '')[-800:]}")
+
+    def _load(self) -> Any:
+        if self._ocr is not None:
+            return self._ocr
+        from paddleocr import PaddleOCR
+
+        try:
+            self._ocr = PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)
+        except TypeError:
+            self._ocr = PaddleOCR(use_angle_cls=False)
+        return self._ocr
+
+    def _run_ocr(self, ocr: Any, image_path: Path) -> Any:
+        if hasattr(ocr, "predict"):
+            return ocr.predict(str(image_path))
+        return ocr.ocr(str(image_path), cls=False)
+
+    def _normalize_output(self, output: Any) -> tuple[str, float, list[dict[str, Any]]]:
+        lines: list[str] = []
+        confidences: list[float] = []
+        table_blocks: list[dict[str, Any]] = []
+        for item in self._walk(output):
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("rec_text") or item.get("label")
+                score = item.get("score") or item.get("confidence") or item.get("rec_score")
+                if isinstance(item.get("res"), dict):
+                    table_blocks.append(item.get("res"))
+                if text:
+                    lines.append(str(text))
+                if score is not None:
+                    confidences.append(_clamp_confidence(score))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                maybe_text = item[1]
+                if isinstance(maybe_text, (list, tuple)) and maybe_text:
+                    lines.append(str(maybe_text[0]))
+                    if len(maybe_text) > 1:
+                        confidences.append(_clamp_confidence(maybe_text[1]))
+        confidence = sum(confidences) / len(confidences) if confidences else (0.80 if lines else 0.0)
+        return "\n".join(line for line in lines if line.strip()), confidence, table_blocks
+
+    def _walk(self, value: Any):
+        if isinstance(value, dict):
+            yield value
+            for nested in value.values():
+                yield from self._walk(nested)
+        elif isinstance(value, (list, tuple)):
+            yield value
+            for nested in value:
+                yield from self._walk(nested)
+
+
+class OCRWorkerProvider:
+    engine_name = "ocr_worker_paddleocr"
+
+    def __init__(self, url: str | None = None, timeout_seconds: float | None = None) -> None:
+        settings = get_settings()
+        self.url = (url or settings.ocr_worker_url or "").rstrip("/")
+        self.timeout_seconds = float(timeout_seconds or settings.ocr_worker_timeout_seconds)
+
+    def is_configured(self) -> bool:
+        return bool(self.url)
+
+    def extract(self, image_path: Path) -> OCRResult:
+        if not self.url:
+            raise RuntimeError("ocr_worker_unconfigured")
+        payload = json.dumps({"image_path": str(image_path)}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.url}/ocr",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        started = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                body = response.read().decode("utf-8")
+        except TimeoutError as exc:
+            raise RuntimeError(f"ocr_worker_timeout after {self.timeout_seconds:.0f}s") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"ocr_worker_unreachable: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"ocr_worker_failed: {exc}") from exc
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"ocr_worker_malformed_response: {body[-500:]}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("ocr_worker_malformed_response: non-object payload")
+        if not data.get("ok", True):
+            error = data.get("error") or "unknown worker error"
+            raise RuntimeError(f"ocr_worker_failed: {error}")
+        text = str(data.get("text") or "")
+        table_blocks = data.get("table_blocks") if isinstance(data.get("table_blocks"), list) else []
+        line_candidates = data.get("line_candidates") if isinstance(data.get("line_candidates"), list) else []
+        engine_name = str(data.get("engine_name") or self.engine_name)
+        return OCRResult(
+            text=text.strip(),
+            confidence=_clamp_confidence(data.get("confidence")),
+            engine_name=engine_name,
+            provider_attempted=[self.engine_name],
+            provider_succeeded=self.engine_name,
+            table_blocks=table_blocks,
+            line_candidates=line_candidates,
+            elapsed_ms=elapsed_ms,
+            ocr_worker_url_used=self.url,
+            ocr_worker_available=True,
+        )
+
+
+class OCRService:
+    """Provider-routed OCR service with remote PaddleOCR worker and Tesseract fallback."""
+
+    engine_name = "auto"
+
+    def __init__(
+        self,
+        worker_provider: OCRWorkerProvider | None = None,
+        paddle_provider: PaddleOCRProvider | None = None,
+        tesseract_provider: TesseractOCRProvider | None = None,
+        prefer_paddleocr: bool | None = None,
+    ) -> None:
+        settings = get_settings()
+        self.worker_provider = worker_provider or OCRWorkerProvider()
+        self.paddle_provider = paddle_provider or PaddleOCRProvider()
+        self.tesseract_provider = tesseract_provider or TesseractOCRProvider()
+        self.prefer_ocr_worker = bool(settings.prefer_ocr_worker and self.worker_provider.is_configured())
+        self.prefer_paddleocr = settings.local_paddleocr_enabled if prefer_paddleocr is None else prefer_paddleocr
+
+    def extract(self, image_path: Path) -> OCRResult:
+        attempts: list[str] = []
+        failures: dict[str, str] = {}
+        providers = []
+        if self.prefer_ocr_worker:
+            providers.append(self.worker_provider)
+        if self.prefer_paddleocr:
+            providers.append(self.paddle_provider)
+        providers.append(self.tesseract_provider)
+        for provider in providers:
+            attempts.append(provider.engine_name)
+            try:
+                result = provider.extract(image_path)
+                result.provider_attempted = attempts
+                result.provider_failed_reason = failures
+                result.ocr_fallback_used = bool(failures)
+                self.engine_name = result.engine_name
+                return result
+            except Exception as exc:
+                failures[provider.engine_name] = str(exc)
+        return OCRResult(
+            text="",
+            confidence=0.0,
+            engine_name="unavailable",
+            provider_attempted=attempts,
+            provider_succeeded=None,
+            provider_failed_reason=failures,
+            ocr_fallback_used=bool(failures),
+        )
+
+    def extract_text(self, image_path: Path) -> tuple[str, float]:
+        result = self.extract(image_path)
+        return result.text, result.confidence
+
+
+def provider_health() -> dict[str, Any]:
+    settings = get_settings()
+    paddle_importable = PaddleOCRProvider.is_available()
+    paddle_usable, paddle_error = _paddleocr_usable()
+    paddle_vl_importable, paddle_vl_error = _paddleocr_vl_status()
+    worker_health, worker_error = _ocr_worker_health(settings.ocr_worker_url, settings.ocr_worker_timeout_seconds)
+    return {
+        "tesseract_available": _module_available("pytesseract"),
+        "ocr_worker_configured": bool(settings.ocr_worker_url),
+        "ocr_worker_url": settings.ocr_worker_url,
+        "ocr_worker_reachable": worker_health is not None,
+        "ocr_worker_health": worker_health,
+        "ocr_worker_error": worker_error,
+        "paddleocr_importable": paddle_importable,
+        "paddleocr_importable_in_backend": paddle_importable,
+        "paddleocr_usable": paddle_usable,
+        "paddleocr_init_error": paddle_error,
+        "paddleocr_runtime_mode": "ocr_worker" if settings.ocr_worker_url else ("subprocess_isolated" if paddle_importable else "unavailable"),
+        "paddleocr_runtime_probe": "document_level_only",
+        "paddleocr_runtime_note": "Actual inference is isolated per document and falls back to Tesseract on timeout or worker failure.",
+        "paddleocr_runtime_disabled_reason": _paddleocr_runtime_disabled_reason,
+        "paddleocr_vl_importable": paddle_vl_importable,
+        "paddleocr_vl_usable": paddle_vl_importable,
+        "paddleocr_vl_init_error": paddle_vl_error,
+        "paddleocr_vl_runtime_mode": "heavy_fallback_configured" if paddle_vl_importable else "unavailable",
+        "qwen_vl_available": _module_available("qwen_vl_utils") and _module_available("transformers"),
+    }
+
+
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def _ocr_worker_health(url: str | None, timeout_seconds: float) -> tuple[dict[str, Any] | None, str | None]:
+    if not url:
+        return None, "ocr worker is not configured"
+    request = urllib.request.Request(f"{url.rstrip('/')}/health", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=min(timeout_seconds, 5.0)) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        return None, str(exc)
+    return payload if isinstance(payload, dict) else {"raw": payload}, None
+
+
+def _paddleocr_usable() -> tuple[bool, str | None]:
+    if not PaddleOCRProvider.is_available():
+        return False, "paddleocr package is not installed"
+    try:
+        from paddleocr import PaddleOCR  # noqa: F401
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _paddleocr_vl_status() -> tuple[bool, str | None]:
+    if not PaddleOCRProvider.is_available():
+        return False, "paddleocr package is not installed"
+    try:
+        from paddleocr import PaddleOCRVL  # noqa: F401
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _clamp_confidence(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if number > 1:
+        number = number / 100
+    return max(0.0, min(1.0, number))

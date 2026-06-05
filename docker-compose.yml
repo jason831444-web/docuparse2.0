@@ -21,6 +21,7 @@ services:
     build:
       context: ./backend
       args:
+        INSTALL_OCR_DEPS: ${INSTALL_OCR_DEPS:-true}
         INSTALL_LLAMA_CPP_DEPS: ${INSTALL_LLAMA_CPP_DEPS:-true}
         INSTALL_AI_DEPS: ${INSTALL_AI_DEPS:-false}
     environment:
@@ -31,7 +32,7 @@ services:
       STORAGE_BACKEND: local
       PROCESSING_MODE: inline
       QUEUE_BACKEND: local
-      AI_INTERPRETATION_ENABLED: ${AI_INTERPRETATION_ENABLED:-true}
+      AI_INTERPRETATION_ENABLED: ${AI_INTERPRETATION_ENABLED:-false}
       AI_INTERPRETATION_PROVIDER: ${AI_INTERPRETATION_PROVIDER:-llama_cpp}
       AI_INTERPRETATION_MODEL: ${AI_INTERPRETATION_MODEL:-gguf-local}
       AI_INTERPRETATION_FALLBACK_MODEL: ${AI_INTERPRETATION_FALLBACK_MODEL:-google/gemma-2-2b-it}
@@ -52,6 +53,11 @@ services:
       PADDLEOCR_VL_MODEL_DIR: /app/models/paddleocr_vl
       QWEN2_5_VL_MODEL_DIR: /app/models/qwen2_5_vl
       PADDLEOCR_VL_DEVICE: cpu
+      PADDLEOCR_TIMEOUT_SECONDS: ${PADDLEOCR_TIMEOUT_SECONDS:-600}
+      OCR_WORKER_URL: ${OCR_WORKER_URL:-http://ocr-worker:8010}
+      PREFER_OCR_WORKER: ${PREFER_OCR_WORKER:-true}
+      OCR_WORKER_TIMEOUT_SECONDS: ${OCR_WORKER_TIMEOUT_SECONDS:-120}
+      LOCAL_PADDLEOCR_ENABLED: ${LOCAL_PADDLEOCR_ENABLED:-false}
     ports:
       - "8001:8000"
     volumes:
@@ -61,6 +67,36 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      ocr-worker:
+        condition: service_started
+
+  ocr-worker:
+    profiles:
+      - backend
+    build:
+      context: ./backend
+      args:
+        INSTALL_OCR_DEPS: ${INSTALL_OCR_DEPS:-true}
+        INSTALL_LLAMA_CPP_DEPS: "false"
+        INSTALL_AI_DEPS: "false"
+    command: ["uvicorn", "app.services.ocr_worker_server:app", "--host", "0.0.0.0", "--port", "8010"]
+    restart: unless-stopped
+    environment:
+      UPLOAD_DIR: /app/uploads
+      PADDLEOCR_CACHE_DIR: /root/.paddlex
+      PADDLEOCR_DEVICE: ${PADDLEOCR_DEVICE:-cpu}
+    ports:
+      - "8010:8010"
+    volumes:
+      - uploaded_files:/app/uploads
+      - paddleocr_cache:/root/.paddlex
+      - model_cache:/app/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   frontend:
     build:
@@ -76,3 +112,4 @@ volumes:
   postgres_data:
   uploaded_files:
   model_cache:
+  paddleocr_cache:

@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     qwen2_5_vl_model_dir: Path | None = None
     qwen2_5_vl_device: str = "auto"
     pdf_ocr_max_pages: int = 3
+    ocr_worker_url: str | None = None
+    prefer_ocr_worker: bool = False
+    ocr_worker_timeout_seconds: float = 120.0
+    local_paddleocr_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
