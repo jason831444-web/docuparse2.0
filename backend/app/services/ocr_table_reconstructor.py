@@ -69,7 +69,7 @@ def _reconstruct_vertical_table(lines: list[str]) -> list[OCRLineItemCandidate]:
             break
         if _field_for_vertical_header(line):
             continue
-        cells.append(line)
+        cells.extend(_split_leaked_amount_prefix(line))
 
     if not cells:
         return []
@@ -413,6 +413,22 @@ def _field_for_vertical_header(value: str) -> str | None:
     if key in {"비고", "note", "remark", "remarks"}:
         return "note"
     return None
+
+
+def _split_leaked_amount_prefix(line: str) -> list[str]:
+    parts: list[str] = []
+    remaining = line.strip()
+    while True:
+        match = re.match(r"^(\d{4,}(?:\.\d+)?)\s+(.+)$", remaining)
+        if not match:
+            break
+        tail = match.group(2).strip()
+        if not re.search(r"[A-Za-z가-힣]", tail):
+            break
+        parts.append(match.group(1))
+        remaining = tail
+    parts.append(remaining)
+    return parts
 
 
 def _looks_like_vertical_table_boundary(line: str) -> bool:

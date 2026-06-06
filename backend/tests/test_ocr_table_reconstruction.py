@@ -335,12 +335,12 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
         "Item Description",
         "Vendor SKU",
         "Specification",
-        "Oty",
+        "Qty",
         "Unit",
         "Unit Price",
         "Subtotal",
         "Tax",
-        "Tota",
+        "Total",
         "PCB Connector 12F",
         "CON-PCB-12F",
         "12",
@@ -349,20 +349,18 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
         "300",
         "450000",
         "45000",
-        "495000",
-        "하네스500m",
+        "495000 하네스500m",
         "CBL-HAR-50C",
-        "500m",
-        "5",
+        "500mm",
+        "350",
         "EA",
+        "2200",
         "770000",
-        "77000",
-        "847000",
-        "AL6061환봉10파이",
+        "77000 847000 AL6061환봉10파이",
         "10mm X 3000",
-        "100",
+        "30",
         "EA",
-        "2400",
+        "8000",
         "240000",
         "24000",
         "264000",
@@ -404,21 +402,26 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
 
     second = parsed.line_items[1]
     assert second["item_name"] == "하네스500m"
+    assert "495000" not in second["item_name"]
     assert second["item_code"] == "CBL-HAR-50C"
-    assert second["specification"] == "500m"
-    assert second["quantity"] == 5
+    assert second["specification"] == "500mm"
+    assert second["quantity"] == 350
     assert second["unit"] == "EA"
-    assert second["unit_price"] == 154000
+    assert second["unit_price"] == 2200
     assert second["supply_amount"] == 770000
     assert second["tax_amount"] == 77000
     assert second["line_total"] == 847000
 
     third = parsed.line_items[2]
     assert third["item_name"] == "AL6061 환봉10 파이"
+    assert "77000" not in third["item_name"]
+    assert "847000" not in third["item_name"]
     assert "item_code" not in third
     assert third["specification"] == "10mm X 3000"
-    assert third["quantity"] == 100
-    assert third["unit_price"] == 2400
+    assert third["quantity"] == 30
+    assert third["unit_price"] == 8000
+    assert third["supply_amount"] == 240000
+    assert third["tax_amount"] == 24000
     assert third["line_total"] == 264000
 
 
