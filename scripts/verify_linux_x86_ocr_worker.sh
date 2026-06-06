@@ -29,7 +29,9 @@ print_failure_diagnostics() {
   printf '\n--- classified failure hints ---\n'
   local logs
   logs="$(docker compose logs --tail=300 ocr-worker backend 2>/dev/null || true)"
-  if grep -qiE 'Segmentation fault|SIGSEGV|returncode -11|FatalError' <<<"$logs"; then
+  if grep -qiE 'ConvertPirAttribute2RuntimeAttribute|onednn_instruction|FLAGS_use_onednn|FLAGS_enable_pir_api|PADDLE_RUNTIME|Unimplemented.*pir::' <<<"$logs"; then
+    echo "classification=PADDLE_RUNTIME_INFERENCE_ERROR"
+  elif grep -qiE 'Segmentation fault|SIGSEGV|returncode -11|FatalError' <<<"$logs"; then
     echo "classification=SIGSEGV_NATIVE_RUNTIME_CRASH"
   elif grep -qiE 'timeout|timed out' <<<"$logs"; then
     echo "classification=TIMEOUT"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +11,12 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.services.ocr import PaddleOCRProvider
+from app.services.ocr import PaddleOCRProvider, configure_paddle_runtime_env
 
 
 app = FastAPI(title="DocuParse OCR Worker")
+logger = logging.getLogger(__name__)
+configure_paddle_runtime_env()
 
 _provider: PaddleOCRProvider | None = None
 _provider_lock = threading.Lock()
@@ -46,6 +49,17 @@ def health() -> dict[str, Any]:
         "lazy_initialization": _provider is None,
         "model_cache_path": os.getenv("PADDLEOCR_CACHE_DIR") or str(Path.home() / ".paddlex"),
         "device": os.getenv("PADDLEOCR_DEVICE", "cpu"),
+        "lang": os.getenv("PADDLEOCR_LANG", "korean"),
+        "ocr_version": os.getenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4"),
+        "det_model": os.getenv("PADDLEOCR_DET_MODEL", "PP-OCRv4_mobile_det"),
+        "rec_model": os.getenv("PADDLEOCR_REC_MODEL", "korean_PP-OCRv4_mobile_rec"),
+        "runtime_flags": {
+            "FLAGS_use_onednn": os.getenv("FLAGS_use_onednn"),
+            "FLAGS_use_mkldnn": os.getenv("FLAGS_use_mkldnn"),
+            "FLAGS_enable_pir_api": os.getenv("FLAGS_enable_pir_api"),
+            "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": os.getenv("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"),
+            "PADDLE_DISABLE_SIGNAL_HANDLER": os.getenv("PADDLE_DISABLE_SIGNAL_HANDLER"),
+        },
         "last_error": _last_error,
     }
 
@@ -74,6 +88,7 @@ def ocr(payload: OCRRequest):
         }
     except Exception as exc:
         _last_error = str(exc)
+        logger.exception("OCR worker PaddleOCR inference failed for %s", image_path)
         return JSONResponse(
             status_code=500,
             content={

@@ -58,6 +58,11 @@ services:
       PREFER_OCR_WORKER: ${PREFER_OCR_WORKER:-true}
       OCR_WORKER_TIMEOUT_SECONDS: ${OCR_WORKER_TIMEOUT_SECONDS:-120}
       LOCAL_PADDLEOCR_ENABLED: ${LOCAL_PADDLEOCR_ENABLED:-false}
+      FLAGS_use_onednn: "0"
+      FLAGS_use_mkldnn: "0"
+      FLAGS_enable_pir_api: "0"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      PADDLE_DISABLE_SIGNAL_HANDLER: "1"
     ports:
       - "8001:8000"
     volumes:
@@ -85,6 +90,15 @@ services:
       UPLOAD_DIR: /app/uploads
       PADDLEOCR_CACHE_DIR: /root/.paddlex
       PADDLEOCR_DEVICE: ${PADDLEOCR_DEVICE:-cpu}
+      PADDLEOCR_LANG: ${PADDLEOCR_LANG:-korean}
+      PADDLEOCR_OCR_VERSION: ${PADDLEOCR_OCR_VERSION:-PP-OCRv4}
+      PADDLEOCR_DET_MODEL: ${PADDLEOCR_DET_MODEL:-PP-OCRv4_mobile_det}
+      PADDLEOCR_REC_MODEL: ${PADDLEOCR_REC_MODEL:-korean_PP-OCRv4_mobile_rec}
+      FLAGS_use_onednn: "0"
+      FLAGS_use_mkldnn: "0"
+      FLAGS_enable_pir_api: "0"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      PADDLE_DISABLE_SIGNAL_HANDLER: "1"
     ports:
       - "8010:8010"
     volumes:

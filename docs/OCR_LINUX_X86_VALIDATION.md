@@ -81,11 +81,27 @@ If PaddleOCR fails but DocuParse remains stable, metadata should show a fallback
 
 The script classifies logs when possible:
 
+- `PADDLE_RUNTIME_INFERENCE_ERROR`
 - `SIGSEGV_NATIVE_RUNTIME_CRASH`
 - `TIMEOUT`
 - `DEPENDENCY_ERROR`
 - `MODEL_DOWNLOAD_OR_CACHE_EVENT`
 - `UNKNOWN_CHECK_LOGS`
+
+The worker is configured for conservative Linux CPU inference by default:
+
+- `FLAGS_use_onednn=0`
+- `FLAGS_use_mkldnn=0`
+- `FLAGS_enable_pir_api=0`
+- `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True`
+- `PADDLE_DISABLE_SIGNAL_HANDLER=1`
+- `PADDLEOCR_OCR_VERSION=PP-OCRv4`
+- `PADDLEOCR_DET_MODEL=PP-OCRv4_mobile_det`
+- `PADDLEOCR_REC_MODEL=korean_PP-OCRv4_mobile_rec`
+
+These defaults avoid the PP-OCRv5 server + oneDNN/PIR path that can fail on
+some CPU-only Docker hosts with errors such as
+`ConvertPirAttribute2RuntimeAttribute not support ... onednn_instruction`.
 
 ## Log Locations
 

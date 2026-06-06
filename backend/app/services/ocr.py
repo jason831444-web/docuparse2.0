@@ -22,6 +22,15 @@ from app.core.config import get_settings
 _paddleocr_runtime_disabled_reason: str | None = None
 
 
+def configure_paddle_runtime_env() -> None:
+    """Set conservative CPU runtime flags before importing/initializing Paddle."""
+    os.environ.setdefault("FLAGS_use_onednn", "0")
+    os.environ.setdefault("FLAGS_use_mkldnn", "0")
+    os.environ.setdefault("FLAGS_enable_pir_api", "0")
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    os.environ.setdefault("PADDLE_DISABLE_SIGNAL_HANDLER", "1")
+
+
 @dataclass
 class OCRProviderAttempt:
     provider: str
@@ -151,12 +160,58 @@ class PaddleOCRProvider:
     def _load(self) -> Any:
         if self._ocr is not None:
             return self._ocr
+        configure_paddle_runtime_env()
         from paddleocr import PaddleOCR
 
-        try:
-            self._ocr = PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)
-        except TypeError:
-            self._ocr = PaddleOCR(use_angle_cls=False)
+        lang = os.getenv("PADDLEOCR_LANG", "korean")
+        ocr_version = os.getenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4")
+        det_model = os.getenv("PADDLEOCR_DET_MODEL", "PP-OCRv4_mobile_det")
+        rec_model = os.getenv("PADDLEOCR_REC_MODEL", "korean_PP-OCRv4_mobile_rec")
+        init_attempts = [
+            {
+                "lang": lang,
+                "ocr_version": ocr_version,
+                "text_detection_model_name": det_model,
+                "text_recognition_model_name": rec_model,
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+            },
+            {
+                "lang": lang,
+                "ocr_version": ocr_version,
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+            },
+            {
+                "lang": lang,
+                "ocr_version": ocr_version,
+                "use_angle_cls": False,
+                "use_gpu": False,
+                "enable_mkldnn": False,
+            },
+            {
+                "lang": lang,
+                "use_angle_cls": False,
+                "use_gpu": False,
+            },
+            {
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": False,
+            },
+            {"use_angle_cls": False},
+        ]
+        errors: list[str] = []
+        for kwargs in init_attempts:
+            try:
+                self._ocr = PaddleOCR(**kwargs)
+                return self._ocr
+            except Exception as exc:
+                errors.append(f"{exc.__class__.__name__} for {sorted(kwargs)}: {exc}")
+                continue
+        raise RuntimeError("PaddleOCR initialization failed for all compatible argument sets: " + " | ".join(errors[-3:]))
         return self._ocr
 
     def _run_ocr(self, ocr: Any, image_path: Path) -> Any:

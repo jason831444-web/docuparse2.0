@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -26,10 +27,18 @@ def main() -> None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=float(os.getenv("OCR_WORKER_TIMEOUT_SECONDS", "120"))) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=float(os.getenv("OCR_WORKER_TIMEOUT_SECONDS", "120"))) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        print(json.dumps({"worker_url": worker_url, "image_path": str(image_path), "http_status": exc.code, "error_body": body[-2000:]}, ensure_ascii=False))
+        raise
+    except Exception as exc:
+        print(json.dumps({"worker_url": worker_url, "image_path": str(image_path), "error": str(exc)}, ensure_ascii=False))
+        raise
     text = str(data.get("text") or "")
-    print(json.dumps({"worker_url": worker_url, "ok": data.get("ok"), "text": text, "confidence": data.get("confidence")}, ensure_ascii=False))
+    print(json.dumps({"worker_url": worker_url, "image_path": str(image_path), "ok": data.get("ok"), "text": text, "confidence": data.get("confidence")}, ensure_ascii=False))
     if not data.get("ok"):
         raise SystemExit("OCR worker returned ok=false")
     if not text.strip():
