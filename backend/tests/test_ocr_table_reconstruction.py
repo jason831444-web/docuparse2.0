@@ -222,4 +222,10 @@ def test_vertical_paddleocr_purchase_order_table_reconstructs_items_and_totals()
     assert parsed.line_items[2]["quantity"] == 800
     assert parsed.line_items[2]["tax_amount"] == 3200
     assert parsed.line_items[3]["item_code"] == "PLT-FIX-02"
+    assert parsed.line_items[3]["specification"] == "120x60x5T"
+    assert parsed.line_items[3]["quantity"] == 40
+    assert parsed.line_items[3]["unit"] == "EA"
+    assert parsed.line_items[3]["unit_price"] == 2800
+    assert parsed.line_items[3]["supply_amount"] == 112000
+    assert parsed.line_items[3]["tax_amount"] == 11200
     assert parsed.line_items[3]["line_total"] == 123200

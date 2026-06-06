@@ -168,7 +168,14 @@ def _parse_vertical_row(cells: list[str], header_fields: list[str]) -> dict | No
         return None
 
     tax_amount = _repair_tax_amount(supply_amount, tax_amount, line_total)
-    quantity, inferred_unit_price = _choose_quantity_and_unit_price(quantity_token, unit_price, supply_amount)
+    quantity, inferred_unit_price = _choose_quantity_and_unit_price(
+        quantity_token,
+        unit_price,
+        supply_amount,
+        item_code=item_code,
+        item_name=" ".join(name_cells),
+        specification=specification,
+    )
     if unit_price is None:
         unit_price = inferred_unit_price
     if unit is None and quantity is not None:
@@ -243,7 +250,15 @@ def _quantity_candidates(value: object) -> list[Decimal]:
     return deduped
 
 
-def _choose_quantity_and_unit_price(quantity_token: object, unit_price: Decimal | None, supply_amount: Decimal | None) -> tuple[Decimal | None, Decimal | None]:
+def _choose_quantity_and_unit_price(
+    quantity_token: object,
+    unit_price: Decimal | None,
+    supply_amount: Decimal | None,
+    *,
+    item_code: str | None = None,
+    item_name: str | None = None,
+    specification: str | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
     if supply_amount is None:
         candidates = _quantity_candidates(quantity_token)
         return (candidates[0], None) if candidates else (None, None)
@@ -266,12 +281,42 @@ def _choose_quantity_and_unit_price(quantity_token: object, unit_price: Decimal 
             score += 2
         if str(quantity_token or "").strip().upper().endswith("C") and quantity == candidates[0]:
             score += 1
+        score += _quantity_context_score(quantity, inferred_price, item_code=item_code, item_name=item_name, specification=specification)
         scored.append((score, quantity, inferred_price))
     if not scored:
         return candidates[0], unit_price
     scored.sort(key=lambda entry: (-entry[0], -entry[1]))
     _, quantity, inferred_price = scored[0]
     return quantity, inferred_price
+
+
+def _quantity_context_score(
+    quantity: Decimal,
+    unit_price: Decimal,
+    *,
+    item_code: str | None,
+    item_name: str | None,
+    specification: str | None,
+) -> int:
+    identity = " ".join(value for value in [item_code, item_name, specification] if value).lower()
+    if not identity:
+        return 0
+    fastener_like = bool(re.search(r"(bolt|washer|screw|nut|볼트|와셔|나사|너트|wash)", identity, flags=re.IGNORECASE))
+    plate_like = bool(re.search(r"(plate|plt|bracket|plate|플레이트|판재|철판|고정판|브라켓|판)", identity, flags=re.IGNORECASE))
+    has_large_flat_spec = bool(re.search(r"\d{2,4}\s*x\s*\d{2,4}(?:\s*x\s*\d+(?:\.\d+)?t?)?", identity, flags=re.IGNORECASE))
+    if fastener_like:
+        if quantity >= 500 and unit_price <= 500:
+            return 5
+        if quantity <= 100 and unit_price >= 1000:
+            return -2
+    if plate_like or has_large_flat_spec:
+        if quantity <= 50 and unit_price >= 2000:
+            return 8
+        if quantity <= 100 and unit_price >= 1000:
+            return 5
+        if quantity >= 500 and unit_price <= 500:
+            return -4
+    return 0
 
 
 def _repair_tax_amount(supply: Decimal | None, tax: Decimal | None, total: Decimal | None) -> Decimal | None:
