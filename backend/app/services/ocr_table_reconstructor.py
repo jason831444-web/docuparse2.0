@@ -101,21 +101,76 @@ def _reconstruct_priced_vertical_table(cells: list[str], *, allow_item_code: boo
     candidates: list[OCRLineItemCandidate] = []
     start = 0
     while start < len(cells):
-        parsed: tuple[dict, int] | None = None
+        parsed_options: list[tuple[int, dict, int]] = []
         for end in range(start + 5, min(len(cells), start + 16) + 1):
             segment = cells[start:end]
             item = _parse_priced_vertical_segment(segment, allow_item_code=allow_item_code)
             if item:
-                parsed = (item, end)
-                break
-        if not parsed:
+                parsed_options.append((_reconstructed_item_score(item, segment), item, end))
+        if not parsed_options:
             start += 1
             continue
-        item, next_start = parsed
+        parsed_options.sort(key=lambda entry: (-entry[0], entry[2]))
+        _, item, next_start = parsed_options[0]
         confidence = max(_candidate_confidence(item), 0.76)
         candidates.append(OCRLineItemCandidate(item=item, confidence=confidence, source_line=" / ".join(cells[start:next_start])))
         start = next_start
     return candidates
+
+
+def _reconstructed_item_score(item: dict, segment: list[str]) -> int:
+    quantity = _to_decimal(item.get("quantity"))
+    unit_price = _to_decimal(item.get("unit_price"))
+    supply = _to_decimal(item.get("supply_amount"))
+    tax = _to_decimal(item.get("tax_amount"))
+    total = _to_decimal(item.get("line_total"))
+    score = 0
+    if item.get("item_name"):
+        score += 8
+    if item.get("item_code"):
+        score += 5
+    if item.get("specification"):
+        score += 4
+    if item.get("unit"):
+        score += 3
+    if quantity is not None and unit_price is not None and supply is not None:
+        if abs((quantity * unit_price) - supply) <= max(Decimal("1"), abs(supply) * Decimal("0.01")):
+            score += 35
+        else:
+            score -= 20
+    if supply is not None and tax is not None and total is not None:
+        if abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.01")):
+            score += 30
+        else:
+            score -= 25
+        if abs(tax - (supply * Decimal("0.1"))) <= max(Decimal("1"), abs(supply) * Decimal("0.01")):
+            score += 24
+        else:
+            score -= 10
+    if quantity is not None and quantity != quantity.to_integral_value():
+        score -= 20
+    if quantity is not None and unit_price is not None:
+        score += _quantity_context_score(
+            quantity,
+            unit_price,
+            item_code=item.get("item_code"),
+            item_name=item.get("item_name"),
+            specification=item.get("specification"),
+        )
+    raw_numbers = [_to_decimal(cell) for cell in segment]
+    raw_numbers = [number for number in raw_numbers if number is not None]
+    for value in [quantity, unit_price, supply, tax, total]:
+        if value is not None and value in raw_numbers:
+            score += 2
+    code_count = sum(1 for cell in segment if _looks_like_code(_normalize_ocr_code(cell)))
+    if code_count > 1:
+        score -= 50 * (code_count - 1)
+    numericish_count = sum(1 for cell in segment if _is_numericish_cell(cell))
+    if numericish_count > 7:
+        score -= 12 * (numericish_count - 7)
+    if len(segment) > 11:
+        score -= 4 * (len(segment) - 11)
+    return score
 
 
 def _parse_priced_vertical_segment(cells: list[str], *, allow_item_code: bool) -> dict | None:
@@ -238,6 +293,7 @@ def _parse_priced_vertical_segment(cells: list[str], *, allow_item_code: bool) -
 
 def _identity_from_vertical_cells(cells: list[str], *, allow_item_code: bool) -> dict[str, str | None]:
     normalized_cells = [cell for cell in cells if cell and not _unit(cell)]
+    normalized_cells = _remove_vertical_row_number_cells(normalized_cells)
     code_index = next((index for index, cell in enumerate(normalized_cells) if _looks_like_code(_normalize_ocr_code(cell))), None) if allow_item_code else None
     item_code = _normalize_ocr_code(normalized_cells[code_index]) if code_index is not None else None
     spec_index = None
@@ -267,6 +323,38 @@ def _identity_from_vertical_cells(cells: list[str], *, allow_item_code: bool) ->
         "item_code": item_code,
         "specification": specification,
     }
+
+
+def _remove_vertical_row_number_cells(cells: list[str]) -> list[str]:
+    """Drop OCR table line numbers without removing real quantity/spec cells."""
+    if len(cells) < 2:
+        return cells
+    filtered: list[str] = []
+    for index, cell in enumerate(cells):
+        if _is_vertical_row_number_cell(cell, cells, index):
+            continue
+        filtered.append(cell)
+    return filtered
+
+
+def _is_vertical_row_number_cell(cell: str, cells: list[str], index: int) -> bool:
+    if not re.fullmatch(r"\d{1,3}", cell.strip()):
+        return False
+    previous_cell = cells[index - 1] if index > 0 else ""
+    next_cell = cells[index + 1] if index + 1 < len(cells) else ""
+    previous_has_name = bool(re.search(r"[A-Za-z가-힣]", previous_cell))
+    next_has_name_or_code = bool(re.search(r"[A-Za-z가-힣]", next_cell))
+    next_is_code = _looks_like_code(_normalize_ocr_code(next_cell)) if next_cell else False
+    previous_is_code = _looks_like_code(_normalize_ocr_code(previous_cell)) if previous_cell else False
+    if previous_is_code:
+        return False
+    if index == 0 and next_has_name_or_code:
+        return True
+    if previous_has_name and (next_is_code or _looks_like_spec_token(_normalize_spec(next_cell))):
+        return True
+    if previous_has_name and index == len(cells) - 1:
+        return True
+    return False
 
 
 def _raw_amount_tail_is_plausible(supply: Decimal, tax: Decimal, total: Decimal) -> bool:
