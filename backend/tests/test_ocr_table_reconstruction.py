@@ -297,7 +297,7 @@ def test_vertical_paddleocr_quotation_without_item_codes_reconstructs_amount_row
     assert first["line_total"] == 137500
 
     second = parsed.line_items[1]
-    assert second["item_name"] == "SUS 304 철판 3T"
+    assert second["item_name"] == "SUS304 철판 3T"
     assert second["specification"] == "1000x2000"
     assert second["quantity"] == 4
     assert second["unit_price"] == 37000
@@ -313,3 +313,202 @@ def test_vertical_paddleocr_quotation_without_item_codes_reconstructs_amount_row
     assert third["supply_amount"] == 168000
     assert third["tax_amount"] == 16800
     assert third["line_total"] == 184800
+
+
+def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_codes():
+    text = "\n".join([
+        "세금계산서/INVOICE",
+        "Vendor SKU column must not become item rows",
+        "계산서번호",
+        "INV-2026-0803-332",
+        "발행일",
+        "2026-08-03",
+        "공급업체",
+        "성진전자부품",
+        "고객사",
+        "네오팩토리",
+        "지급기한",
+        "2026-09-02",
+        "통화",
+        "KRW",
+        "Line",
+        "Item Description",
+        "Vendor SKU",
+        "Specification",
+        "Qty",
+        "Unit",
+        "Unit Price",
+        "Subtotal",
+        "Tax",
+        "Total",
+        "PCB Connector 12F",
+        "CON-PCB-12F",
+        "12핀",
+        "1500",
+        "EA",
+        "300",
+        "450000",
+        "45000",
+        "495000",
+        "하네스500m",
+        "CBL-HAR-50C",
+        "500m",
+        "5",
+        "ROLL",
+        "140000",
+        "700000",
+        "70000",
+        "770000",
+        "AL6061환봉10파이",
+        "AL-ROD-6061-10",
+        "10mm X 3000",
+        "100",
+        "EA",
+        "2400",
+        "240000",
+        "24000",
+        "264000",
+        "공급가액:",
+        "1460000",
+        "부가세:",
+        "146000",
+        "합계금액:",
+        "1606000",
+    ])
+
+    parsed = DocumentParser().parse(text, "03_image_invoice_vendor_sku.pdf")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.vendor_name == "성진전자부품"
+    assert parsed.customer_name == "네오팩토리"
+    assert parsed.document_number == "INV-2026-0803-332"
+    assert parsed.issue_date.isoformat() == "2026-08-03"
+    assert parsed.due_date.isoformat() == "2026-09-02"
+    assert parsed.subtotal == 1460000
+    assert parsed.tax == 146000
+    assert parsed.extracted_amount == 1606000
+    assert len(parsed.line_items) == 3
+
+    first = parsed.line_items[0]
+    assert first["item_name"] == "PCB Connector 12F"
+    assert first["item_code"] == "CON-PCB-12F"
+    assert first["document_item_code"] == "CON-PCB-12F"
+    assert first["specification"] == "12핀"
+    assert first["quantity"] == 1500
+    assert first["unit"] == "EA"
+    assert first["unit_price"] == 300
+    assert first["supply_amount"] == 450000
+    assert first["tax_amount"] == 45000
+    assert first["line_total"] == 495000
+
+    second = parsed.line_items[1]
+    assert second["item_name"] == "하네스500m"
+    assert second["item_code"] == "CBL-HAR-50C"
+    assert second["specification"] == "500m"
+    assert second["quantity"] == 5
+    assert second["unit"] == "ROLL"
+    assert second["unit_price"] == 140000
+    assert second["line_total"] == 770000
+
+    third = parsed.line_items[2]
+    assert third["item_name"] == "AL6061 환봉10 파이"
+    assert third["item_code"] == "AL-ROD-6061-10"
+    assert third["specification"] == "10mm X 3000"
+    assert third["quantity"] == 100
+    assert third["unit_price"] == 2400
+    assert third["line_total"] == 264000
+
+
+def test_vertical_paddleocr_delivery_note_no_price_table_reconstructs_quantities_without_amounts():
+    text = "\n".join([
+        "납품서",
+        "Delivery Note",
+        "no price columns",
+        "납품번호",
+        "DN-2026-0804-055",
+        "발행일",
+        "2026-08-04",
+        "납품일",
+        "2026-08-05",
+        "공급업체",
+        "대영부품",
+        "고객사",
+        "오성테크",
+        "입고장소",
+        "오성테크2공장",
+        "자재창고",
+        "수령자",
+        "박성호",
+        "차량번호",
+        "서울85가2311",
+        "품목명",
+        "문서품목코드",
+        "규격",
+        "납품수량",
+        "단위",
+        "비고",
+        "베어링",
+        "하우징",
+        "BRG-H-1OO",
+        "100mm",
+        "25",
+        "EA",
+        "S45C PIN 8X60",
+        "PIN-S45C-08",
+        "8X60",
+        "500",
+        "EA",
+        "육각볼트",
+        "M8x20",
+        "BOLT-M8-20",
+        "M8x20",
+        "T000",
+        "가",
+        "SUS WASHER M8",
+        "WASH-SUS-O8",
+        "M8",
+        "1000",
+        "-",
+        "본 납품서는 단가/금액 없이 입고수량 확인용으로 발행되었습니다.",
+    ])
+
+    parsed = DocumentParser().parse(text, "04_image_delivery_note_no_prices.pdf")
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.vendor_name == "대영부품"
+    assert parsed.customer_name == "오성테크"
+    assert parsed.document_number == "DN-2026-0804-055"
+    assert parsed.issue_date.isoformat() == "2026-08-04"
+    assert parsed.due_date.isoformat() == "2026-08-05"
+    assert parsed.subtotal is None
+    assert parsed.tax is None
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 4
+
+    first = parsed.line_items[0]
+    assert first["item_name"] == "베어링 하우징"
+    assert first["item_code"] == "BRG-H-100"
+    assert first["specification"] == "100mm"
+    assert first["quantity"] == 25
+    assert first["unit"] == "EA"
+
+    second = parsed.line_items[1]
+    assert second["item_name"] == "S45C PIN 8X60"
+    assert second["item_code"] == "PIN-S45C-08"
+    assert second["specification"] == "8x60"
+    assert second["quantity"] == 500
+    assert second["unit"] == "EA"
+
+    third = parsed.line_items[2]
+    assert third["item_name"] == "육각볼트 M8x20"
+    assert third["item_code"] == "BOLT-M8-20"
+    assert third["specification"] == "M8x20"
+    assert third["quantity"] == 1000
+    assert third["unit"] == "EA"
+
+    fourth = parsed.line_items[3]
+    assert fourth["item_name"] == "SUS WASHER M8"
+    assert fourth["item_code"] == "WASH-SUS-08"
+    assert fourth["specification"] == "M8"
+    assert fourth["quantity"] == 1000
+    assert fourth["unit"] == "EA"

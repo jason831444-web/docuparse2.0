@@ -281,6 +281,20 @@ class DocumentParser:
         return "\n".join(scoped)
 
     def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
+        lines = [line.strip() for line in text.splitlines()]
+        normalized_labels = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
+        for index, line in enumerate(lines[:-1]):
+            if re.sub(r"[\s:：]+", "", line.lower()) not in normalized_labels:
+                continue
+            for candidate in lines[index + 1:]:
+                value = candidate.strip(" -:：")
+                if not value:
+                    continue
+                value = self._truncate_at_business_label_boundary(value)
+                if self._looks_like_instruction_or_note(value):
+                    continue
+                return value[:120] or None
+
         label_pattern = "|".join(re.escape(label) for label in labels)
         pattern = rf"(?:{label_pattern})\s*[:：]?\s*([^\n|]+)"
         match = re.search(pattern, text, flags=re.IGNORECASE)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 
-UNIT_PATTERN = r"(?:EA|PCS|SET|KG|BOX|M|개|식|대|매|박스|세트)"
+UNIT_PATTERN = r"(?:EA|PCS|SET|KG|BOX|ROLL|M|개|식|대|매|박스|세트|롤)"
 CODE_PATTERN = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9][A-Za-z0-9_-]{2,}$")
 SPEC_PATTERN = re.compile(
     r"^(?:[A-Z]?\d+(?:\.\d+)?\s*[xX×]\s*\d+|[A-Z]\d{1,3}$|\d+(?:\.\d+)?\s*(?:T|MM|CM|M|핀|P)|[A-Z]{2,}\d{2,})",
@@ -94,11 +94,11 @@ def _field_for_vertical_header(value: str) -> str | None:
     key = re.sub(r"[\s_/:：-]+", "", value.lower())
     if key in {"품목명", "품명", "itemname", "itemdescription", "description"}:
         return "item_name"
-    if key in {"품목코드", "품번", "거래처코드", "거래처품목코드", "itemcode", "vendorsku", "sku", "partno", "partnumber"}:
+    if key in {"품목코드", "문서품목코드", "품번", "거래처코드", "거래처품목코드", "itemcode", "vendorsku", "sku", "partno", "partnumber"}:
         return "item_code"
     if key in {"규격", "사양", "spec", "specification", "size", "dimension"}:
         return "specification"
-    if key in {"수량", "수링", "주문수량", "납품수량", "qty", "quantity"}:
+    if key in {"수량", "수링", "주문수량", "납품수량", "qty", "oty", "quantity"}:
         return "quantity"
     if key in {"단위", "unit"}:
         return "unit"
@@ -108,14 +108,22 @@ def _field_for_vertical_header(value: str) -> str | None:
         return "supply_amount"
     if key in {"세액", "세악", "부가세", "vat", "tax"}:
         return "tax_amount"
-    if key in {"합계", "합겨", "합계금액", "총액", "linetotal", "total"}:
+    if key in {"합계", "합겨", "합계금액", "총액", "linetotal", "total", "tota"}:
         return "line_total"
+    if key in {"비고", "note", "remark", "remarks"}:
+        return "note"
     return None
 
 
 def _looks_like_vertical_table_boundary(line: str) -> bool:
     key = re.sub(r"\s+", "", line.lower())
-    return bool(re.search(r"(공급가액합계|공급액합계|세액합계|부가세|총액|총합계|grandtotal|invoicetotal)", key, flags=re.IGNORECASE))
+    return bool(
+        re.fullmatch(
+            r"(공급가액|공급가액합계|공급액합계|세액|세액합계|부가세|합계금액|총액|총합계|subtotal|tax|total|grandtotal|invoicetotal)",
+            key,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _vertical_row_starts(cells: list[str]) -> list[int]:
@@ -126,6 +134,8 @@ def _vertical_row_starts(cells: list[str]) -> list[int]:
         while start > 0 and not _is_numericish_cell(cells[start - 1]):
             previous = cells[start - 1]
             if _looks_like_code(_normalize_ocr_code(previous)):
+                break
+            if _unit(previous):
                 break
             start -= 1
         starts.append(start)
@@ -162,6 +172,21 @@ def _parse_vertical_row(cells: list[str], header_fields: list[str]) -> dict | No
 
     numeric_values = [_to_decimal(cell) for cell in remainder if _is_numeric_token(cell)]
     numeric_values = [value for value in numeric_values if value is not None]
+    if not any(field in header_fields for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]):
+        quantity = _choose_no_price_quantity(quantity_token)
+        if quantity is None:
+            return None
+        if unit is None:
+            unit = _unit(str(quantity_token or "")) or "EA"
+        item_name = _normalize_item_name(" ".join(name_cells))
+        item = {
+            "item_name": item_name,
+            "item_code": item_code,
+            "specification": specification,
+            "quantity": _number_value(quantity),
+            "unit": unit,
+        }
+        return {key: value for key, value in item.items() if value not in (None, "")}
     if len(numeric_values) >= 4:
         unit_price, supply_amount, tax_amount, line_total = numeric_values[-4:]
     elif len(numeric_values) >= 3:
@@ -359,8 +384,10 @@ def _is_numericish_cell(value: str) -> bool:
 
 def _normalize_ocr_code(value: str) -> str:
     text = value.strip()
+    text = re.sub(r"(?<=\d)[Oo]{2}\b", "00", text)
     text = re.sub(r"(?<=-)[Oo](?=\d)", "0", text)
     text = re.sub(r"(?<=\d)[Oo](?=$|-)", "0", text)
+    text = re.sub(r"(?<=\d)[Oo](?=[A-Za-z]$)", "0", text)
     return text
 
 
@@ -381,7 +408,19 @@ def _normalize_item_name(value: str) -> str | None:
     text = text.replace("스텍", "스텐")
     text = re.sub(r"철판\s*3[7T]$", "철판 3T", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<=[A-Za-z가-힣])(?=\d)|(?<=\d)(?=[가-힣A-Za-z])", " ", text)
+    text = re.sub(r"\b([A-Z])\s+(\d{2})\s+([A-Z])\b", r"\1\2\3", text)
+    text = re.sub(r"\b([A-Z]{1,5})\s+(\d{1,4})\b", r"\1\2", text)
+    text = re.sub(r"\b(\d{1,4})\s+([A-Z])\b", r"\1\2", text)
+    text = re.sub(r"\b(\d+)\s+[xX]\s+(\d+)\b", r"\1X\2", text)
     text = re.sub(r"(?<=\d)\s+(?=T\b)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(PIN)\s*(\d+)\s*[xX]\s*(\d+)\b", r"\1 \2X\3", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(M)\s+(\d+)(?=\s*x|\b)", r"\1\2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(\d+)\s*x\s*(\d+)\b", r"\1x\2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bM\s*(\d+)\s*x\s*(\d+)\b", r"M\1x\2", text, flags=re.IGNORECASE)
+    text = re.sub(r"(스텐판|철판|판재|고정판)\s*(\d+(?:\.\d+)?T)\b", r"\1 \2", text, flags=re.IGNORECASE)
+    text = re.sub(r"(환봉)\s+(\d+)", r"\1\2", text)
+    text = re.sub(r"(하네스)\s+(\d+)\s*(m|mm)\b", r"\1\2\3", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(PIN)\s+(\d+)x(\d+)\b", r"\1 \2X\3", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text or None
 
@@ -405,6 +444,14 @@ def _quantity_candidates(value: object) -> list[Decimal]:
         if candidate > 0 and candidate not in deduped:
             deduped.append(candidate)
     return deduped
+
+
+def _choose_no_price_quantity(value: object) -> Decimal | None:
+    text = str(value or "").strip()
+    if re.fullmatch(r"[TIl]\d{3,}", text, flags=re.IGNORECASE):
+        text = "1" + text[1:]
+    candidates = _quantity_candidates(text)
+    return candidates[0] if candidates else None
 
 
 def _choose_quantity_and_unit_price(
@@ -664,7 +711,13 @@ def _is_numeric_token(token: str) -> bool:
 def _unit(token: str) -> str | None:
     if re.search(r"[€E]A$", token.strip(), flags=re.IGNORECASE):
         return "EA"
+    if token.strip() == "가":
+        return "EA"
+    if token.strip() == "-":
+        return None
     normalized = re.sub(r"[^A-Za-z가-힣]", "", token.strip())
+    if normalized == "롤":
+        return "ROLL"
     if normalized.lower() == "ea":
         normalized = "EA"
     match = re.fullmatch(UNIT_PATTERN, normalized, flags=re.IGNORECASE)
