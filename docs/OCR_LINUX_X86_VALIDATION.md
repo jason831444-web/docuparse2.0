@@ -115,6 +115,33 @@ The flags remain as guardrails, but the dependency pin is the primary fix.
 requirements. The Docker build runs an import check after dependency install so
 a NumPy 2.x ABI mismatch fails during image build instead of at worker startup.
 
+## PaddleOCR Worker Stability
+
+PaddleOCR 2.x uses a native predictor that can be unstable when a worker process
+reuses the predictor across concurrent real PDF page requests. The worker
+therefore serializes PaddleOCR inference with a process-level lock. If Paddle
+raises a recoverable runtime error such as `Tensor holds no memory`,
+`PreconditionNotMet`, `holder_ should not be null`, `elementwise_mul`, or
+`elementwise_add`, the worker resets the provider and retries the same OCR
+request once.
+
+Successful retry responses include:
+
+```json
+{
+  "ok": true,
+  "engine_name": "ocr_worker_paddleocr",
+  "retry_used": true,
+  "provider_reset_used": true,
+  "worker_attempt_count": 2
+}
+```
+
+If the retry also fails, the worker returns a structured `500` response with
+`retry_used=true`, `provider_reset_used=true`, and `elapsed_ms`. The backend then
+keeps the existing Tesseract fallback path and records the worker failure reason
+in document OCR metadata.
+
 ## Log Locations
 
 Use these commands after a failed validation:

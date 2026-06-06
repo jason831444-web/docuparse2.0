@@ -52,6 +52,7 @@ class OCRResult:
     ocr_worker_url_used: str | None = None
     ocr_worker_available: bool | None = None
     ocr_fallback_used: bool = False
+    ocr_worker_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class TesseractOCRProvider:
@@ -298,6 +299,15 @@ class OCRWorkerProvider:
         table_blocks = data.get("table_blocks") if isinstance(data.get("table_blocks"), list) else []
         line_candidates = data.get("line_candidates") if isinstance(data.get("line_candidates"), list) else []
         engine_name = str(data.get("engine_name") or self.engine_name)
+        worker_metadata = {
+            key: data.get(key)
+            for key in (
+                "retry_used",
+                "provider_reset_used",
+                "worker_attempt_count",
+            )
+            if key in data
+        }
         return OCRResult(
             text=text.strip(),
             confidence=_clamp_confidence(data.get("confidence")),
@@ -309,6 +319,7 @@ class OCRWorkerProvider:
             elapsed_ms=elapsed_ms,
             ocr_worker_url_used=self.url,
             ocr_worker_available=True,
+            ocr_worker_metadata=worker_metadata,
         )
 
 

@@ -108,6 +108,9 @@ class FileIngestionService:
                     "ocr_worker_url_used": result.ocr_worker_url_used,
                     "ocr_worker_elapsed_ms": result.elapsed_ms,
                     "ocr_worker_available": result.ocr_worker_available,
+                    "ocr_worker_retry_used": result.ocr_worker_metadata.get("retry_used"),
+                    "ocr_worker_provider_reset_used": result.ocr_worker_metadata.get("provider_reset_used"),
+                    "ocr_worker_attempt_count": result.ocr_worker_metadata.get("worker_attempt_count"),
                     "ocr_fallback_used": result.ocr_fallback_used,
                 },
             }

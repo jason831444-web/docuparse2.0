@@ -14,6 +14,8 @@ sys.modules.setdefault(
 from app.services.file_ingestion import FileIngestionService
 from app.services.file_type_detection import DetectedFileType
 from app.services.ocr import OCRResult, OCRService, PaddleOCRProvider
+from fastapi.testclient import TestClient
+import app.services.ocr_worker_server as ocr_worker_server
 
 
 class FakePaddleProvider:
@@ -198,3 +200,76 @@ def test_paddleocr_provider_prefers_legacy_ocr_api_over_predict(tmp_path):
     assert ocr.calls == ["ocr:False"]
     assert text == "PO-123 TEST"
     assert confidence == 0.98
+
+
+def test_ocr_worker_resets_provider_and_retries_paddle_runtime_error(monkeypatch, tmp_path):
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"fake")
+    calls = {"get": 0, "reset": 0}
+
+    class FakeProvider:
+        def _load(self):
+            return self
+
+        def _run_ocr(self, ocr, path: Path):
+            calls["get"] += 1
+            if calls["get"] == 1:
+                raise RuntimeError("PreconditionNotMet: Tensor holds no memory [operator < elementwise_mul > error]")
+            return [[[[0, 0], [1, 0], [1, 1], [0, 1]], ("PO-123 TEST", 0.99)]]
+
+        def _normalize_output(self, output):
+            return "PO-123 TEST", 0.99, []
+
+    def fake_get_provider():
+        return FakeProvider()
+
+    def fake_reset_provider():
+        calls["reset"] += 1
+
+    monkeypatch.setattr(ocr_worker_server, "_get_provider", fake_get_provider)
+    monkeypatch.setattr(ocr_worker_server, "_reset_provider", fake_reset_provider)
+    monkeypatch.setattr(ocr_worker_server, "_last_error", None)
+
+    client = TestClient(ocr_worker_server.app)
+    response = client.post("/ocr", json={"image_path": str(image_path)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["engine_name"] == "ocr_worker_paddleocr"
+    assert payload["text"] == "PO-123 TEST"
+    assert payload["retry_used"] is True
+    assert payload["provider_reset_used"] is True
+    assert payload["worker_attempt_count"] == 2
+    assert calls["reset"] == 1
+
+
+def test_ocr_worker_returns_clear_retry_failure_body(monkeypatch, tmp_path):
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"fake")
+    calls = {"reset": 0}
+
+    class FakeProvider:
+        def _load(self):
+            return self
+
+        def _run_ocr(self, ocr, path: Path):
+            raise RuntimeError("PreconditionNotMet: Tensor holds no memory [operator < elementwise_add > error]")
+
+        def _normalize_output(self, output):
+            return "", 0.0, []
+
+    monkeypatch.setattr(ocr_worker_server, "_get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(ocr_worker_server, "_reset_provider", lambda: calls.__setitem__("reset", calls["reset"] + 1))
+    monkeypatch.setattr(ocr_worker_server, "_last_error", None)
+
+    client = TestClient(ocr_worker_server.app)
+    response = client.post("/ocr", json={"image_path": str(image_path)})
+
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["ok"] is False
+    assert "Tensor holds no memory" in payload["error"]
+    assert payload["retry_used"] is True
+    assert payload["provider_reset_used"] is True
+    assert calls["reset"] == 1

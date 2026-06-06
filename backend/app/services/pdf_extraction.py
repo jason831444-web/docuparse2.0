@@ -58,6 +58,9 @@ class PdfExtractionService:
         worker_url_used: str | None = None
         worker_available: bool | None = None
         fallback_used = False
+        worker_retry_used = False
+        worker_provider_reset_used = False
+        worker_attempt_count = 0
         for index, image_path in enumerate(rendered, start=1):
             if hasattr(self.ocr, "extract"):
                 ocr_result = self.ocr.extract(image_path)
@@ -70,6 +73,9 @@ class PdfExtractionService:
                 worker_url_used = worker_url_used or ocr_result.ocr_worker_url_used
                 worker_available = ocr_result.ocr_worker_available if worker_available is None else worker_available
                 fallback_used = fallback_used or ocr_result.ocr_fallback_used
+                worker_retry_used = worker_retry_used or bool(ocr_result.ocr_worker_metadata.get("retry_used"))
+                worker_provider_reset_used = worker_provider_reset_used or bool(ocr_result.ocr_worker_metadata.get("provider_reset_used"))
+                worker_attempt_count += int(ocr_result.ocr_worker_metadata.get("worker_attempt_count") or 0)
             else:
                 page_text, confidence = self.ocr.extract_text(image_path)
                 provider_name = getattr(self.ocr, "engine_name", self.ocr.__class__.__name__)
@@ -91,6 +97,9 @@ class PdfExtractionService:
         result.metadata["ocr_worker_url_used"] = worker_url_used
         result.metadata["ocr_worker_elapsed_ms"] = worker_elapsed_ms or None
         result.metadata["ocr_worker_available"] = worker_available
+        result.metadata["ocr_worker_retry_used"] = worker_retry_used
+        result.metadata["ocr_worker_provider_reset_used"] = worker_provider_reset_used
+        result.metadata["ocr_worker_attempt_count"] = worker_attempt_count or None
         result.metadata["ocr_fallback_used"] = fallback_used
         if page_count and len(rendered) < page_count:
             result.warnings.append(f"OCR was limited to the first {len(rendered)} of {page_count} PDF pages.")
