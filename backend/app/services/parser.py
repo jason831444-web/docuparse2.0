@@ -230,7 +230,9 @@ class DocumentParser:
     def _extract_labeled_amount(self, text: str, labels: list[str]) -> Decimal | None:
         label_pattern = "|".join(re.escape(label) for label in labels)
         values: list[Decimal] = []
-        for line in text.splitlines():
+        lines = text.splitlines()
+        normalized_label_keys = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
+        for index, line in enumerate(lines):
             if self._looks_like_computed_or_note_amount(line):
                 continue
             match = re.search(
@@ -240,6 +242,12 @@ class DocumentParser:
             )
             if match:
                 value = self._to_decimal(match.group(1))
+                if value is not None:
+                    values.append(value)
+                    continue
+            line_key = re.sub(r"[\s:：]+", "", line.lower())
+            if line_key in normalized_label_keys and index + 1 < len(lines):
+                value = self._to_decimal(lines[index + 1])
                 if value is not None:
                     values.append(value)
         values = [value for value in values if value is not None]

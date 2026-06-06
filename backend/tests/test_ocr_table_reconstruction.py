@@ -119,3 +119,107 @@ def test_ai_escalates_when_ocr_has_item_like_rows_but_parser_result_has_no_items
     assert decision.should_escalate is True
     assert "ocr_line_item_candidates_not_parsed" in decision.reasons
     assert decision.signals["ocr_line_item_candidate_count"] == 1
+
+
+def test_vertical_paddleocr_purchase_order_table_reconstructs_items_and_totals():
+    text = "\n".join([
+        "Page 1",
+        "발주서",
+        "Purchase",
+        "Order",
+        "발주번호",
+        "PO-2026-0801",
+        "-101",
+        "발행일",
+        "2026-08-01",
+        "공급업체",
+        "대한정밀부품",
+        "고객사",
+        "한빛제조",
+        "납기요청일",
+        "2026-08-14",
+        "통화",
+        "KRW",
+        "승인",
+        "2026",
+        "품목명",
+        "품목코드",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "세액",
+        "합겨",
+        "SUS304철판 2T",
+        "PLT-SUS304-2T",
+        "1000x2000",
+        "5A",
+        "25000",
+        "300000",
+        "30000",
+        "330000",
+        "M8육각볼트",
+        "20mm",
+        "BOLT-M8-20",
+        "M8x20",
+        "80C",
+        "EA",
+        "96000",
+        "9600",
+        "105600",
+        "SUS WASHER M8",
+        "WASH-SUS-08",
+        "M&",
+        "80C",
+        "32000",
+        "320",
+        "35200",
+        "고정판",
+        "120X605]",
+        "PLT-FIX-O2",
+        "120X60X57",
+        "80C",
+        "112000",
+        "11200",
+        "123200",
+        "공급가액합계:",
+        "540000",
+        "부가세:",
+        "54000",
+        "총액:",
+        "594000",
+    ])
+
+    parsed = DocumentParser().parse(text, "01_image_po_clean_korean.pdf")
+
+    assert parsed.document_type == DocumentType.purchase_order
+    assert parsed.document_number == "PO-2026-0801"
+    assert parsed.vendor_name == "대한정밀부품"
+    assert parsed.customer_name == "한빛제조"
+    assert parsed.issue_date.isoformat() == "2026-08-01"
+    assert parsed.due_date.isoformat() == "2026-08-14"
+    assert parsed.currency == "KRW"
+    assert parsed.subtotal == 540000
+    assert parsed.tax == 54000
+    assert parsed.extracted_amount == 594000
+    assert len(parsed.line_items) == 4
+
+    first = parsed.line_items[0]
+    assert first["item_code"] == "PLT-SUS304-2T"
+    assert first["quantity"] == 12
+    assert first["unit"] == "EA"
+    assert first["unit_price"] == 25000
+    assert first["supply_amount"] == 300000
+    assert first["tax_amount"] == 30000
+    assert first["line_total"] == 330000
+
+    assert parsed.line_items[1]["item_code"] == "BOLT-M8-20"
+    assert parsed.line_items[1]["quantity"] == 800
+    assert parsed.line_items[1]["unit_price"] == 120
+    assert parsed.line_items[2]["item_code"] == "WASH-SUS-08"
+    assert parsed.line_items[2]["specification"] == "M8"
+    assert parsed.line_items[2]["quantity"] == 800
+    assert parsed.line_items[2]["tax_amount"] == 3200
+    assert parsed.line_items[3]["item_code"] == "PLT-FIX-02"
+    assert parsed.line_items[3]["line_total"] == 123200
