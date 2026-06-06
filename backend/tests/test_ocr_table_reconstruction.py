@@ -229,3 +229,87 @@ def test_vertical_paddleocr_purchase_order_table_reconstructs_items_and_totals()
     assert parsed.line_items[3]["supply_amount"] == 112000
     assert parsed.line_items[3]["tax_amount"] == 11200
     assert parsed.line_items[3]["line_total"] == 123200
+
+
+def test_vertical_paddleocr_quotation_without_item_codes_reconstructs_amount_rows():
+    text = "\n".join([
+        "견적서",
+        "견적번호",
+        "QT-2026-0802",
+        "견적일",
+        "2026-08-02",
+        "유효기간",
+        "2026-08-31",
+        "공급업체",
+        "대한정밀부품",
+        "고객사",
+        "한빛제조",
+        "품목명",
+        "규격",
+        "수링",
+        "단위",
+        "단가",
+        "공급가액",
+        "세악",
+        "합계금액",
+        "스텍판2T",
+        "1000X2000",
+        "25001",
+        "25000",
+        "12500",
+        "137500",
+        "SUS304",
+        "철판37",
+        "[00OX20O0",
+        "3700[",
+        "148000",
+        "14800",
+        "162800",
+        "고정",
+        "플레이트",
+        "120x60X51",
+        "280C",
+        "168000",
+        "16800",
+        "184800",
+        "공급가액합계:441000",
+        "부가세:44100",
+        "총액:",
+        "485100",
+    ])
+
+    parsed = DocumentParser().parse(text, "02_image_quotation_ambiguous_stainless.pdf")
+
+    assert parsed.document_type == DocumentType.quotation
+    assert parsed.subtotal == 441000
+    assert parsed.tax == 44100
+    assert parsed.extracted_amount == 485100
+    assert len(parsed.line_items) == 3
+
+    first = parsed.line_items[0]
+    assert first["item_name"] == "스텐판 2T"
+    assert first["specification"] == "1000x2000"
+    assert first["quantity"] == 5
+    assert first["unit"] == "EA"
+    assert first["unit_price"] == 25000
+    assert first["supply_amount"] == 125000
+    assert first["tax_amount"] == 12500
+    assert first["line_total"] == 137500
+
+    second = parsed.line_items[1]
+    assert second["item_name"] == "SUS 304 철판 3T"
+    assert second["specification"] == "1000x2000"
+    assert second["quantity"] == 4
+    assert second["unit_price"] == 37000
+    assert second["supply_amount"] == 148000
+    assert second["tax_amount"] == 14800
+    assert second["line_total"] == 162800
+
+    third = parsed.line_items[2]
+    assert third["item_name"] == "고정 플레이트"
+    assert third["specification"] == "120x60x5T"
+    assert third["quantity"] == 60
+    assert third["unit_price"] == 2800
+    assert third["supply_amount"] == 168000
+    assert third["tax_amount"] == 16800
+    assert third["line_total"] == 184800

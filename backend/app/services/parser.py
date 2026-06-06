@@ -115,7 +115,7 @@ class DocumentParser:
         doc_type = self._guess_document_type(joined, filename)
         line_items = self._extract_line_items(lines)
         document_scope_text = self._document_scope_text(lines)
-        subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액", "공급액", "공급 금액", "subtotal total", "subtotal", "supply amount"])
+        subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "subtotal total", "subtotal", "supply amount"])
         tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "vat total", "vat", "tax", "w세액"])
         amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "invoice total", "grand total", "total due"]) or self._line_items_total(line_items)
         currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)

@@ -53,7 +53,7 @@ def _reconstruct_vertical_table(lines: list[str]) -> list[OCRLineItemCandidate]:
                 break
             fields.append(field)
             cursor += 1
-        if len(set(fields)) >= 5 and "item_name" in fields and "item_code" in fields:
+        if len(set(fields)) >= 5 and "item_name" in fields:
             header_start = index
             header_end = cursor
             header_fields = fields
@@ -73,6 +73,9 @@ def _reconstruct_vertical_table(lines: list[str]) -> list[OCRLineItemCandidate]:
 
     if not cells:
         return []
+
+    if "item_code" not in header_fields:
+        return _reconstruct_vertical_table_without_item_codes(cells)
 
     row_starts = _vertical_row_starts(cells)
     candidates: list[OCRLineItemCandidate] = []
@@ -95,7 +98,7 @@ def _field_for_vertical_header(value: str) -> str | None:
         return "item_code"
     if key in {"규격", "사양", "spec", "specification", "size", "dimension"}:
         return "specification"
-    if key in {"수량", "주문수량", "납품수량", "qty", "quantity"}:
+    if key in {"수량", "수링", "주문수량", "납품수량", "qty", "quantity"}:
         return "quantity"
     if key in {"단위", "unit"}:
         return "unit"
@@ -103,7 +106,7 @@ def _field_for_vertical_header(value: str) -> str | None:
         return "unit_price"
     if key in {"공급가액", "공급액", "공급금액", "subtotal", "supplyamount"}:
         return "supply_amount"
-    if key in {"세액", "부가세", "vat", "tax"}:
+    if key in {"세액", "세악", "부가세", "vat", "tax"}:
         return "tax_amount"
     if key in {"합계", "합겨", "합계금액", "총액", "linetotal", "total"}:
         return "line_total"
@@ -196,6 +199,154 @@ def _parse_vertical_row(cells: list[str], header_fields: list[str]) -> dict | No
     return {key: value for key, value in item.items() if value not in (None, "")}
 
 
+def _reconstruct_vertical_table_without_item_codes(cells: list[str]) -> list[OCRLineItemCandidate]:
+    candidates: list[OCRLineItemCandidate] = []
+    index = 0
+    while index < len(cells):
+        parsed: tuple[dict, int] | None = None
+        max_end = min(len(cells), index + 10)
+        for end in range(index + 5, max_end + 1):
+            item = _parse_vertical_row_without_code(cells[index:end])
+            if item:
+                parsed = (item, end)
+                break
+        if not parsed:
+            index += 1
+            continue
+        item, next_index = parsed
+        confidence = max(_candidate_confidence(item), 0.70)
+        candidates.append(OCRLineItemCandidate(item=item, confidence=confidence, source_line=" / ".join(cells[index:next_index])))
+        index = next_index
+    return candidates
+
+
+def _parse_vertical_row_without_code(cells: list[str]) -> dict | None:
+    if len(cells) < 5:
+        return None
+    spec_index = next((index for index, cell in enumerate(cells) if _looks_like_spec_token(_normalize_spec(cell))), None)
+    if spec_index is None or spec_index == 0:
+        return None
+    name_cells = cells[:spec_index]
+    specification = _normalize_spec(cells[spec_index])
+    tail_cells = cells[spec_index + 1:]
+    if len(tail_cells) < 3:
+        return None
+    amount = _best_amount_tail_candidate(tail_cells, item_name=" ".join(name_cells), specification=specification)
+    if not amount:
+        return None
+    item = {
+        "item_name": _normalize_item_name(" ".join(name_cells)),
+        "specification": specification,
+        "quantity": _number_value(amount["quantity"]),
+        "unit": "EA",
+        "unit_price": _number_value(amount["unit_price"]),
+        "supply_amount": _number_value(amount["supply_amount"]),
+        "tax_amount": _number_value(amount["tax_amount"]),
+        "line_total": _number_value(amount["line_total"]),
+    }
+    return {key: value for key, value in item.items() if value not in (None, "")}
+
+
+def _best_amount_tail_candidate(tail_cells: list[str], *, item_name: str | None, specification: str | None) -> dict[str, Decimal] | None:
+    values = [_to_decimal(cell) for cell in tail_cells]
+    if len(values) < 3 or any(value is None for value in values[-3:]):
+        return None
+    total = values[-1]
+    tax = values[-2]
+    if total is None or tax is None:
+        return None
+    supply_from_total = total - tax
+    if supply_from_total <= 0:
+        return None
+    candidates: list[tuple[int, dict[str, Decimal]]] = []
+
+    if len(values) >= 4 and values[-3] is not None:
+        supply = _repair_supply_amount(values[-3], tax, total)
+        for unit_price in _price_candidates(tail_cells[-4], values[-4]):
+            if unit_price and unit_price > 0:
+                quantity = supply / unit_price
+                candidate = {
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                    "supply_amount": supply,
+                    "tax_amount": tax,
+                    "line_total": total,
+                }
+                candidates.append((_amount_candidate_score(candidate, item_name=item_name, specification=specification), candidate))
+
+    if len(values) >= 4 and values[-3] is not None:
+        unit_price = values[-3]
+        supply = supply_from_total
+        if unit_price and unit_price > 0:
+            quantity = supply / unit_price
+            candidate = {
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "supply_amount": supply,
+                "tax_amount": tax,
+                "line_total": total,
+            }
+            candidates.append((_amount_candidate_score(candidate, item_name=item_name, specification=specification) + 1, candidate))
+
+    valid = [(score, candidate) for score, candidate in candidates if score >= 6]
+    if not valid:
+        return None
+    valid.sort(key=lambda entry: (-entry[0], entry[1]["quantity"]))
+    return valid[0][1]
+
+
+def _price_candidates(raw_cell: object, value: Decimal | None) -> list[Decimal]:
+    candidates: list[Decimal] = []
+    if value is not None and value > 0:
+        candidates.append(value)
+    text = str(raw_cell or "").strip()
+    if re.search(r"[\[C]$", text, flags=re.IGNORECASE) and value is not None and value > 0:
+        candidates.append(value * 10)
+    deduped: list[Decimal] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def _repair_supply_amount(supply: Decimal | None, tax: Decimal | None, total: Decimal | None) -> Decimal:
+    if tax is None or total is None:
+        return supply or Decimal("0")
+    expected = total - tax
+    if supply is None or expected <= 0:
+        return expected
+    if abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.02")):
+        return supply
+    if supply * 10 == expected:
+        return expected
+    return expected
+
+
+def _amount_candidate_score(candidate: dict[str, Decimal], *, item_name: str | None, specification: str | None) -> int:
+    quantity = candidate["quantity"]
+    unit_price = candidate["unit_price"]
+    supply = candidate["supply_amount"]
+    tax = candidate["tax_amount"]
+    total = candidate["line_total"]
+    score = 0
+    if quantity > 0 and quantity == quantity.to_integral_value():
+        score += 4
+    if unit_price > 0 and unit_price == unit_price.to_integral_value():
+        score += 3
+    if abs((quantity * unit_price) - supply) <= max(Decimal("1"), abs(supply) * Decimal("0.01")):
+        score += 5
+    if abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.01")):
+        score += 4
+    if abs(tax - (supply * Decimal("0.1"))) <= max(Decimal("1"), abs(supply) * Decimal("0.01")):
+        score += 4
+    score += _quantity_context_score(quantity, unit_price, item_code=None, item_name=item_name, specification=specification)
+    if quantity == 1 and unit_price == supply and supply >= 50000:
+        score -= 5
+    if quantity > 5000 or unit_price < 10:
+        score -= 3
+    return score
+
+
 def _is_numericish_cell(value: str) -> bool:
     normalized = value.strip()
     if _looks_like_spec_token(_normalize_spec(normalized)):
@@ -215,16 +366,22 @@ def _normalize_ocr_code(value: str) -> str:
 
 def _normalize_spec(value: str) -> str:
     text = value.strip().replace("×", "x")
+    text = re.sub(r"^[\[\(lI](?=\d|[Oo])", "1", text)
+    text = re.sub(r"[Oo](?=\d|[xX]|$)", "0", text)
     text = re.sub(r"[&]", "8", text)
     text = re.sub(r"(?<=\d)[\]\)]$", "T", text)
     text = re.sub(r"(?<=x\d)7$", "T", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<=\d)1$", "T", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<=\d)\s*[xX]\s*(?=\d)", "x", text)
     return text
 
 
 def _normalize_item_name(value: str) -> str | None:
     text = re.sub(r"\s+", " ", value).strip()
+    text = text.replace("스텍", "스텐")
+    text = re.sub(r"철판\s*3[7T]$", "철판 3T", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<=[A-Za-z가-힣])(?=\d)|(?<=\d)(?=[가-힣A-Za-z])", " ", text)
+    text = re.sub(r"(?<=\d)\s+(?=T\b)", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text or None
 
