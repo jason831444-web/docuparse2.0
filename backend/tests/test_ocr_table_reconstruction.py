@@ -335,15 +335,15 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
         "Item Description",
         "Vendor SKU",
         "Specification",
-        "Qty",
+        "Oty",
         "Unit",
         "Unit Price",
         "Subtotal",
         "Tax",
-        "Total",
+        "Tota",
         "PCB Connector 12F",
         "CON-PCB-12F",
-        "12핀",
+        "12",
         "1500",
         "EA",
         "300",
@@ -354,13 +354,11 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
         "CBL-HAR-50C",
         "500m",
         "5",
-        "ROLL",
-        "140000",
-        "700000",
-        "70000",
+        "EA",
         "770000",
+        "77000",
+        "847000",
         "AL6061환봉10파이",
-        "AL-ROD-6061-10",
         "10mm X 3000",
         "100",
         "EA",
@@ -388,12 +386,15 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
     assert parsed.tax == 146000
     assert parsed.extracted_amount == 1606000
     assert len(parsed.line_items) == 3
+    assert sum(item["supply_amount"] for item in parsed.line_items) == 1460000
+    assert sum(item["tax_amount"] for item in parsed.line_items) == 146000
+    assert sum(item["line_total"] for item in parsed.line_items) == 1606000
 
     first = parsed.line_items[0]
     assert first["item_name"] == "PCB Connector 12F"
     assert first["item_code"] == "CON-PCB-12F"
     assert first["document_item_code"] == "CON-PCB-12F"
-    assert first["specification"] == "12핀"
+    assert first["specification"] == "12"
     assert first["quantity"] == 1500
     assert first["unit"] == "EA"
     assert first["unit_price"] == 300
@@ -406,13 +407,15 @@ def test_vertical_paddleocr_invoice_vendor_sku_table_reconstructs_document_item_
     assert second["item_code"] == "CBL-HAR-50C"
     assert second["specification"] == "500m"
     assert second["quantity"] == 5
-    assert second["unit"] == "ROLL"
-    assert second["unit_price"] == 140000
-    assert second["line_total"] == 770000
+    assert second["unit"] == "EA"
+    assert second["unit_price"] == 154000
+    assert second["supply_amount"] == 770000
+    assert second["tax_amount"] == 77000
+    assert second["line_total"] == 847000
 
     third = parsed.line_items[2]
     assert third["item_name"] == "AL6061 환봉10 파이"
-    assert third["item_code"] == "AL-ROD-6061-10"
+    assert "item_code" not in third
     assert third["specification"] == "10mm X 3000"
     assert third["quantity"] == 100
     assert third["unit_price"] == 2400
@@ -512,3 +515,110 @@ def test_vertical_paddleocr_delivery_note_no_price_table_reconstructs_quantities
     assert fourth["specification"] == "M8"
     assert fourth["quantity"] == 1000
     assert fourth["unit"] == "EA"
+
+
+def test_vertical_paddleocr_transaction_statement_uses_amount_arithmetic_for_similar_rows():
+    text = "\n".join([
+        "거래명세서",
+        "거래명세서번호",
+        "[S-2026-0805-451",
+        "거래일자",
+        "2026-08-05",
+        "공급업체",
+        "태성금속",
+        "고객사",
+        "세진기계",
+        "품목명",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "세액",
+        "합계금액",
+        "SUS304 철판 2T",
+        "1000x2000",
+        "4",
+        "EA",
+        "25000",
+        "100000",
+        "10000",
+        "110000",
+        "SUS 304",
+        "판2OT",
+        "1000x2000",
+        "6",
+        "EA",
+        "25000",
+        "150000",
+        "15000",
+        "165000",
+        "알루미늄",
+        "원형봉",
+        "10mm",
+        "3000mm",
+        "20",
+        "EA",
+        "800C",
+        "160000",
+        "16000",
+        "176000",
+        "M8 HEX",
+        "BOLT20",
+        "M8x20",
+        "500C",
+        "EA",
+        "120",
+        "5000L",
+        "6000",
+        "56006",
+        "총액:",
+        "517000",
+    ])
+
+    parsed = DocumentParser().parse(text, "05_image_transaction_statement_similar_lines.pdf")
+
+    assert parsed.document_type == DocumentType.transaction_statement
+    assert parsed.vendor_name == "태성금속"
+    assert parsed.customer_name == "세진기계"
+    assert parsed.document_number == "TS-2026-0805-451"
+    assert parsed.issue_date.isoformat() == "2026-08-05"
+    assert parsed.extracted_amount == 517000
+    assert len(parsed.line_items) == 4
+    assert sum(item["line_total"] for item in parsed.line_items) == 517000
+
+    first = parsed.line_items[0]
+    assert first["item_name"] == "SUS304 철판 2T"
+    assert first["specification"] == "1000x2000"
+    assert first["quantity"] == 4
+    assert first["unit_price"] == 25000
+    assert first["supply_amount"] == 100000
+    assert first["tax_amount"] == 10000
+    assert first["line_total"] == 110000
+
+    second = parsed.line_items[1]
+    assert second["item_name"] == "SUS304 판 2.0T"
+    assert second["specification"] == "1000x2000"
+    assert second["quantity"] == 6
+    assert second["unit_price"] == 25000
+    assert second["supply_amount"] == 150000
+    assert second["tax_amount"] == 15000
+    assert second["line_total"] == 165000
+
+    third = parsed.line_items[2]
+    assert third["item_name"] == "알루미늄 원형봉"
+    assert third["specification"] == "10mm x 3000mm"
+    assert third["quantity"] == 20
+    assert third["unit_price"] == 8000
+    assert third["supply_amount"] == 160000
+    assert third["tax_amount"] == 16000
+    assert third["line_total"] == 176000
+
+    fourth = parsed.line_items[3]
+    assert fourth["item_name"] == "M8 HEX BOLT20"
+    assert fourth["specification"] == "M8x20"
+    assert fourth["quantity"] == 500
+    assert fourth["unit_price"] == 120
+    assert fourth["supply_amount"] == 60000
+    assert fourth["tax_amount"] == 6000
+    assert fourth["line_total"] == 66000

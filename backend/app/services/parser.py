@@ -334,9 +334,26 @@ class DocumentParser:
             "발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호",
             "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
         ]
+        normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
+        lines = [line.strip() for line in text.splitlines()]
+        for index, line in enumerate(lines[:-1]):
+            if re.sub(r"[\s:：#]+", "", line.lower()) not in normalized_labels:
+                continue
+            value = self._normalize_document_number(lines[index + 1])
+            if value:
+                return value
         label_pattern = "|".join(re.escape(label) for label in labels)
         match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", text, flags=re.IGNORECASE)
-        return match.group(1).strip()[:80] if match else None
+        return self._normalize_document_number(match.group(1)) if match else None
+
+    def _normalize_document_number(self, value: object) -> str | None:
+        text = re.sub(r"\s+", "", str(value or "")).strip(" -:：[](){}")
+        if not text:
+            return None
+        text = text.replace("_", "-")
+        if re.match(r"^S-\d{4}-\d{4}-", text, flags=re.IGNORECASE):
+            text = f"T{text}"
+        return text[:80] or None
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}

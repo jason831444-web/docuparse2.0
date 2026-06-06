@@ -74,6 +74,13 @@ def _reconstruct_vertical_table(lines: list[str]) -> list[OCRLineItemCandidate]:
     if not cells:
         return []
 
+    if any(field in header_fields for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]):
+        if "item_code" not in header_fields and not any(_unit(cell) for cell in cells):
+            return _reconstruct_vertical_table_without_item_codes(cells)
+        priced_candidates = _reconstruct_priced_vertical_table(cells, allow_item_code="item_code" in header_fields)
+        if priced_candidates:
+            return priced_candidates
+
     if "item_code" not in header_fields:
         return _reconstruct_vertical_table_without_item_codes(cells)
 
@@ -88,6 +95,299 @@ def _reconstruct_vertical_table(lines: list[str]) -> list[OCRLineItemCandidate]:
         confidence = max(_candidate_confidence(item), 0.72)
         candidates.append(OCRLineItemCandidate(item=item, confidence=confidence, source_line=" / ".join(row_cells)))
     return candidates
+
+
+def _reconstruct_priced_vertical_table(cells: list[str], *, allow_item_code: bool) -> list[OCRLineItemCandidate]:
+    candidates: list[OCRLineItemCandidate] = []
+    start = 0
+    while start < len(cells):
+        parsed: tuple[dict, int] | None = None
+        for end in range(start + 5, min(len(cells), start + 16) + 1):
+            segment = cells[start:end]
+            item = _parse_priced_vertical_segment(segment, allow_item_code=allow_item_code)
+            if item:
+                parsed = (item, end)
+                break
+        if not parsed:
+            start += 1
+            continue
+        item, next_start = parsed
+        confidence = max(_candidate_confidence(item), 0.76)
+        candidates.append(OCRLineItemCandidate(item=item, confidence=confidence, source_line=" / ".join(cells[start:next_start])))
+        start = next_start
+    return candidates
+
+
+def _parse_priced_vertical_segment(cells: list[str], *, allow_item_code: bool) -> dict | None:
+    if len(cells) < 5:
+        return None
+    line_total_raw = _to_decimal(cells[-1])
+    tax_raw = _to_decimal(cells[-2]) if len(cells) >= 2 else None
+    supply_raw = _to_decimal(cells[-3]) if len(cells) >= 3 else None
+    if line_total_raw is None or tax_raw is None or supply_raw is None:
+        return None
+    if not _raw_amount_tail_is_plausible(supply_raw, tax_raw, line_total_raw):
+        return None
+
+    prefix = cells[:-3]
+    if not prefix:
+        return None
+
+    unit = None
+    quantity_token: str | None = None
+    unit_price_token: str | None = None
+    identity_cells: list[str] = []
+    unit_index = next((index for index in range(len(prefix) - 1, -1, -1) if _unit(prefix[index])), None)
+    if unit_index is not None:
+        unit = _unit(prefix[unit_index])
+        if unit_index == 0:
+            return None
+        quantity_token = prefix[unit_index - 1]
+        identity_cells = prefix[: unit_index - 1]
+        trailing_price_cells = prefix[unit_index + 1:]
+        if trailing_price_cells:
+            unit_price_token = trailing_price_cells[-1]
+    else:
+        unit = "EA"
+        if len(prefix) >= 2 and _is_numericish_cell(prefix[-2]) and _is_numericish_cell(prefix[-1]):
+            quantity_token = prefix[-2]
+            unit_price_token = prefix[-1]
+            identity_cells = prefix[:-2]
+        else:
+            quantity_token = prefix[-1]
+            identity_cells = prefix[:-1]
+
+    quantity_candidates = _quantity_candidates(quantity_token)
+    price_candidates = _price_candidates(unit_price_token, _to_decimal(unit_price_token)) if unit_price_token else []
+    explicit_price_candidates = list(price_candidates)
+    supply_candidates = _amount_value_candidates(cells[-3])
+    tax_candidates = _amount_value_candidates(cells[-2])
+    total_candidates = _amount_value_candidates(cells[-1])
+    if supply_raw not in supply_candidates:
+        supply_candidates.append(supply_raw)
+    if tax_raw not in tax_candidates:
+        tax_candidates.append(tax_raw)
+    if line_total_raw not in total_candidates:
+        total_candidates.append(line_total_raw)
+    for supply in list(supply_candidates):
+        for unit_price in list(price_candidates):
+            if unit_price and unit_price > 0:
+                inferred_quantity = supply / unit_price
+                if inferred_quantity > 0 and inferred_quantity == inferred_quantity.to_integral_value() and inferred_quantity not in quantity_candidates:
+                    quantity_candidates.append(inferred_quantity)
+    for quantity in list(quantity_candidates):
+        for supply in list(supply_candidates):
+            if quantity and quantity > 0:
+                inferred_price = supply / quantity
+                if inferred_price > 0 and inferred_price == inferred_price.to_integral_value() and inferred_price not in price_candidates:
+                    price_candidates.append(inferred_price)
+
+    identity = _identity_from_vertical_cells(identity_cells, allow_item_code=allow_item_code)
+    if not identity.get("item_name"):
+        return None
+
+    scored: list[tuple[int, dict[str, Decimal | None]]] = []
+    for quantity in quantity_candidates or [None]:
+        dynamic_prices = list(price_candidates)
+        for supply in supply_candidates:
+            if quantity and quantity > 0 and not dynamic_prices:
+                inferred_price = supply / quantity
+                if inferred_price > 0:
+                    dynamic_prices.append(inferred_price)
+            for unit_price in dynamic_prices or [None]:
+                dynamic_supplies = list(supply_candidates)
+                if quantity and unit_price:
+                    calculated_supply = quantity * unit_price
+                    if calculated_supply not in dynamic_supplies:
+                        dynamic_supplies.append(calculated_supply)
+                for supply in dynamic_supplies:
+                    for tax in _candidate_taxes(supply, tax_candidates, total_candidates):
+                        for line_total in _candidate_totals(supply, tax, total_candidates):
+                            candidate = {
+                                "quantity": quantity,
+                                "unit_price": unit_price,
+                                "supply_amount": supply,
+                                "tax_amount": tax,
+                                "line_total": line_total,
+                            }
+                            score = _amount_candidate_score_for_optional(candidate, item_name=identity.get("item_name"), specification=identity.get("specification"), item_code=identity.get("item_code"))
+                            score += _raw_amount_alignment_score(supply, tax, line_total, supply_raw, tax_raw, line_total_raw)
+                            if unit_price_token and unit_price in explicit_price_candidates:
+                                score += 8
+                            if quantity_token and quantity in quantity_candidates:
+                                score += 2
+                            scored.append((score, candidate))
+    valid = [(score, candidate) for score, candidate in scored if score >= 14]
+    if not valid:
+        return None
+    valid.sort(key=lambda entry: (-entry[0], _candidate_sort_quantity(entry[1].get("quantity"))))
+    amount = valid[0][1]
+    item = {
+        "item_name": identity.get("item_name"),
+        "item_code": identity.get("item_code"),
+        "specification": identity.get("specification"),
+        "quantity": _number_value(amount.get("quantity")),
+        "unit": unit,
+        "unit_price": _number_value(amount.get("unit_price")),
+        "supply_amount": _number_value(amount.get("supply_amount")),
+        "tax_amount": _number_value(amount.get("tax_amount")),
+        "line_total": _number_value(amount.get("line_total")),
+    }
+    return {key: value for key, value in item.items() if value not in (None, "")}
+
+
+def _identity_from_vertical_cells(cells: list[str], *, allow_item_code: bool) -> dict[str, str | None]:
+    normalized_cells = [cell for cell in cells if cell and not _unit(cell)]
+    code_index = next((index for index, cell in enumerate(normalized_cells) if _looks_like_code(_normalize_ocr_code(cell))), None) if allow_item_code else None
+    item_code = _normalize_ocr_code(normalized_cells[code_index]) if code_index is not None else None
+    spec_index = None
+    for index in range(len(normalized_cells) - 1):
+        if index == code_index:
+            continue
+        if _extend_spec_with_next_cell(normalized_cells[index], normalized_cells[index + 1]):
+            spec_index = index
+            break
+    if spec_index is None:
+        for index, cell in enumerate(normalized_cells):
+            if index == code_index:
+                continue
+            if _looks_like_spec_token(_normalize_spec(cell)):
+                spec_index = index
+    if spec_index is not None and code_index is not None and spec_index < code_index:
+        spec_index = None
+    if spec_index is None and code_index is not None and code_index + 1 < len(normalized_cells):
+        spec_index = code_index + 1
+    specification = _combine_specification_cells(normalized_cells, spec_index)
+    excluded = {index for index in [code_index, spec_index] if index is not None}
+    if spec_index is not None and spec_index + 1 < len(normalized_cells) and _extend_spec_with_next_cell(normalized_cells[spec_index], normalized_cells[spec_index + 1]):
+        excluded.add(spec_index + 1)
+    name_cells = [cell for index, cell in enumerate(normalized_cells) if index not in excluded]
+    return {
+        "item_name": _normalize_item_name(" ".join(name_cells)),
+        "item_code": item_code,
+        "specification": specification,
+    }
+
+
+def _raw_amount_tail_is_plausible(supply: Decimal, tax: Decimal, total: Decimal) -> bool:
+    if supply <= 0 or tax < 0 or total <= 0:
+        return False
+    if abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.03")):
+        return True
+    if abs(tax - (supply * Decimal("0.1"))) <= max(Decimal("1"), abs(supply) * Decimal("0.03")):
+        return True
+    if tax > supply * Decimal("2") and total < tax * Decimal("2"):
+        return False
+    if tax > total and tax > supply * Decimal("2"):
+        return False
+    if supply + tax > total * Decimal("2") and total < max(supply, tax):
+        return False
+    return True
+
+
+def _combine_specification_cells(cells: list[str], spec_index: int | None) -> str | None:
+    if spec_index is None:
+        return None
+    first = _normalize_spec(cells[spec_index])
+    if spec_index + 1 < len(cells) and _extend_spec_with_next_cell(cells[spec_index], cells[spec_index + 1]):
+        second = _normalize_spec(cells[spec_index + 1])
+        return f"{first} x {second}"
+    return first
+
+
+def _extend_spec_with_next_cell(first: str, second: str) -> bool:
+    return bool(re.search(r"mm$", first, flags=re.IGNORECASE) and re.fullmatch(r"\d+(?:\.\d+)?\s*mm", second, flags=re.IGNORECASE))
+
+
+def _amount_value_candidates(raw_cell: object) -> list[Decimal]:
+    text = str(raw_cell or "").strip()
+    candidates: list[Decimal] = []
+    normalized = text.replace(",", "")
+    substitutions = [
+        normalized,
+        re.sub(r"^5(\d{3})6$", r"6\g<1>0", normalized),
+        normalized.replace("O", "0").replace("o", "0"),
+        re.sub(r"[lI]$", "0", normalized),
+        re.sub(r"^5(?=\d{4}$)", "6", normalized),
+        re.sub(r"(?<=\d)6$", "0", normalized),
+    ]
+    for candidate_text in substitutions:
+        value = _to_decimal(candidate_text)
+        if value is not None and value > 0 and value not in candidates:
+            candidates.append(value)
+    value = _to_decimal(normalized)
+    if value is not None and re.search(r"[C\[]$", normalized, flags=re.IGNORECASE):
+        for multiplier in [Decimal("10"), Decimal("100")]:
+            scaled = value * multiplier
+            if scaled not in candidates:
+                candidates.append(scaled)
+    return candidates
+
+
+def _candidate_taxes(supply: Decimal, tax_candidates: list[Decimal], total_candidates: list[Decimal]) -> list[Decimal]:
+    candidates = list(tax_candidates)
+    expected = supply * Decimal("0.1")
+    if expected == expected.to_integral_value() and expected not in candidates:
+        candidates.append(expected)
+    for total in total_candidates:
+        derived = total - supply
+        if derived > 0 and derived not in candidates:
+            candidates.append(derived)
+    return [candidate for candidate in candidates if candidate is not None and candidate >= 0]
+
+
+def _candidate_totals(supply: Decimal, tax: Decimal, total_candidates: list[Decimal]) -> list[Decimal]:
+    candidates = list(total_candidates)
+    expected = supply + tax
+    if expected not in candidates:
+        candidates.append(expected)
+    return [candidate for candidate in candidates if candidate is not None and candidate > 0]
+
+
+def _amount_candidate_score_for_optional(candidate: dict[str, Decimal | None], *, item_name: str | None, specification: str | None, item_code: str | None) -> int:
+    quantity = candidate.get("quantity")
+    unit_price = candidate.get("unit_price")
+    supply = candidate.get("supply_amount")
+    tax = candidate.get("tax_amount")
+    total = candidate.get("line_total")
+    if supply is None or tax is None or total is None:
+        return 0
+    score = 0
+    if quantity is not None and quantity > 0 and quantity == quantity.to_integral_value():
+        score += 4
+    if unit_price is not None and unit_price > 0 and unit_price == unit_price.to_integral_value():
+        score += 3
+    if quantity is not None and unit_price is not None and abs((quantity * unit_price) - supply) <= max(Decimal("1"), abs(supply) * Decimal("0.01")):
+        score += 8
+    if abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.01")):
+        score += 7
+    if abs(tax - (supply * Decimal("0.1"))) <= max(Decimal("1"), abs(supply) * Decimal("0.01")):
+        score += 6
+    if quantity is not None and unit_price is not None:
+        score += _quantity_context_score(quantity, unit_price, item_code=item_code, item_name=item_name, specification=specification)
+    if quantity is not None and quantity > 10000:
+        score -= 20
+    if unit_price is not None and unit_price < 1:
+        score -= 20
+    elif unit_price is not None and unit_price < 10:
+        score -= 8
+    return score
+
+
+def _raw_amount_alignment_score(supply: Decimal | None, tax: Decimal | None, total: Decimal | None, supply_raw: Decimal | None, tax_raw: Decimal | None, total_raw: Decimal | None) -> int:
+    score = 0
+    for value, raw in [(supply, supply_raw), (tax, tax_raw), (total, total_raw)]:
+        if value is None or raw is None:
+            continue
+        if value == raw:
+            score += 3
+        elif raw > 0 and (value / raw in {Decimal("10"), Decimal("100")} or raw / value in {Decimal("10"), Decimal("100")}):
+            score += 1
+    return score
+
+
+def _candidate_sort_quantity(quantity: Decimal | None) -> Decimal:
+    return quantity if quantity is not None else Decimal("999999999")
 
 
 def _field_for_vertical_header(value: str) -> str | None:
@@ -406,6 +706,7 @@ def _normalize_spec(value: str) -> str:
 def _normalize_item_name(value: str) -> str | None:
     text = re.sub(r"\s+", " ", value).strip()
     text = text.replace("스텍", "스텐")
+    text = re.sub(r"2\s*O\s*T\b", "2.0T", text, flags=re.IGNORECASE)
     text = re.sub(r"철판\s*3[7T]$", "철판 3T", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<=[A-Za-z가-힣])(?=\d)|(?<=\d)(?=[가-힣A-Za-z])", " ", text)
     text = re.sub(r"\b([A-Z])\s+(\d{2})\s+([A-Z])\b", r"\1\2\3", text)
@@ -418,6 +719,7 @@ def _normalize_item_name(value: str) -> str | None:
     text = re.sub(r"\b(\d+)\s*x\s*(\d+)\b", r"\1x\2", text, flags=re.IGNORECASE)
     text = re.sub(r"\bM\s*(\d+)\s*x\s*(\d+)\b", r"M\1x\2", text, flags=re.IGNORECASE)
     text = re.sub(r"(스텐판|철판|판재|고정판)\s*(\d+(?:\.\d+)?T)\b", r"\1 \2", text, flags=re.IGNORECASE)
+    text = re.sub(r"(판)\s*(\d+(?:\.\d+)?T)\b", r"\1 \2", text, flags=re.IGNORECASE)
     text = re.sub(r"(환봉)\s+(\d+)", r"\1\2", text)
     text = re.sub(r"(하네스)\s+(\d+)\s*(m|mm)\b", r"\1\2\3", text, flags=re.IGNORECASE)
     text = re.sub(r"\b(PIN)\s+(\d+)x(\d+)\b", r"\1 \2X\3", text, flags=re.IGNORECASE)
@@ -714,6 +1016,8 @@ def _unit(token: str) -> str | None:
     if token.strip() == "가":
         return "EA"
     if token.strip() == "-":
+        return None
+    if re.search(r"\d|&", token.strip()):
         return None
     normalized = re.sub(r"[^A-Za-z가-힣]", "", token.strip())
     if normalized == "롤":
