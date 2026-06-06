@@ -1,0 +1,3 @@
+# Global dependency constraints for native OCR/image wheels.
+# OpenCV and PaddleOCR 2.x are validated against the NumPy 1.x ABI.
+numpy==1.26.4

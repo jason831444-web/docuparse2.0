@@ -2,5 +2,6 @@
 # PaddleOCR 3.x currently routes CPU inference through PaddleX/PIR and can
 # trigger oneDNN runtime errors on Linux x86_64. Pin the worker to the stable
 # 2.x legacy OCR API so it uses PaddleOCR.ocr(...) instead of PaddleX predict.
+numpy==1.26.4
 paddleocr==2.7.3
 paddlepaddle==2.6.2

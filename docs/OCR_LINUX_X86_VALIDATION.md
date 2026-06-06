@@ -90,6 +90,7 @@ The script classifies logs when possible:
 
 The worker is pinned to a conservative Linux CPU OCR runtime:
 
+- `numpy==1.26.4`
 - `paddleocr==2.7.3`
 - `paddlepaddle==2.6.2`
 - PaddleOCR legacy `.ocr(...)` API
@@ -109,6 +110,10 @@ The worker also sets conservative runtime flags:
 - `PADDLE_DISABLE_SIGNAL_HANDLER=1`
 
 The flags remain as guardrails, but the dependency pin is the primary fix.
+`opencv-python-headless==4.10.0.84` is installed with the same global
+`numpy==1.26.4` constraint in both the base backend requirements and the OCR
+requirements. The Docker build runs an import check after dependency install so
+a NumPy 2.x ABI mismatch fails during image build instead of at worker startup.
 
 ## Log Locations
 
