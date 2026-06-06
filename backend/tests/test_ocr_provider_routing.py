@@ -13,7 +13,7 @@ sys.modules.setdefault(
 
 from app.services.file_ingestion import FileIngestionService
 from app.services.file_type_detection import DetectedFileType
-from app.services.ocr import OCRResult, OCRService
+from app.services.ocr import OCRResult, OCRService, PaddleOCRProvider
 
 
 class FakePaddleProvider:
@@ -171,3 +171,30 @@ def test_ocr_worker_timeout_falls_back_to_tesseract(tmp_path):
     assert result.provider_attempted == ["ocr_worker_paddleocr", "tesseract"]
     assert result.provider_failed_reason["ocr_worker_paddleocr"] == "ocr_worker_timeout"
     assert result.ocr_fallback_used is True
+
+
+def test_paddleocr_provider_prefers_legacy_ocr_api_over_predict(tmp_path):
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"fake")
+
+    class DualApiOCR:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def ocr(self, path: str, cls: bool = False):
+            self.calls.append(f"ocr:{cls}")
+            return [[[[0, 0], [1, 0], [1, 1], [0, 1]], ("PO-123 TEST", 0.98)]]
+
+        def predict(self, path: str):
+            self.calls.append("predict")
+            return [{"text": "PREDICT PATH", "score": 0.5}]
+
+    ocr = DualApiOCR()
+    provider = PaddleOCRProvider()
+
+    output = provider._run_ocr(ocr, image_path)
+    text, confidence, _ = provider._normalize_output(output)
+
+    assert ocr.calls == ["ocr:False"]
+    assert text == "PO-123 TEST"
+    assert confidence == 0.98

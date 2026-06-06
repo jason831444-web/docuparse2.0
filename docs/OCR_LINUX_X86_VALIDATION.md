@@ -88,20 +88,27 @@ The script classifies logs when possible:
 - `MODEL_DOWNLOAD_OR_CACHE_EVENT`
 - `UNKNOWN_CHECK_LOGS`
 
-The worker is configured for conservative Linux CPU inference by default:
+The worker is pinned to a conservative Linux CPU OCR runtime:
+
+- `paddleocr==2.7.3`
+- `paddlepaddle==2.6.2`
+- PaddleOCR legacy `.ocr(...)` API
+- `PADDLEOCR_LANG=korean`
+- `PADDLEOCR_OCR_VERSION=PP-OCRv4`
+
+This avoids the PaddleOCR 3.x PaddleX/PIR path that can silently instantiate
+PP-OCRv5 server models and fail on some CPU-only Linux hosts with errors such
+as `ConvertPirAttribute2RuntimeAttribute ... onednn_instruction`.
+
+The worker also sets conservative runtime flags:
 
 - `FLAGS_use_onednn=0`
 - `FLAGS_use_mkldnn=0`
 - `FLAGS_enable_pir_api=0`
 - `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True`
 - `PADDLE_DISABLE_SIGNAL_HANDLER=1`
-- `PADDLEOCR_OCR_VERSION=PP-OCRv4`
-- `PADDLEOCR_DET_MODEL=PP-OCRv4_mobile_det`
-- `PADDLEOCR_REC_MODEL=korean_PP-OCRv4_mobile_rec`
 
-These defaults avoid the PP-OCRv5 server + oneDNN/PIR path that can fail on
-some CPU-only Docker hosts with errors such as
-`ConvertPirAttribute2RuntimeAttribute not support ... onednn_instruction`.
+The flags remain as guardrails, but the dependency pin is the primary fix.
 
 ## Log Locations
 

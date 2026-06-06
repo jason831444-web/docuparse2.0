@@ -51,8 +51,7 @@ def health() -> dict[str, Any]:
         "device": os.getenv("PADDLEOCR_DEVICE", "cpu"),
         "lang": os.getenv("PADDLEOCR_LANG", "korean"),
         "ocr_version": os.getenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4"),
-        "det_model": os.getenv("PADDLEOCR_DET_MODEL", "PP-OCRv4_mobile_det"),
-        "rec_model": os.getenv("PADDLEOCR_REC_MODEL", "korean_PP-OCRv4_mobile_rec"),
+        "runtime_strategy": "paddleocr_2x_legacy_ocr_api",
         "runtime_flags": {
             "FLAGS_use_onednn": os.getenv("FLAGS_use_onednn"),
             "FLAGS_use_mkldnn": os.getenv("FLAGS_use_mkldnn"),

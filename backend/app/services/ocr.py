@@ -165,24 +165,18 @@ class PaddleOCRProvider:
 
         lang = os.getenv("PADDLEOCR_LANG", "korean")
         ocr_version = os.getenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4")
-        det_model = os.getenv("PADDLEOCR_DET_MODEL", "PP-OCRv4_mobile_det")
-        rec_model = os.getenv("PADDLEOCR_REC_MODEL", "korean_PP-OCRv4_mobile_rec")
+
+        # Prefer the PaddleOCR 2.x legacy API. PaddleOCR 3.x can route through
+        # PaddleX/PIR even when PP-OCRv4 model names are requested, which is the
+        # Linux CPU failure mode the isolated worker is designed to avoid.
         init_attempts = [
             {
                 "lang": lang,
                 "ocr_version": ocr_version,
-                "text_detection_model_name": det_model,
-                "text_recognition_model_name": rec_model,
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": False,
-            },
-            {
-                "lang": lang,
-                "ocr_version": ocr_version,
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": False,
+                "use_angle_cls": False,
+                "use_gpu": False,
+                "enable_mkldnn": False,
+                "show_log": False,
             },
             {
                 "lang": lang,
@@ -193,13 +187,14 @@ class PaddleOCRProvider:
             },
             {
                 "lang": lang,
+                "ocr_version": ocr_version,
                 "use_angle_cls": False,
                 "use_gpu": False,
             },
             {
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_textline_orientation": False,
+                "lang": lang,
+                "use_angle_cls": False,
+                "use_gpu": False,
             },
             {"use_angle_cls": False},
         ]
@@ -215,9 +210,14 @@ class PaddleOCRProvider:
         return self._ocr
 
     def _run_ocr(self, ocr: Any, image_path: Path) -> Any:
+        if hasattr(ocr, "ocr"):
+            try:
+                return ocr.ocr(str(image_path), cls=False)
+            except TypeError:
+                return ocr.ocr(str(image_path))
         if hasattr(ocr, "predict"):
             return ocr.predict(str(image_path))
-        return ocr.ocr(str(image_path), cls=False)
+        raise RuntimeError("PaddleOCR object exposes neither legacy ocr(...) nor predict(...)")
 
     def _normalize_output(self, output: Any) -> tuple[str, float, list[dict[str, Any]]]:
         lines: list[str] = []
@@ -235,7 +235,7 @@ class PaddleOCRProvider:
                     confidences.append(_clamp_confidence(score))
             elif isinstance(item, (list, tuple)) and len(item) >= 2:
                 maybe_text = item[1]
-                if isinstance(maybe_text, (list, tuple)) and maybe_text:
+                if isinstance(maybe_text, (list, tuple)) and maybe_text and isinstance(maybe_text[0], str):
                     lines.append(str(maybe_text[0]))
                     if len(maybe_text) > 1:
                         confidences.append(_clamp_confidence(maybe_text[1]))
