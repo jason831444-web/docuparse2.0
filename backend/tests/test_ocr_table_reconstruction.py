@@ -632,3 +632,241 @@ def test_vertical_paddleocr_transaction_statement_uses_amount_arithmetic_for_sim
     assert fourth["supply_amount"] == 60000
     assert fourth["tax_amount"] == 6000
     assert fourth["line_total"] == 66000
+
+
+def test_vertical_paddleocr_usd_invoice_keeps_full_document_number_and_line_items():
+    text = "\n".join([
+        "INVOICE",
+        "Invoice No: INV-US-2026-0806-USD-204",
+        "Issue Date",
+        "2026-08-06",
+        "Vendor",
+        "Global Motion Parts LLC",
+        "Customer",
+        "NeoFactory Korea",
+        "Due Date",
+        "2026-09-05",
+        "Currency",
+        "USD",
+        "Item Description",
+        "Vendor SKU",
+        "Specification",
+        "Qty",
+        "Unit",
+        "Unit Price",
+        "Subtotal",
+        "Tax",
+        "Total",
+        "Linear Guide Rail",
+        "HGW20-1000",
+        "1000mm",
+        "8",
+        "EA",
+        "12.50",
+        "100.00",
+        "10.00",
+        "110.00",
+        "Servo Cable 500mm",
+        "CBL-SER-500",
+        "500mm",
+        "4",
+        "EA",
+        "25.00",
+        "100.00",
+        "10.00",
+        "110.00",
+        "Amount Due:",
+        "220.00",
+    ])
+
+    parsed = DocumentParser().parse(text, "06_image_invoice_usd_vendor_sku.pdf")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-US-2026-0806-USD-204"
+    assert parsed.currency == "USD"
+    assert parsed.extracted_amount == 220
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["item_code"] == "HGW20-1000"
+    assert parsed.line_items[0]["quantity"] == 8
+    assert parsed.line_items[0]["unit_price"] == 12.5
+    assert parsed.line_items[1]["item_code"] == "CBL-SER-500"
+    assert sum(item["line_total"] for item in parsed.line_items) == 220
+
+
+def test_vertical_paddleocr_missing_quantity_preserves_reviewable_amount_row():
+    text = "\n".join([
+        "견적서",
+        "견적번호",
+        "OT-2026-0808-009",
+        "견적일",
+        "2026-08-08",
+        "품목명",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "세액",
+        "합계금액",
+        "고정 브라켓",
+        "50x80x3T",
+        "EA",
+        "1500",
+        "75000",
+        "7500",
+        "82500",
+        "총액:",
+        "82500",
+    ])
+
+    parsed = DocumentParser().parse(text, "08_image_quote_missing_quantity.pdf")
+
+    assert parsed.document_type == DocumentType.quotation
+    assert parsed.document_number == "QT-2026-0808-009"
+    assert parsed.extracted_amount == 82500
+    assert len(parsed.line_items) == 1
+    item = parsed.line_items[0]
+    assert item["item_name"] == "고정 브라켓"
+    assert item["specification"] == "50x80x3T"
+    assert "quantity" not in item
+    assert item["unit"] == "EA"
+    assert item["unit_price"] == 1500
+    assert item["supply_amount"] == 75000
+    assert item["tax_amount"] == 7500
+    assert item["line_total"] == 82500
+
+
+def test_vertical_paddleocr_leaked_amount_prefix_is_not_item_name():
+    text = "\n".join([
+        "발주서",
+        "발주번호",
+        "PO-2026-0807",
+        "품목명",
+        "품목코드",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "세액",
+        "합계금액",
+        "SUS316 PLATE 2T",
+        "PLT-SUS316-2T",
+        "1000x2000",
+        "1",
+        "EA",
+        "42000",
+        "4200",
+        "46200",
+        "4200 46200 4200 고정 브라켓",
+        "BRK-SUS-01",
+        "50x80x3T",
+        "10",
+        "EA",
+        "1500",
+        "15000",
+        "1500",
+        "16500",
+        "총액:",
+        "20700",
+    ])
+
+    parsed = DocumentParser().parse(text, "07_image_po_malformed_amount_columns.pdf")
+
+    assert len(parsed.line_items) >= 2
+    second = parsed.line_items[1]
+    assert second["item_name"] == "고정 브라켓"
+    assert "4200" not in second["item_name"]
+    assert second["item_code"] == "BRK-SUS-01"
+    assert second["line_total"] == 16500
+
+
+def test_vertical_paddleocr_supply_total_header_and_prefix_noise_do_not_create_fake_quantity():
+    text = "\n".join([
+        "INVOICE",
+        "Invoice No",
+        "INV-US-2026-0809-100",
+        "Item Description",
+        "Vendor SKU",
+        "Specification",
+        "Qty",
+        "Unit",
+        "Unit Price",
+        "Supply Total",
+        "Tax",
+        "TOTAL",
+        "M8 bolt",
+        "BOLT-M8-20",
+        "M8x20",
+        "1200",
+        "EA",
+        "120",
+        "144000",
+        "14400",
+        "158400 SUS washer m8",
+        "WASH-SUS-08",
+        "M8",
+        "1200",
+        "EA",
+        "40",
+        "48000",
+        "4800",
+        "52800",
+        "TOTAL:",
+        "211200",
+    ])
+
+    parsed = DocumentParser().parse(text, "09_image_po_mixed_korean_english_noise.pdf")
+
+    assert parsed.document_number == "INV-US-2026-0809-100"
+    assert parsed.extracted_amount == 211200
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["quantity"] == 1200
+    assert parsed.line_items[0]["line_total"] == 158400
+    assert parsed.line_items[1]["item_name"] == "SUS washer m8"
+    assert "14400" not in parsed.line_items[1]["item_name"]
+    assert "158400" not in parsed.line_items[1]["item_name"]
+    assert parsed.line_items[1]["quantity"] == 1200
+    assert parsed.line_items[1]["unit_price"] == 40
+    assert parsed.line_items[1]["line_total"] == 52800
+
+
+def test_vertical_paddleocr_poor_ocr_keeps_incomplete_line_item_candidate():
+    text = "\n".join([
+        "INVOICE",
+        "Invoice No",
+        "INV-POOR-2026-0810",
+        "Item Description",
+        "Vendor SKU",
+        "Specification",
+        "Qty",
+        "Unit",
+        "Unit Price",
+        "Subtotal",
+        "Tax",
+        "Total",
+        "Linear Guide Rail",
+        "HGW20-1000",
+        "1000mm",
+        "EA",
+        "12000",
+        "96000",
+        "9600",
+        "105600",
+        "Grand Total:",
+        "105600",
+    ])
+
+    parsed = DocumentParser().parse(text, "10_image_poor_ocr_distorted_invoice.pdf")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.extracted_amount == 105600
+    assert len(parsed.line_items) == 1
+    item = parsed.line_items[0]
+    assert item["item_name"] == "Linear Guide Rail"
+    assert item["item_code"] == "HGW20-1000"
+    assert item["specification"] == "1000mm"
+    assert "quantity" not in item
+    assert item["unit"] == "EA"
+    assert item["unit_price"] == 12000
+    assert item["line_total"] == 105600

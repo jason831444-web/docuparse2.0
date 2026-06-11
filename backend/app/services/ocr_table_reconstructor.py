@@ -197,8 +197,13 @@ def _parse_priced_vertical_segment(cells: list[str], *, allow_item_code: bool) -
         unit = _unit(prefix[unit_index])
         if unit_index == 0:
             return None
-        quantity_token = prefix[unit_index - 1]
-        identity_cells = prefix[: unit_index - 1]
+        possible_quantity = prefix[unit_index - 1]
+        if _is_numericish_cell(possible_quantity) and not _looks_like_spec_token(_normalize_spec(possible_quantity)):
+            quantity_token = possible_quantity
+            identity_cells = prefix[: unit_index - 1]
+        else:
+            quantity_token = None
+            identity_cells = prefix[:unit_index]
         trailing_price_cells = prefix[unit_index + 1:]
         if trailing_price_cells:
             unit_price_token = trailing_price_cells[-1]
@@ -226,15 +231,28 @@ def _parse_priced_vertical_segment(cells: list[str], *, allow_item_code: bool) -
         total_candidates.append(line_total_raw)
     for supply in list(supply_candidates):
         for unit_price in list(price_candidates):
-            if unit_price and unit_price > 0:
+            if unit_price and unit_price > 0 and _has_strong_numeric_evidence(unit_price, [unit_price_token, cells[-3], cells[-2], cells[-1]]):
                 inferred_quantity = supply / unit_price
-                if inferred_quantity > 0 and inferred_quantity == inferred_quantity.to_integral_value() and inferred_quantity not in quantity_candidates:
+                if (
+                    inferred_quantity > 0
+                    and inferred_quantity == inferred_quantity.to_integral_value()
+                    and inferred_quantity not in quantity_candidates
+                    and (
+                        _has_strong_numeric_evidence(inferred_quantity, [quantity_token])
+                        or _looks_like_corrupted_quantity_token(quantity_token)
+                    )
+                ):
                     quantity_candidates.append(inferred_quantity)
     for quantity in list(quantity_candidates):
         for supply in list(supply_candidates):
-            if quantity and quantity > 0:
+            if quantity and quantity > 0 and _has_strong_numeric_evidence(quantity, [quantity_token]):
                 inferred_price = supply / quantity
-                if inferred_price > 0 and inferred_price == inferred_price.to_integral_value() and inferred_price not in price_candidates:
+                if (
+                    inferred_price > 0
+                    and inferred_price == inferred_price.to_integral_value()
+                    and inferred_price not in price_candidates
+                    and _has_strong_numeric_evidence(inferred_price, [unit_price_token, cells[-3], cells[-2], cells[-1]])
+                ):
                     price_candidates.append(inferred_price)
 
     identity = _identity_from_vertical_cells(identity_cells, allow_item_code=allow_item_code)
@@ -291,8 +309,29 @@ def _parse_priced_vertical_segment(cells: list[str], *, allow_item_code: bool) -
     return {key: value for key, value in item.items() if value not in (None, "")}
 
 
+def _has_strong_numeric_evidence(value: Decimal, raw_cells: list[object | None]) -> bool:
+    """Allow arithmetic repair only when OCR exposed a nearby numeric clue."""
+    for raw_cell in raw_cells:
+        if raw_cell is None:
+            continue
+        for candidate in _amount_value_candidates(raw_cell) + _quantity_candidates(raw_cell):
+            if candidate == value:
+                return True
+            if candidate > 0 and value > 0:
+                ratio = value / candidate
+                if ratio in {Decimal("10"), Decimal("100"), Decimal("0.1"), Decimal("0.01")}:
+                    return True
+    return False
+
+
+def _looks_like_corrupted_quantity_token(value: object | None) -> bool:
+    text = str(value or "").strip()
+    return bool(re.fullmatch(r"\d+[A-Za-z&\[\]]", text))
+
+
 def _identity_from_vertical_cells(cells: list[str], *, allow_item_code: bool) -> dict[str, str | None]:
     normalized_cells = [cell for cell in cells if cell and not _unit(cell)]
+    normalized_cells = _remove_leading_amount_noise_cells(normalized_cells)
     normalized_cells = _remove_vertical_row_number_cells(normalized_cells)
     code_index = next((index for index, cell in enumerate(normalized_cells) if _looks_like_code(_normalize_ocr_code(cell))), None) if allow_item_code else None
     item_code = _normalize_ocr_code(normalized_cells[code_index]) if code_index is not None else None
@@ -323,6 +362,19 @@ def _identity_from_vertical_cells(cells: list[str], *, allow_item_code: bool) ->
         "item_code": item_code,
         "specification": specification,
     }
+
+
+def _remove_leading_amount_noise_cells(cells: list[str]) -> list[str]:
+    """Remove money cells leaked from the previous row before item identity text."""
+    cleaned = list(cells)
+    while len(cleaned) >= 2:
+        first = cleaned[0].strip()
+        if not re.fullmatch(r"\d{4,}(?:\.\d+)?", first):
+            break
+        if not any(re.search(r"[A-Za-z가-힣]", cell) for cell in cleaned[1:]):
+            break
+        cleaned.pop(0)
+    return cleaned
 
 
 def _remove_vertical_row_number_cells(cells: list[str]) -> list[str]:
@@ -492,7 +544,7 @@ def _field_for_vertical_header(value: str) -> str | None:
         return "unit"
     if key in {"단가", "unitprice"}:
         return "unit_price"
-    if key in {"공급가액", "공급액", "공급금액", "subtotal", "supplyamount"}:
+    if key in {"공급가액", "공급액", "공급금액", "subtotal", "supplyamount", "supplytotal"}:
         return "supply_amount"
     if key in {"세액", "세악", "부가세", "vat", "tax"}:
         return "tax_amount"
