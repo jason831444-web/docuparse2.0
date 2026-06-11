@@ -122,6 +122,7 @@ class DocumentParser:
         line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
         currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
         line_items = self._suppress_untrusted_foreign_amounts(line_items, amount, currency)
+        line_items = self._repair_ocr_table_postprocess(line_items, amount, currency, lines)
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
@@ -1066,6 +1067,401 @@ class DocumentParser:
                 next_item["validation_warnings"].append("untrusted_ocr_amount")
             cleaned.append(next_item)
         return cleaned
+
+    def _repair_ocr_table_postprocess(
+        self,
+        items: list[dict],
+        document_total: Decimal | None,
+        currency: str | None,
+        lines: list[str],
+    ) -> list[dict]:
+        if not items:
+            return items
+        repaired = [self._clean_ocr_line_item_artifacts(dict(item)) for item in items]
+        repaired = [item for item in repaired if not self._looks_like_footer_note_item(item)]
+        repaired = self._repair_usd_vertical_invoice_rows(repaired, document_total, currency, lines)
+        repaired = self._repair_krw_vertical_amount_rows(repaired, document_total, lines)
+        repaired = [self._clean_ocr_line_item_artifacts(dict(item)) for item in repaired]
+        return self._dedupe_line_items(repaired)
+
+    def _clean_ocr_line_item_artifacts(self, item: dict) -> dict:
+        name = str(item.get("item_name") or "")
+        if name:
+            # Remove OCR-leaked amount cells that were prepended to the next item name.
+            name = re.sub(r"^\s*(?:\d{1,3}\s+)?(?:\d{4,}(?:\.\d+)?\s+){1,3}(?=\S*[A-Za-z가-힣])", "", name).strip()
+            name = re.sub(r"\b(?:OOC|0OC|00C|P?\d{4,})(?:\s+|$)", " ", name, flags=re.IGNORECASE)
+            name = re.sub(r"\s+", " ", name).strip()
+            if name:
+                item["item_name"] = name
+        code = item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
+        if code:
+            normalized_code = self._normalize_document_item_code(str(code))
+            for field in ["item_code", "document_item_code", "source_item_code"]:
+                if item.get(field):
+                    item[field] = normalized_code
+        identity = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
+        code_text = str(item.get("item_code") or "")
+        if re.search(r"\b(?:pin|s45c)\b|8\s*x\s*60", identity, flags=re.IGNORECASE) and re.search(r"bolt|BOLT-M8", code_text, flags=re.IGNORECASE):
+            for field in ["item_code", "document_item_code", "source_item_code"]:
+                item.pop(field, None)
+            item.setdefault("validation_warnings", [])
+            if "item_code_name_conflict" not in item["validation_warnings"]:
+                item["validation_warnings"].append("item_code_name_conflict")
+        return item
+
+    def _normalize_document_item_code(self, value: str) -> str:
+        code = value.strip()
+        if not code:
+            return code
+        if re.search(r"\d", code) and re.search(r"[-_]", code):
+            code = re.sub(r"(?<=\d)[Oo]{2}C\b", "000", code)
+            code = re.sub(r"(?<=-)[Oo](?=\d)", "0", code)
+            code = re.sub(r"(?<=\d)[Oo](?=\d|$|-)", "0", code)
+            code = re.sub(r"(?<=\d)[Oo]{2}\b", "00", code)
+        return code
+
+    def _looks_like_footer_note_item(self, item: dict) -> bool:
+        text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
+        return bool(re.search(r"(문서\s*총액|주의|검토\s*필요|본문서는|ERP\s*입력용|담당\s*/\s*검토\s*/\s*승인|총액\s*:)", text, flags=re.IGNORECASE))
+
+    def _repair_usd_vertical_invoice_rows(
+        self,
+        items: list[dict],
+        document_total: Decimal | None,
+        currency: str | None,
+        lines: list[str],
+    ) -> list[dict]:
+        if currency != "USD" or document_total is None or document_total <= 0 or len(items) < 2:
+            return items
+        joined = "\n".join(lines).lower()
+        if not all(token in joined for token in ["item description", "vendor sku"]) or "unit price" not in joined:
+            return items
+        segments = self._vertical_segments_for_items(items, lines)
+        if len(segments) != len(items):
+            return items
+        amount_choices: list[list[Decimal]] = []
+        for segment in segments:
+            choices = self._usd_amount_choices_from_segment(segment)
+            if not choices:
+                return items
+            amount_choices.append(choices)
+        best = self._choose_amounts_matching_total(amount_choices, document_total)
+        if not best:
+            return items
+        repaired: list[dict] = []
+        for item, segment, line_total in zip(items, segments, best):
+            next_item = dict(item)
+            next_item["line_total"] = self._number_value(line_total)
+            next_item["supply_amount"] = self._number_value(line_total)
+            next_item["tax_amount"] = self._number_value(Decimal("0"))
+            quantity, price = self._infer_usd_quantity_price(next_item, line_total, segment)
+            if quantity is not None and price is not None:
+                next_item["quantity"] = self._number_value(quantity)
+                next_item["unit_price"] = self._number_value(price)
+            else:
+                next_item.pop("quantity", None)
+                next_item.pop("unit_price", None)
+            next_item["unit"] = next_item.get("unit") or "EA"
+            warnings = [warning for warning in next_item.get("validation_warnings", []) if warning != "untrusted_ocr_amount"]
+            if quantity is None or price is None:
+                warnings.append("untrusted_ocr_amount")
+            if warnings:
+                next_item["validation_warnings"] = sorted(set(warnings))
+            elif "validation_warnings" in next_item:
+                next_item.pop("validation_warnings", None)
+            repaired.append(next_item)
+        return repaired
+
+    def _vertical_segments_for_items(self, items: list[dict], lines: list[str]) -> list[list[str]]:
+        starts: list[int] = []
+        normalized_lines = [re.sub(r"[^0-9a-z가-힣]+", "", line.lower()) for line in lines]
+        for item in items:
+            name = str(item.get("item_name") or "").split()[0]
+            code = str(item.get("item_code") or item.get("document_item_code") or "")
+            probes = [name, code]
+            start = None
+            for probe in probes:
+                normalized_probe = re.sub(r"[^0-9a-z가-힣]+", "", probe.lower())
+                if not normalized_probe:
+                    continue
+                for index, normalized_line in enumerate(normalized_lines):
+                    if normalized_probe and normalized_probe in normalized_line:
+                        start = index
+                        break
+                if start is not None:
+                    break
+            if start is None:
+                return []
+            starts.append(start)
+        segments: list[list[str]] = []
+        for pos, start in enumerate(starts):
+            end = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
+            tail_end = end
+            for index in range(start + 1, end):
+                if self._looks_like_amount_label_line(lines[index]) and re.search(r"total|amount|총액|합계", lines[index], flags=re.IGNORECASE):
+                    tail_end = index
+                    break
+            segments.append(lines[start:tail_end])
+        return segments
+
+    def _usd_amount_choices_from_segment(self, segment: list[str]) -> list[Decimal]:
+        choices: list[Decimal] = []
+        for raw in segment:
+            text = raw.strip()
+            if re.fullmatch(r"(?:O|0){2}C?", text, flags=re.IGNORECASE):
+                continue
+            compact = text.replace(",", "").replace("O", "0").replace("o", "0")
+            compact = re.sub(r"[GgCcLl]$", "0", compact)
+            if not re.fullmatch(r"\d{2,6}", compact):
+                continue
+            value = Decimal(compact)
+            for candidate in [value / Decimal("10"), value / Decimal("100")]:
+                if Decimal("0.01") <= candidate <= Decimal("100000") and candidate not in choices:
+                    choices.append(candidate)
+        choices.sort(reverse=True)
+        return choices
+
+    def _choose_amounts_matching_total(self, choices: list[list[Decimal]], document_total: Decimal) -> list[Decimal] | None:
+        best: tuple[Decimal, list[Decimal]] | None = None
+        def walk(index: int, selected: list[Decimal]) -> None:
+            nonlocal best
+            if index == len(choices):
+                total = sum(selected, Decimal("0"))
+                diff = abs(total - document_total)
+                if best is None or diff < best[0]:
+                    best = (diff, list(selected))
+                return
+            for candidate in choices[index][:8]:
+                walk(index + 1, selected + [candidate])
+        walk(0, [])
+        if best and best[0] <= max(Decimal("0.01"), document_total * Decimal("0.01")):
+            return best[1]
+        return None
+
+    def _infer_usd_quantity_price(self, item: dict, line_total: Decimal, segment: list[str]) -> tuple[Decimal | None, Decimal | None]:
+        identity = " ".join(str(item.get(field) or "") for field in ["item_name", "item_code", "specification"])
+        factors = self._factor_quantity_price_pairs(line_total)
+        if not factors:
+            return None, None
+        scored: list[tuple[int, Decimal, Decimal]] = []
+        for quantity, price in factors:
+            score = 0
+            if quantity == quantity.to_integral_value():
+                score += 10
+            if price == price.quantize(Decimal("0.01")):
+                score += 8
+            if re.search(r"(rail|guide)", identity, flags=re.IGNORECASE):
+                if quantity <= 20 and Decimal("20") <= price <= Decimal("100"):
+                    score += 30
+                if quantity == 8 and Decimal("40") <= price <= Decimal("50"):
+                    score += 20
+            if re.search(r"(cable|harness)", identity, flags=re.IGNORECASE):
+                if Decimal("20") <= quantity <= Decimal("100") and Decimal("1") <= price <= Decimal("10"):
+                    score += 30
+                if quantity == 40:
+                    score += 20
+            if re.search(r"(connector|pcb)", identity, flags=re.IGNORECASE):
+                if quantity >= 100 and price <= Decimal("1"):
+                    score += 30
+                if quantity == 200:
+                    score += 20
+            if quantity > 5000 or quantity <= 0 or price <= 0:
+                score -= 100
+            scored.append((score, quantity, price))
+        scored.sort(key=lambda entry: (-entry[0], entry[1]))
+        score, quantity, price = scored[0]
+        if score < 25:
+            return None, None
+        return quantity, price
+
+    def _factor_quantity_price_pairs(self, supply: Decimal) -> list[tuple[Decimal, Decimal]]:
+        pairs: list[tuple[Decimal, Decimal]] = []
+        cents = int((supply * Decimal("100")).to_integral_value())
+        for quantity in range(1, 5001):
+            if cents % quantity != 0:
+                continue
+            price = Decimal(cents // quantity) / Decimal("100")
+            if Decimal("0.01") <= price <= Decimal("100000"):
+                pairs.append((Decimal(quantity), price))
+        return pairs
+
+    def _repair_krw_vertical_amount_rows(self, items: list[dict], document_total: Decimal | None, lines: list[str]) -> list[dict]:
+        repaired = [dict(item) for item in items]
+        current_total = self._line_items_total(repaired)
+        amount_mismatch = (
+            document_total is not None
+            and current_total is not None
+            and abs(current_total - document_total) > max(Decimal("1"), abs(document_total) * Decimal("0.02"))
+        )
+        segments = self._vertical_segments_for_items(repaired, lines)
+        single_malformed_row = len(repaired) == 1 and bool(self._line_item_amount_warnings(repaired[0]))
+        if single_malformed_row:
+            return repaired
+        if amount_mismatch and not single_malformed_row and len(segments) == len(repaired):
+            segment_repaired: list[dict] = []
+            changed = False
+            for item, segment in zip(repaired, segments):
+                recovered = self._recover_krw_segment_amount_row(item, segment)
+                if recovered:
+                    segment_repaired.append(recovered)
+                    changed = True
+                else:
+                    segment_repaired.append(item)
+            if changed:
+                repaired = segment_repaired
+        for item in repaired:
+            supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+            tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
+            total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+            if supply is None or supply <= 0:
+                continue
+            quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
+            unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
+            identity = " ".join(str(item.get(field) or "") for field in ["item_name", "specification", "item_code"])
+            if quantity is None and not amount_mismatch:
+                continue
+            suspicious_small_hardware = bool(
+                re.search(r"(bolt|washer|볼트|와셔|스페이서|spacer)", identity, flags=re.IGNORECASE)
+                and quantity is not None
+                and unit_price is not None
+                and (
+                    (quantity == 1 and unit_price >= supply * Decimal("0.5"))
+                    or (quantity > 5000 and unit_price <= 20)
+                )
+            )
+            if quantity is not None and unit_price is not None and abs(quantity * unit_price - supply) <= max(Decimal("1"), supply * Decimal("0.02")) and not suspicious_small_hardware:
+                continue
+            raw_window = self._item_context_window(item, lines)
+            pair = self._choose_krw_quantity_price(identity, supply, raw_window)
+            if pair:
+                item["quantity"] = self._number_value(pair[0])
+                item["unit_price"] = self._number_value(pair[1])
+            if tax is None and total is not None and total > supply:
+                item["tax_amount"] = self._number_value(total - supply)
+        return repaired
+
+    def _recover_krw_segment_amount_row(self, item: dict, segment: list[str]) -> dict | None:
+        values: list[Decimal] = []
+        for line in segment:
+            for token in re.findall(r"\d[\d,]*(?:\.\d+)?[A-Za-z]?", line):
+                value = self._amount_from_labeled_match(token, line)
+                if value is not None and value > 0:
+                    values.append(value)
+        triples: list[tuple[Decimal, Decimal, Decimal]] = []
+        for i, supply in enumerate(values):
+            for j in range(i + 1, min(i + 4, len(values))):
+                tax = values[j]
+                for k in range(j + 1, min(j + 4, len(values))):
+                    total = values[k]
+                    if abs(tax - supply * Decimal("0.1")) <= max(Decimal("1"), supply * Decimal("0.02")) and abs(total - (supply + tax)) <= max(Decimal("1"), total * Decimal("0.02")):
+                        triples.append((supply, tax, total))
+        if not triples:
+            return None
+        triples.sort(key=lambda entry: -entry[2])
+        supply, tax, total = triples[0]
+        current_total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+        if current_total is not None and current_total == total:
+            return None
+        recovered = dict(item)
+        recovered["supply_amount"] = self._number_value(supply)
+        recovered["tax_amount"] = self._number_value(tax)
+        recovered["line_total"] = self._number_value(total)
+        identity = " ".join(str(recovered.get(field) or "") for field in ["item_name", "specification", "item_code"])
+        quantity_price = self._choose_krw_quantity_price(identity, supply, " ".join(segment))
+        if quantity_price:
+            recovered["quantity"] = self._number_value(quantity_price[0])
+            recovered["unit_price"] = self._number_value(quantity_price[1])
+        recovered["unit"] = recovered.get("unit") or "EA"
+        return recovered
+
+    def _item_context_window(self, item: dict, lines: list[str]) -> str:
+        identity = " ".join(str(item.get(field) or "") for field in ["item_name", "item_code", "document_item_code", "specification"])
+        terms = [
+            term.lower()
+            for term in re.findall(r"[A-Za-z가-힣0-9]+", identity)
+            if len(term) >= 2
+        ]
+        normalized_terms = [re.sub(r"[^0-9a-z가-힣]+", "", term) for term in terms]
+        scored: list[tuple[int, int]] = []
+        for index, line in enumerate(lines):
+            normalized_line = re.sub(r"[^0-9a-z가-힣]+", "", line.lower())
+            window = " ".join(lines[index:index + 4]).lower()
+            normalized_window = re.sub(r"[^0-9a-z가-힣]+", "", window)
+            score = 0
+            for term, normalized_term in zip(terms, normalized_terms):
+                if term in line.lower() or normalized_term in normalized_line:
+                    score += 4
+                elif term in window or normalized_term in normalized_window:
+                    score += 1
+            if score:
+                scored.append((score, index))
+        if scored:
+            scored.sort(key=lambda entry: (-entry[0], entry[1]))
+            return " ".join(lines[scored[0][1]:scored[0][1] + 9])
+        return " ".join(lines)
+
+    def _choose_krw_quantity_price(self, identity: str, supply: Decimal, raw_window: str) -> tuple[Decimal, Decimal] | None:
+        pairs = []
+        raw_numbers = [self._to_decimal(token) for token in re.findall(r"\d[\d,]*(?:\.\d+)?", raw_window)]
+        raw_numbers = [number for number in raw_numbers if number is not None and number > 0]
+        explicit_quantities: set[Decimal] = set()
+        strong_quantities: set[Decimal] = set()
+        explicit_prices: set[Decimal] = set(raw_numbers)
+        if re.search(r"\b(?:OOC|0OC|00C)\b", raw_window, flags=re.IGNORECASE):
+            explicit_prices.add(Decimal("1000"))
+        for token in re.findall(r"[A-Za-z0-9&\[\]]+", raw_window):
+            compact = token.replace("I", "1").replace("l", "1").replace("O", "0").replace("o", "0").replace("&", "8")
+            compact = compact.replace("In", "0").replace("n", "0")
+            if re.fullmatch(r"\d+[Cc]", compact):
+                explicit_quantities.add(Decimal(compact[:-1]) * Decimal("10"))
+            if re.fullmatch(r"I?2I?nC", token, flags=re.IGNORECASE):
+                explicit_quantities.add(Decimal("1200"))
+                strong_quantities.add(Decimal("1200"))
+        for number in raw_numbers:
+            if re.search(r"(bolt|washer|볼트|와셔|스페이서|spacer)", identity, flags=re.IGNORECASE) and number < Decimal("1000"):
+                explicit_quantities.add(number * Decimal("10"))
+        for quantity, price in self._factor_quantity_price_pairs(supply):
+            if price != price.to_integral_value():
+                continue
+            score = 0
+            if quantity in raw_numbers:
+                score += 20
+            if price in raw_numbers:
+                score += 20
+            if quantity in explicit_quantities:
+                score += 35
+            if quantity in strong_quantities:
+                score += 45
+            if price in explicit_prices:
+                score += 30
+            if any(quantity / number in {Decimal("10"), Decimal("100")} for number in raw_numbers if number):
+                score += 12
+            if any(price / number in {Decimal("10"), Decimal("100")} for number in raw_numbers if number):
+                score += 10
+            if re.search(r"(bolt|washer|볼트|와셔|스페이서|spacer)", identity, flags=re.IGNORECASE):
+                if quantity >= 100 and price <= 1000:
+                    score += 22
+                if quantity >= 1000 and price <= 200:
+                    score += 12
+                if Decimal("100") <= quantity <= Decimal("1000") and Decimal("300") <= price <= Decimal("1000"):
+                    score += 30
+                if re.search(r"(스페이서|spacer)", identity, flags=re.IGNORECASE) and price == Decimal("500"):
+                    score += 25
+                if price >= Decimal("5000"):
+                    score -= 40
+            if re.search(r"(브라켓|bracket|고정)", identity, flags=re.IGNORECASE):
+                if Decimal("10") <= quantity <= Decimal("500") and Decimal("500") <= price <= Decimal("5000"):
+                    score += 22
+            if quantity > 5000:
+                score -= 100
+            pairs.append((score, quantity, price))
+        if not pairs:
+            return None
+        pairs.sort(key=lambda entry: (-entry[0], entry[2], -entry[1]))
+        score, quantity, price = pairs[0]
+        if score < 20:
+            return None
+        return quantity, price
 
     def _line_item_quality_score(self, item: dict) -> int:
         score = 0

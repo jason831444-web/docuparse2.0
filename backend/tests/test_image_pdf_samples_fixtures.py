@@ -184,7 +184,20 @@ def test_real_ocr_usd_invoice_keeps_full_document_number_and_items():
     assert parsed.currency == "USD"
     assert _amount(parsed.extracted_amount) == Decimal("508")
     assert len(parsed.line_items) == 3
-    assert _line_total_sum(parsed) <= Decimal("508")
+    assert _line_total_sum(parsed) == Decimal("508")
+    row1, row2, row3 = parsed.line_items
+    assert row1.get("item_code") == "HGW20-1000"
+    assert _amount(row1.get("quantity")) == Decimal("8")
+    assert _amount(row1.get("unit_price")) == Decimal("45")
+    assert _amount(row1.get("line_total")) == Decimal("360")
+    assert row2.get("item_code") == "CBL-HAR-500"
+    assert _amount(row2.get("quantity")) == Decimal("40")
+    assert _amount(row2.get("unit_price")) == Decimal("2.2")
+    assert _amount(row2.get("line_total")) == Decimal("88")
+    assert row3.get("item_code") == "CON-PCB-12P"
+    assert _amount(row3.get("quantity")) == Decimal("200")
+    assert _amount(row3.get("unit_price")) == Decimal("0.3")
+    assert _amount(row3.get("line_total")) == Decimal("60")
     keys = {
         (
             str(item.get("item_code") or item.get("document_item_code") or ""),
@@ -206,5 +219,24 @@ def test_real_ocr_noise_cases_preserve_item_candidates_without_header_or_amount_
         _assert_no_bad_structured_values(parsed)
         if prefix == "09":
             assert parsed.extracted_amount == Decimal("403700")
+            assert _line_total_sum(parsed) == Decimal("403700")
+            assert _amount(parsed.line_items[1].get("quantity")) == Decimal("1200")
+            assert _amount(parsed.line_items[2].get("quantity")) == Decimal("1200")
             for item in parsed.line_items:
                 assert _amount(item.get("quantity")) != Decimal("7199")
+        if prefix == "07":
+            assert len(parsed.line_items) == 3
+            for item in parsed.line_items:
+                name = str(item.get("item_name") or "")
+                assert "문서 총액" not in name
+                assert "본문서는" not in name
+                assert "담당/검토/승인" not in name
+            assert _amount(parsed.line_items[1].get("quantity")) == Decimal("120")
+            assert _amount(parsed.line_items[1].get("line_total")) == Decimal("132000")
+            assert _amount(parsed.line_items[2].get("quantity")) == Decimal("300")
+            assert _amount(parsed.line_items[2].get("line_total")) == Decimal("165000")
+        if prefix == "10":
+            first_name = str(parsed.line_items[0].get("item_name") or "")
+            assert not re.match(r"^\s*(?:\d{1,3}\s+)?\d{4,}\s+\d{4,}\s+", first_name)
+            second = parsed.line_items[1]
+            assert second.get("item_code") != "BOLT-M8-20"
