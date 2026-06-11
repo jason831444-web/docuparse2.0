@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BellRing,
+  CalendarDays,
   Database,
   FileHeart,
   FileSearch,
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/", label: "대시보드", icon: LayoutDashboard },
   { href: "/upload", label: "문서 업로드", icon: Upload },
   { href: "/documents", label: "문서 목록", icon: Files },
+  { href: "/calendar", label: "문서 일정", icon: CalendarDays },
   { href: "/categories", label: "문서 유형", icon: FolderKanban },
   { href: "/review", label: "검토 필요", icon: BellRing },
   { href: "/favorites", label: "즐겨찾기", icon: FileHeart },

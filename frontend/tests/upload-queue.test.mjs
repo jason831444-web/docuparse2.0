@@ -51,6 +51,14 @@ running = markUploadCompleted(running, queue[0].id, {
 });
 assert.equal(running.find((item) => item.id === queue[0].id)?.status, "needs_review");
 
+running = markUploadCompleted(running, queue[2].id, {
+  id: "doc-processing",
+  title: "처리 중 문서",
+  original_filename: "doc-2.txt",
+  processing_status: "processing",
+});
+assert.equal(running.find((item) => item.id === queue[2].id)?.status, "processing", "server-side processing must not render as completed");
+
 const many = createUploadQueueItems(
   Array.from({ length: RECOMMENDED_MAX_UPLOAD_FILES + 5 }, (_, index) => ({ name: `many-${index}.pdf`, size: index + 1 })),
   999,

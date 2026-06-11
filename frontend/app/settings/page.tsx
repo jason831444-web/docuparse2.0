@@ -1,9 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
 
 export default function SettingsPage() {
+  const [grouping, setGrouping] = useState<DocumentGroupingMode>("document_type");
+
+  useEffect(() => {
+    setGrouping(loadDocumentGroupingMode());
+  }, []);
+
+  function updateGrouping(value: DocumentGroupingMode) {
+    setGrouping(value);
+    saveDocumentGroupingMode(value);
+  }
+
   return (
     <main className="shell py-8">
       <div className="mb-6">
@@ -23,6 +37,12 @@ export default function SettingsPage() {
                 <option>오래된 업로드 날짜순</option>
                 <option>최근 수정순</option>
                 <option>제목 가나다순</option>
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              문서 그룹 방식
+              <select className="h-10 rounded-md border bg-white px-3 text-sm" value={grouping} onChange={(event) => updateGrouping(event.target.value as DocumentGroupingMode)}>
+                {Object.entries(documentGroupingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             <label className="grid gap-2 text-sm font-medium">

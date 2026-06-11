@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   displayWarningsWithoutReviewDuplicates,
+  isBlockingReviewIssue,
   reviewIssueAmountLines,
   reviewIssueSummary,
 } from "../lib/utils.ts";
@@ -35,5 +36,12 @@ assert.deepEqual(
   ),
   ["다른 처리 경고"]
 );
+
+assert.equal(isBlockingReviewIssue({
+  code: "item_code_name_conflict",
+  message_ko: "품목명과 품목코드 매칭이 충돌합니다.",
+  field: "line_items.internal_item_code",
+  severity: "warning",
+}), true);
 
 console.log("review issue display tests passed");

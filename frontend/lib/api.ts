@@ -1,6 +1,7 @@
 import type {
   ActivitySummary,
   AppNotification,
+  DocumentCalendarItem,
   DocumentListResponse,
   DocumentRecord,
   DocumentStats,
@@ -37,6 +38,7 @@ export const api = {
   list: (params: URLSearchParams) => request<DocumentListResponse>(`/documents?${params.toString()}`, { cache: "no-store" }),
   categories: () => request<FolderSummary[]>("/documents/categories", { cache: "no-store" }),
   notifications: () => request<AppNotification[]>("/documents/notifications", { cache: "no-store" }),
+  calendar: (params = new URLSearchParams()) => request<DocumentCalendarItem[]>(`/documents/calendar?${params.toString()}`, { cache: "no-store" }),
   createCategory: (payload: { label: string; parent?: string | null; category?: string | null }) =>
     request<FolderSummary>("/documents/categories", { method: "POST", body: JSON.stringify(payload) }),
   deleteCategory: async (value: string) => {
@@ -84,9 +86,10 @@ export const api = {
   confirm: (id: string) => request<DocumentRecord>(`/documents/${id}/confirm`, { method: "POST" }),
   markNeedsReview: (id: string) => request<DocumentRecord>(`/documents/${id}/needs-review`, { method: "POST" }),
   toggleFavorite: (id: string) => request<DocumentRecord>(`/documents/${id}/favorite`, { method: "POST" }),
-  exportCsvUrl: () => `${API_BASE}/documents/export/csv`,
-  exportExcelUrl: () => `${API_BASE}/documents/export/xlsx`,
+  exportCsvUrl: (params = new URLSearchParams()) => `${API_BASE}/documents/export/csv${params.toString() ? `?${params.toString()}` : ""}`,
+  exportExcelUrl: (params = new URLSearchParams()) => `${API_BASE}/documents/export/xlsx${params.toString() ? `?${params.toString()}` : ""}`,
   exportJsonUrl: (id: string) => `${API_BASE}/documents/${id}/export/json`,
+  exportTaxInvoiceXmlUrl: (id: string) => `${API_BASE}/documents/${id}/export/tax-invoice-xml`,
   itemMaster: {
     list: (params: URLSearchParams) => request<ItemMasterListResponse>(`/item-master/items?${params.toString()}`, { cache: "no-store" }),
     stats: () => request<ItemMasterStats>("/item-master/stats", { cache: "no-store" }),

@@ -50,6 +50,10 @@ export function titleCaseLabel(value?: string | null): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+export function documentDisplayTitle(document: { document_number?: string | null; title?: string | null; original_filename?: string | null }) {
+  return document.document_number || document.title || document.original_filename || "문서";
+}
+
 export function primaryCategoryLabel(document: { category?: string | null; workflow_metadata?: Record<string, unknown> | null }) {
   const interpretation = (document.workflow_metadata?.category_interpretation ?? {}) as Record<string, unknown>;
   const profile = typeof interpretation.profile === "string" ? interpretation.profile : null;
@@ -252,6 +256,7 @@ export function isBlockingReviewIssue(issue: NormalizedReviewIssue) {
     "missing_price_or_total",
     "amount_mismatch",
     "invalid_line_amount",
+    "item_code_name_conflict",
     "internal_item_unmatched",
     "internal_item_ambiguous",
     "item_matching_skipped",
@@ -292,6 +297,7 @@ export function reviewReasonLabel(value: string) {
     item_master_match_required: `${prefix}내부 품목코드 후보 확인 필요`,
     internal_item_ambiguous: `${prefix}내부 품목코드 후보 확인 필요`,
     internal_item_unmatched: `${prefix}내부 품목코드 미매칭`,
+    item_code_name_conflict: `${prefix}품목명과 내부 품목코드가 충돌합니다.`,
     amount_mismatch: "문서 합계금액과 품목 합계금액이 일치하지 않습니다.",
     missing_document_number: "문서번호 미확인",
     missing_issue_date: "날짜 미확인",

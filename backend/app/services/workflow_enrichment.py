@@ -531,10 +531,15 @@ class DocumentWorkflowEnrichmentService:
         else:
             due_date = self._korean_date_from_iso(fields.get("due_date"))
             detail = f"납기일은 {due_date or '미확인'}입니다. "
+        item_summary = (
+            f"품목 {line_item_count}건이 추출되었습니다. 이 납품서는 금액 정보 없이 수량 확인용 문서로 처리되었습니다."
+            if doc_type == "delivery_note" and not total
+            else f"품목 {line_item_count}건과 합계금액 {total or '미확인'}이 추출되었습니다."
+        )
         return (
             f"이 {label}는 {vendor}{self._with_particle(vendor)} {customer} 간의 거래 문서입니다. "
             f"{number_label}는 {number}이며, {detail}"
-            f"품목 {line_item_count}건과 합계금액 {total or '미확인'}이 추출되었습니다."
+            f"{item_summary}"
         )
 
     def _manufacturing_action_items(self, doc_type: str, warnings: list[str]) -> list[str]:

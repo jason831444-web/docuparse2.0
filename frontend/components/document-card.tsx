@@ -4,18 +4,19 @@ import { Calendar, DollarSign, FileType2, Star, Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
-import { documentSummaryShort, formatDate, formatMoney, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
+import { documentDisplayTitle, documentSummaryShort, formatDate, formatMoney, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
 export function DocumentCard({ document, selected = false, onSelect, returnTo }: { document: DocumentRecord; selected?: boolean; onSelect?: (checked: boolean) => void; returnTo?: string }) {
   const href = returnTo ? `/documents/${document.id}?from=${encodeURIComponent(returnTo)}` : `/documents/${document.id}`;
+  const displayTitle = documentDisplayTitle(document);
   return (
     <Card className="h-full min-w-0 overflow-hidden transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md">
       <CardContent className="space-y-4 p-5">
         <div className="flex min-w-0 items-start gap-3">
           {onSelect ? (
             <input
-              aria-label={`${document.title || document.original_filename} 선택`}
+              aria-label={`${displayTitle} 선택`}
               type="checkbox"
               className="mt-1 size-4"
               checked={selected}
@@ -26,7 +27,7 @@ export function DocumentCard({ document, selected = false, onSelect, returnTo }:
             <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex min-w-0 items-start gap-2">
-                  <h3 className="line-clamp-2 break-words font-semibold leading-snug">{document.title || document.original_filename}</h3>
+                  <h3 className="line-clamp-2 break-words font-semibold leading-snug">{displayTitle}</h3>
                   {document.is_favorite ? <Star className="mt-0.5 size-4 shrink-0 fill-amber-400 text-amber-400" /> : null}
                 </div>
                 <p className="mt-1 line-clamp-2 break-words text-sm leading-5 text-muted-foreground">{documentSummaryShort(document, 120)}</p>

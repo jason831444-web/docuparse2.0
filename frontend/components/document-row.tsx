@@ -3,16 +3,17 @@ import { Star } from "lucide-react";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
-import { documentSummaryShort, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
+import { documentDisplayTitle, documentSummaryShort, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
 export function DocumentRow({ document, selected = false, onSelect, returnTo }: { document: DocumentRecord; selected?: boolean; onSelect?: (checked: boolean) => void; returnTo?: string }) {
   const href = returnTo ? `/documents/${document.id}?from=${encodeURIComponent(returnTo)}` : `/documents/${document.id}`;
+  const displayTitle = documentDisplayTitle(document);
   return (
     <div className="grid min-w-0 gap-3 overflow-hidden rounded-lg border bg-white px-4 py-4 shadow-sm shadow-slate-200/50 transition hover:border-primary/40 hover:shadow-md lg:grid-cols-[auto_minmax(0,2.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_auto]">
       {onSelect ? (
         <input
-          aria-label={`${document.title || document.original_filename} 선택`}
+          aria-label={`${displayTitle} 선택`}
           type="checkbox"
           className="mt-1 size-4"
           checked={selected}
@@ -21,7 +22,7 @@ export function DocumentRow({ document, selected = false, onSelect, returnTo }: 
       ) : null}
       <Link href={href} className="min-w-0">
         <div className="flex min-w-0 items-start gap-2">
-          <p className="line-clamp-2 break-words font-semibold leading-snug">{document.title || document.original_filename}</p>
+          <p className="line-clamp-2 break-words font-semibold leading-snug">{displayTitle}</p>
           {document.is_favorite ? <Star className="mt-0.5 size-4 shrink-0 fill-amber-400 text-amber-400" /> : null}
         </div>
         <p className="mt-1 line-clamp-2 break-words text-sm leading-5 text-muted-foreground">{documentSummaryShort(document, 180)}</p>

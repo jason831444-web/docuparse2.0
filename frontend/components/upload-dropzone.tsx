@@ -92,7 +92,7 @@ export function UploadDropzone() {
   const waitForCompletion = useCallback(async (document: DocumentRecord) => {
     if (!["uploaded", "queued", "processing"].includes(document.processing_status)) return document;
     let latest = document;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1200));
       latest = await api.get(document.id);
       if (!["uploaded", "queued", "processing"].includes(latest.processing_status)) return latest;

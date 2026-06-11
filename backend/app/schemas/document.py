@@ -94,6 +94,7 @@ class DocumentStats(BaseModel):
     pinned: list[DocumentRead] = Field(default_factory=list)
     category_overview: list[dict] = Field(default_factory=list)
     file_type_overview: list[dict] = Field(default_factory=list)
+    ocr_metrics: dict = Field(default_factory=dict)
 
 
 class FolderSummary(BaseModel):
@@ -139,3 +140,22 @@ class DocumentNotification(BaseModel):
     created_at: datetime
     action_url: str
     action_required: bool = False
+
+
+class DocumentCalendarItem(BaseModel):
+    id: str
+    document_id: UUID
+    document_title: str | None = None
+    document_number: str | None = None
+    original_filename: str
+    document_type: DocumentType
+    vendor_name: str | None = None
+    customer_name: str | None = None
+    date: date
+    date_role: str
+    date_label: str
+    status: str
+    days_from_today: int
+    processing_status: ProcessingStatus
+    review_required: bool = False
+    action_url: str

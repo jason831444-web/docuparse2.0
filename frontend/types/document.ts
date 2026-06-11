@@ -100,6 +100,7 @@ export interface DocumentRecord {
 export interface ManufacturingLineItem {
   item_name?: string | null;
   item_code?: string | null;
+  document_item_code?: string | null;
   source_item_name?: string | null;
   source_item_code?: string | null;
   internal_item_code?: string | null;
@@ -217,6 +218,25 @@ export interface DocumentListResponse {
   page_size: number;
 }
 
+export interface DocumentCalendarItem {
+  id: string;
+  document_id: string;
+  document_title: string | null;
+  document_number: string | null;
+  original_filename: string;
+  document_type: DocumentType;
+  vendor_name: string | null;
+  customer_name: string | null;
+  date: string;
+  date_role: string;
+  date_label: string;
+  status: string;
+  days_from_today: number;
+  processing_status: ProcessingStatus;
+  review_required: boolean;
+  action_url: string;
+}
+
 export interface DocumentStats {
   total: number;
   receipts: number;
@@ -233,6 +253,7 @@ export interface DocumentStats {
   pinned: DocumentRecord[];
   category_overview: FolderSummary[];
   file_type_overview: FolderSummary[];
+  ocr_metrics: Record<string, number>;
 }
 
 export type DocumentUpdate = Pick<

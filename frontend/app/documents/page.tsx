@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
+import { primaryCategoryLabel } from "@/lib/utils";
 import type { DocumentListResponse, FolderSummary, ProcessingStatus } from "@/types/document";
 
 const statuses: Array<"" | ProcessingStatus> = ["", "uploaded", "queued", "processing", "ready", "needs_review", "confirmed", "failed"];
@@ -48,6 +50,7 @@ function DocumentsContent() {
   const [data, setData] = useState<DocumentListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"grid" | "list">("list");
+  const [grouping, setGrouping] = useState<DocumentGroupingMode>("document_type");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [filters, setFilters] = useState({
     search: searchParams.get("search") ?? "",
@@ -65,6 +68,7 @@ function DocumentsContent() {
 
   useEffect(() => {
     api.categories().then(setCategories).catch(() => setCategories([]));
+    setGrouping(loadDocumentGroupingMode());
   }, []);
 
   const params = useMemo(() => {
@@ -85,9 +89,36 @@ function DocumentsContent() {
 
   useEffect(() => loadDocuments(), [loadDocuments]);
 
+  useEffect(() => {
+    if (!data?.items.some((document) => ["uploaded", "queued", "processing"].includes(document.processing_status))) return;
+    const interval = window.setInterval(() => {
+      api.list(params).then(setData).catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [data?.items, params]);
+
   function setFilter(key: keyof typeof filters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
   }
+
+  const groupLabel = useCallback((document: DocumentListResponse["items"][number]) => {
+    const type = primaryCategoryLabel(document);
+    const party = document.customer_name || document.vendor_name || "거래처 미확인";
+    if (grouping === "party") return party;
+    if (grouping === "party_type") return `${party} / ${type}`;
+    if (grouping === "type_party") return `${type} / ${party}`;
+    return type;
+  }, [grouping]);
+
+  const groupedItems = useMemo(() => {
+    return (data?.items || []).reduce<Array<{ label: string; items: DocumentListResponse["items"] }>>((groups, document) => {
+      const label = groupLabel(document);
+      const group = groups.find((candidate) => candidate.label === label);
+      if (group) group.items.push(document);
+      else groups.push({ label, items: [document] });
+      return groups;
+    }, []);
+  }, [data?.items, groupLabel]);
 
   return (
     <main className="shell py-8">
@@ -97,8 +128,8 @@ function DocumentsContent() {
           <p className="mt-2 text-muted-foreground">발주서, 견적서, 거래명세서, 납품서의 추출 데이터와 검토 상태를 확인하세요.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button asChild variant="outline"><a href={api.exportCsvUrl()}><Download className="size-4" /> CSV로 내보내기</a></Button>
-          <Button asChild variant="outline"><a href={api.exportExcelUrl()}><Download className="size-4" /> Excel로 내보내기</a></Button>
+          <Button asChild variant="outline"><a href={api.exportCsvUrl()}><Download className="size-4" /> 전체 CSV</a></Button>
+          <Button asChild variant="outline"><a href={api.exportExcelUrl()}><Download className="size-4" /> 전체 Excel</a></Button>
           <div className="flex rounded-md border bg-white p-1">
             <Button type="button" variant={view === "list" ? "default" : "ghost"} size="sm" onClick={() => setView("list")}><Rows3 className="size-4" /></Button>
             <Button type="button" variant={view === "grid" ? "default" : "ghost"} size="sm" onClick={() => setView("grid")}><Grid2X2 className="size-4" /></Button>
@@ -107,7 +138,7 @@ function DocumentsContent() {
       </div>
 
       <Card className="mb-6">
-        <CardContent className="grid gap-3 p-5 lg:grid-cols-[1.5fr_repeat(4,1fr)]">
+        <CardContent className="grid gap-3 p-5 lg:grid-cols-[1.5fr_repeat(5,1fr)]">
           <label className="relative">
             <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
             <Input className="pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={filters.search} onChange={(event) => setFilter("search", event.target.value)} />
@@ -128,6 +159,17 @@ function DocumentsContent() {
             <option value="desc">최근 업로드 날짜순</option>
             <option value="asc">오래된 업로드 날짜순</option>
           </select>
+          <select
+            className="h-10 rounded-md border bg-white px-3 text-sm"
+            value={grouping}
+            onChange={(event) => {
+              const value = event.target.value as DocumentGroupingMode;
+              setGrouping(value);
+              saveDocumentGroupingMode(value);
+            }}
+          >
+            {Object.entries(documentGroupingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
         </CardContent>
       </Card>
 
@@ -136,7 +178,17 @@ function DocumentsContent() {
           {Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-28 animate-pulse rounded-lg bg-muted" />)}
         </div>
       ) : data?.items.length ? (
-        <DocumentList documents={data.items} view={view} onChanged={() => api.list(params).then(setData)} returnTo="/documents" />
+        <div className="space-y-5">
+          {groupedItems.map((group) => (
+            <section key={group.label} className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3">
+                <h2 className="font-semibold">{group.label}</h2>
+                <span className="text-sm text-muted-foreground">{group.items.length}건</span>
+              </div>
+              <DocumentList documents={group.items} view={view} onChanged={() => api.list(params).then(setData)} returnTo="/documents" />
+            </section>
+          ))}
+        </div>
       ) : (
         <Card>
           <CardContent className="p-10 text-center text-muted-foreground">조건에 맞는 문서가 없습니다.</CardContent>

@@ -16,6 +16,7 @@ from app.schemas.document import (
     ActivitySummary,
     BulkDocumentRequest,
     CategoryFolderCreate,
+    DocumentCalendarItem,
     DocumentListResponse,
     DocumentNotification,
     DocumentRead,
@@ -23,7 +24,7 @@ from app.schemas.document import (
     DocumentUpdate,
     FolderSummary,
 )
-from app.services.export import document_to_json, documents_to_csv, documents_to_excel
+from app.services.export import document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
 from app.services.category_taxonomy import category_path_for, clean_tags_for_context, display_label, normalize_category_value
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.queue_service import get_document_queue
@@ -185,6 +186,7 @@ def get_stats(db: Session = Depends(get_db)) -> DocumentStats:
         pinned=[_to_read(document) for document in pinned],
         category_overview=[row.model_dump() for row in category_overview],
         file_type_overview=[row.model_dump() for row in file_type_overview],
+        ocr_metrics=_ocr_metrics(db),
     )
 
 
@@ -216,6 +218,46 @@ def list_notifications(db: Session = Depends(get_db)) -> list[DocumentNotificati
         else:
             notifications.append(_notification(document, "processed", "자동 추출 완료", "문서 처리가 완료되어 ERP/엑셀 입력용 데이터로 검토할 수 있습니다."))
     return notifications[:30]
+
+
+@router.get("/calendar", response_model=list[DocumentCalendarItem])
+def list_calendar_items(
+    db: Session = Depends(get_db),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = Query(default=120, ge=1, le=500),
+) -> list[DocumentCalendarItem]:
+    documents = db.scalars(select(Document).order_by(asc(Document.due_date), desc(Document.updated_at)).limit(1000)).all()
+    today = date.today()
+    items: list[DocumentCalendarItem] = []
+    for document in documents:
+        for role, label, value in _document_calendar_dates(document):
+            if date_from and value < date_from:
+                continue
+            if date_to and value > date_to:
+                continue
+            days = (value - today).days
+            status_label = "오늘" if days == 0 else "지난 일정" if days < 0 else "임박" if days <= 7 else "예정"
+            items.append(DocumentCalendarItem(
+                id=f"{document.id}:{role}:{value.isoformat()}",
+                document_id=document.id,
+                document_title=_display_title(document),
+                document_number=document.document_number,
+                original_filename=document.original_filename,
+                document_type=document.document_type,
+                vendor_name=document.vendor_name or document.merchant_name,
+                customer_name=document.customer_name,
+                date=value,
+                date_role=role,
+                date_label=label,
+                status=status_label,
+                days_from_today=days,
+                processing_status=document.processing_status,
+                review_required=document.review_required,
+                action_url=f"/documents/{document.id}",
+            ))
+    items.sort(key=lambda item: (abs(item.days_from_today) if item.days_from_today < 0 else item.days_from_today, item.date))
+    return items[:limit]
 
 
 @router.get("/categories", response_model=list[FolderSummary])
@@ -309,20 +351,31 @@ def list_favorites(
 
 
 @router.get("/export/csv")
-def export_csv(db: Session = Depends(get_db)) -> Response:
-    documents = db.scalars(select(Document).order_by(desc(Document.created_at))).all()
+def export_csv(
+    db: Session = Depends(get_db),
+    document_ids: list[UUID] | None = Query(default=None),
+    document_type: DocumentType | None = None,
+    category: str | None = Query(default=None, max_length=120),
+) -> Response:
+    documents = _export_documents(db, document_ids=document_ids, document_type=document_type, category=category)
     return Response(
-        documents_to_csv(list(documents)),
+        documents_to_csv(documents),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=docuparse-documents.csv"},
     )
 
 
 @router.get("/export/xlsx")
-def export_excel(db: Session = Depends(get_db)) -> Response:
-    documents = db.scalars(select(Document).order_by(desc(Document.created_at))).all()
+def export_excel(
+    db: Session = Depends(get_db),
+    document_ids: list[UUID] | None = Query(default=None),
+    document_type: DocumentType | None = None,
+    category: str | None = Query(default=None, max_length=120),
+    sheet_mode: str = Query(default="combined", pattern="^(combined|party_tabs)$"),
+) -> Response:
+    documents = _export_documents(db, document_ids=document_ids, document_type=document_type, category=category)
     return Response(
-        documents_to_excel(list(documents)),
+        documents_to_excel(documents, sheet_mode=sheet_mode),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=docuparse-manufacturing-documents.xlsx"},
     )
@@ -491,6 +544,23 @@ def export_document_json(document_id: UUID, db: Session = Depends(get_db)) -> Re
     )
 
 
+@router.get("/{document_id}/export/tax-invoice-xml")
+def export_tax_invoice_xml(document_id: UUID, db: Session = Depends(get_db)) -> Response:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        payload = tax_invoice_to_draft_xml(document)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    filename = f"tax-invoice-draft-{document.document_number or document.id}.xml"
+    return Response(
+        payload,
+        media_type="application/xml",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 def _notification(document: Document, kind: str, title: str, message: str) -> DocumentNotification:
     category = normalize_category_value(document.category)
     return DocumentNotification(
@@ -499,7 +569,7 @@ def _notification(document: Document, kind: str, title: str, message: str) -> Do
         kind=kind,
         title=title,
         message=message,
-        document_title=document.title or document.original_filename,
+        document_title=_display_title(document),
         category=category,
         category_label=display_label(category),
         processing_status=document.processing_status,
@@ -507,6 +577,102 @@ def _notification(document: Document, kind: str, title: str, message: str) -> Do
         action_url=f"/documents/{document.id}",
         action_required=kind in {"review", "failed"},
     )
+
+
+def _display_title(document: Document) -> str:
+    return document.document_number or document.title or document.original_filename
+
+
+def _export_documents(
+    db: Session,
+    document_ids: list[UUID] | None = None,
+    document_type: DocumentType | None = None,
+    category: str | None = None,
+) -> list[Document]:
+    filters = []
+    if document_ids:
+        filters.append(Document.id.in_(document_ids))
+    if document_type:
+        filters.append(Document.document_type == document_type)
+    if category:
+        normalized_category = normalize_category_value(category)
+        if normalized_category:
+            filters.append(Document.category == normalized_category)
+    stmt = select(Document).order_by(desc(Document.created_at))
+    if filters:
+        stmt = stmt.where(and_(*filters))
+    documents = list(db.scalars(stmt).all())
+    if document_ids and not documents:
+        raise HTTPException(status_code=404, detail="No matching documents found.")
+    return documents
+
+
+def _document_calendar_dates(document: Document) -> list[tuple[str, str, date]]:
+    dates: list[tuple[str, str, date]] = []
+    doc_type = getattr(document.document_type, "value", str(document.document_type))
+    if document.issue_date or document.extracted_date:
+        dates.append(("issue_date", "발행일", document.issue_date or document.extracted_date))
+    if document.due_date:
+        label = {
+            "purchase_order": "납기일",
+            "delivery_note": "납품일",
+            "invoice": "지급기한",
+            "quotation": "유효기간",
+            "transaction_statement": "거래일자",
+        }.get(doc_type, "기한")
+        dates.append(("due_date", label, document.due_date))
+    for raw in document.key_dates or []:
+        match = re.search(r"(\d{4}-\d{2}-\d{2})", str(raw))
+        if not match:
+            continue
+        parsed = date.fromisoformat(match.group(1))
+        if any(existing[2] == parsed for existing in dates):
+            continue
+        dates.append(("key_date", "문서 일정", parsed))
+    return dates
+
+
+def _ocr_metrics(db: Session) -> dict[str, int | float]:
+    documents = list(db.scalars(select(Document)).all())
+    metrics: dict[str, int | float] = {
+        "total_documents": len(documents),
+        "paddleocr_success": 0,
+        "paddleocr_retry": 0,
+        "provider_reset": 0,
+        "tesseract_fallback": 0,
+        "failed": 0,
+        "ready": 0,
+        "needs_review": 0,
+        "average_processing_ms": 0,
+    }
+    elapsed_values: list[float] = []
+    for document in documents:
+        metadata = document.ingestion_metadata or {}
+        file_metadata = metadata.get("file_metadata") if isinstance(metadata.get("file_metadata"), dict) else metadata
+        provider = str(file_metadata.get("ocr_provider_succeeded") or file_metadata.get("ocr_engine") or "")
+        if "paddleocr" in provider:
+            metrics["paddleocr_success"] += 1
+        if file_metadata.get("retry_used") or file_metadata.get("ocr_worker_retry_used"):
+            metrics["paddleocr_retry"] += 1
+        if file_metadata.get("provider_reset_used") or file_metadata.get("ocr_worker_provider_reset_used"):
+            metrics["provider_reset"] += 1
+        if file_metadata.get("ocr_fallback_used") or provider == "tesseract":
+            metrics["tesseract_fallback"] += 1
+        if document.processing_status == ProcessingStatus.failed:
+            metrics["failed"] += 1
+        if document.processing_status in {ProcessingStatus.ready, ProcessingStatus.confirmed, ProcessingStatus.completed}:
+            metrics["ready"] += 1
+        if document.processing_status == ProcessingStatus.needs_review:
+            metrics["needs_review"] += 1
+        elapsed = file_metadata.get("processing_time_ms") or file_metadata.get("ocr_worker_elapsed_ms") or file_metadata.get("elapsed_ms")
+        try:
+            if elapsed is not None:
+                elapsed_values.append(float(elapsed))
+        except (TypeError, ValueError):
+            pass
+    if elapsed_values:
+        metrics["average_processing_ms"] = round(sum(elapsed_values) / len(elapsed_values), 1)
+    return metrics
 
 
 def _safe_original_filename(filename: str | None) -> str:

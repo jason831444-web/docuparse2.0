@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,8 +22,14 @@ export function DocumentList({
   returnTo?: string;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [excelMode, setExcelMode] = useState<"combined" | "party_tabs">("combined");
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const allSelected = documents.length > 0 && selected.size === documents.length;
+
+  useEffect(() => {
+    const visibleIds = new Set(documents.map((document) => document.id));
+    setSelected((current) => new Set(Array.from(current).filter((id) => visibleIds.has(id))));
+  }, [documents]);
 
   function toggle(id: string, checked: boolean) {
     setSelected((current) => {
@@ -44,6 +50,26 @@ export function DocumentList({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "다운로드에 실패했습니다");
     }
+  }
+
+  function selectedExportParams(extra?: Record<string, string>) {
+    const params = new URLSearchParams();
+    selectedIds.forEach((id) => params.append("document_ids", id));
+    Object.entries(extra || {}).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    return params;
+  }
+
+  function exportSelected(kind: "csv" | "xlsx") {
+    if (!selectedIds.length) {
+      toast.error("선택된 문서가 없습니다. 내보낼 문서를 먼저 선택하세요.");
+      return;
+    }
+    const url = kind === "csv"
+      ? api.exportCsvUrl(selectedExportParams())
+      : api.exportExcelUrl(selectedExportParams({ sheet_mode: excelMode }));
+    window.location.href = url;
   }
 
   async function deleteSelected() {
@@ -68,6 +94,23 @@ export function DocumentList({
         </label>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{selected.size}건 선택됨</span>
+          <select
+            className="h-8 rounded-md border bg-white px-2 text-xs"
+            value={excelMode}
+            onChange={(event) => setExcelMode(event.target.value as "combined" | "party_tabs")}
+            aria-label="Excel 내보내기 방식"
+          >
+            <option value="combined">통합 시트형</option>
+            <option value="party_tabs">거래처별 탭</option>
+          </select>
+          <Button type="button" variant="outline" size="sm" disabled={!selected.size} onClick={() => exportSelected("xlsx")}>
+            <Download className="size-4" />
+            선택 Excel
+          </Button>
+          <Button type="button" variant="outline" size="sm" disabled={!selected.size} onClick={() => exportSelected("csv")}>
+            <Download className="size-4" />
+            선택 CSV
+          </Button>
           <Button type="button" variant="outline" size="sm" disabled={!selected.size} onClick={downloadSelected}>
             <Download className="size-4" />
             원본 다운로드

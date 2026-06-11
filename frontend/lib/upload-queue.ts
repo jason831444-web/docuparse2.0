@@ -87,11 +87,17 @@ export function markUploadProcessing(items: UploadQueueItem<UploadQueueFileLike>
 }
 
 export function markUploadCompleted(items: UploadQueueItem<UploadQueueFileLike>[], id: string, document: DocumentRecord) {
-  const status: UploadQueueStatus = document.processing_status === "needs_review" ? "needs_review" : "done";
+  const status: UploadQueueStatus = ["uploaded", "queued", "processing"].includes(document.processing_status)
+    ? "processing"
+    : document.processing_status === "needs_review"
+      ? "needs_review"
+      : document.processing_status === "failed"
+        ? "failed"
+        : "done";
   return items.map((item) => item.id === id ? {
     ...item,
     status,
-    error: null,
+    error: document.processing_status === "failed" ? document.processing_error || "서버 처리가 실패했습니다." : null,
     documentId: document.id,
     documentTitle: document.title || document.original_filename,
     updatedAt: Date.now(),

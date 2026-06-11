@@ -33,7 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
-import { blockingReviewIssues, businessFieldDate, documentFieldLabels, documentSummaryDetailed, extractionMethodLabel, formatDateTime, informationalReviewIssues, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueSummary, titleCaseLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentSummaryDetailed, extractionMethodLabel, formatDateTime, informationalReviewIssues, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueSummary, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
@@ -403,6 +403,7 @@ export default function DocumentDetailPage() {
   const infoIssues = informationalReviewIssues(document);
   const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
+  const displayTitle = documentDisplayTitle(document);
 
   return (
     <main className="shell py-8">
@@ -414,7 +415,7 @@ export default function DocumentDetailPage() {
             {document.source_file_type ? <Badge variant="outline">{titleCaseLabel(document.source_file_type)}</Badge> : null}
             {document.is_favorite ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">즐겨찾기</Badge> : null}
           </div>
-          <h1 className="text-3xl font-semibold tracking-normal">{document.title || titleHint || document.original_filename}</h1>
+          <h1 className="text-3xl font-semibold tracking-normal">{displayTitle}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {document.original_filename} · 최근 수정 {formatDateTime(document.updated_at)}
           </p>
@@ -445,6 +446,14 @@ export default function DocumentDetailPage() {
               JSON으로 내보내기
             </a>
           </Button>
+          {document.document_type === "invoice" ? (
+            <Button asChild variant="outline">
+              <a href={api.exportTaxInvoiceXmlUrl(document.id)}>
+                <Download className="size-4" />
+                XML 초안
+              </a>
+            </Button>
+          ) : null}
           <Button variant="destructive" onClick={remove}>
             <Trash2 className="size-4" />
             삭제
@@ -684,10 +693,12 @@ export default function DocumentDetailPage() {
                   <label className="grid gap-2 text-sm font-medium">
                     {fieldLabels.issueDate}
                     <Input type="date" {...form.register("issue_date")} />
+                    <span className="text-xs font-normal text-muted-foreground">캘린더에 표시됨</span>
                   </label>
                   <label className="grid gap-2 text-sm font-medium">
                     {fieldLabels.dueDate}
                     <Input type="date" {...form.register("due_date")} />
+                    <span className="text-xs font-normal text-muted-foreground">알림/일정 카드에 반영됨</span>
                   </label>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">

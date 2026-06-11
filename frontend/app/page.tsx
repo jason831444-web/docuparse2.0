@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, Clock3, FileText, RefreshCcw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock3, FileText, RefreshCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import { DocumentCard } from "@/components/document-card";
 import { FolderCard } from "@/components/folder-card";
@@ -10,16 +10,18 @@ import { UploadDropzone } from "@/components/upload-dropzone";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { documentSummaryShort } from "@/lib/utils";
-import type { ActivitySummary, DocumentStats } from "@/types/document";
+import { documentDisplayTitle, documentSummaryShort, formatDate } from "@/lib/utils";
+import type { ActivitySummary, DocumentCalendarItem, DocumentStats } from "@/types/document";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DocumentStats | null>(null);
   const [activity, setActivity] = useState<ActivitySummary | null>(null);
+  const [calendar, setCalendar] = useState<DocumentCalendarItem[]>([]);
 
   useEffect(() => {
     api.stats().then(setStats).catch(() => setStats(null));
     api.activity().then(setActivity).catch(() => setActivity(null));
+    api.calendar(new URLSearchParams({ limit: "6" })).then(setCalendar).catch(() => setCalendar([]));
   }, []);
 
   const metrics = [
@@ -78,6 +80,24 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>다가오는 일정</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/calendar">캘린더 열기</Link></Button>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {calendar.slice(0, 5).map((item) => (
+              <Link key={item.id} href={item.action_url} className="flex min-w-0 items-center justify-between gap-3 overflow-hidden rounded-lg border bg-white p-4 shadow-sm shadow-slate-200/50 transition hover:border-primary/30 hover:shadow-md">
+                <div className="min-w-0">
+                  <p className="line-clamp-1 break-words font-medium leading-snug">{documentDisplayTitle({ document_number: item.document_number, title: item.document_title, original_filename: item.original_filename })}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{item.date_label} · {formatDate(item.date)} · {item.status}</p>
+                </div>
+                <CalendarDays className="size-5 shrink-0 text-primary" />
+              </Link>
+            ))}
+            {!calendar.length ? <p className="text-sm text-muted-foreground">등록된 문서 일정이 없습니다.</p> : null}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>검토 필요</CardTitle>
             <Button asChild variant="ghost" size="sm"><Link href="/review">검토 목록 열기</Link></Button>
           </CardHeader>
@@ -106,6 +126,28 @@ export default function DashboardPage() {
           <CardContent className="grid gap-4 md:grid-cols-2">
             {(stats?.category_overview ?? []).slice(0, 6).map((folder) => (
               <FolderCard key={folder.value} folder={folder} href={`/categories/${encodeURIComponent(folder.value)}`} />
+            ))}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="mt-8">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>OCR worker 안정성</CardTitle>
+            <Button asChild variant="ghost" size="sm"><Link href="/settings">상태 설정 보기</Link></Button>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-4">
+            {[
+              ["PaddleOCR 성공", stats?.ocr_metrics?.paddleocr_success ?? 0],
+              ["PaddleOCR retry", stats?.ocr_metrics?.paddleocr_retry ?? 0],
+              ["Tesseract fallback", stats?.ocr_metrics?.tesseract_fallback ?? 0],
+              ["평균 처리 ms", stats?.ocr_metrics?.average_processing_ms ?? 0],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-lg border bg-white p-4">
+                <p className="text-sm text-muted-foreground">{label}</p>
+                <p className="mt-1 text-2xl font-semibold">{value}</p>
+              </div>
             ))}
           </CardContent>
         </Card>
