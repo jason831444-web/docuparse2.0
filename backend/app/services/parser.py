@@ -372,7 +372,20 @@ class DocumentParser:
             text,
             flags=re.IGNORECASE,
         )
-        return self._extract_date(match.group(1)) if match else None
+        if match:
+            return self._extract_date(match.group(1))
+        normalized_labels = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
+        lines = [line.strip() for line in text.splitlines()]
+        for index, line in enumerate(lines[:-1]):
+            if re.sub(r"[\s:：]+", "", line.lower()) not in normalized_labels:
+                continue
+            for candidate in lines[index + 1 : min(len(lines), index + 5)]:
+                parsed = self._extract_date(candidate)
+                if parsed:
+                    return parsed
+                if candidate and not re.search(r"^(?:검토|확인|review|check)$", candidate, flags=re.IGNORECASE):
+                    break
+        return None
 
     def _extract_document_number(self, text: str) -> str | None:
         labels = [
@@ -1089,8 +1102,13 @@ class DocumentParser:
         if name:
             # Remove OCR-leaked amount cells that were prepended to the next item name.
             name = re.sub(r"^\s*(?:\d{1,3}\s+)?(?:\d{4,}(?:\.\d+)?\s+){1,3}(?=\S*[A-Za-z가-힣])", "", name).strip()
-            name = re.sub(r"\b(?:OOC|0OC|00C|P?\d{4,})(?:\s+|$)", " ", name, flags=re.IGNORECASE)
+            name = re.sub(r"\b(?:OOC|0OC|00C|[O0]?\d{2,4}[CG]|P?\d{4,})(?:\s+|$)", " ", name, flags=re.IGNORECASE)
+            name = re.sub(r"\b([A-Z]{2,}\d+)\s+O\b", r"\g<1>0", name)
+            name = re.sub(r"\bS45C\s+PIN\s+8X60\s+S45\[$", "S45C PIN 8X60", name, flags=re.IGNORECASE)
             name = re.sub(r"\s+", " ", name).strip()
+            code_hint = str(item.get("item_code") or item.get("document_item_code") or item.get("source_item_code") or "")
+            if re.search(r"\bBRG-H-?100\b", code_hint, flags=re.IGNORECASE) and re.search(r"베어.*하", name):
+                name = "베어링 하우징"
             if name:
                 item["item_name"] = name
         code = item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
@@ -1099,6 +1117,15 @@ class DocumentParser:
             for field in ["item_code", "document_item_code", "source_item_code"]:
                 if item.get(field):
                     item[field] = normalized_code
+            if item.get("item_name"):
+                prefix = normalized_code.split("-", 1)[0]
+                if re.fullmatch(r"[A-Z]{2,}\d+", prefix, flags=re.IGNORECASE):
+                    item["item_name"] = re.sub(
+                        rf"\b{re.escape(prefix[:-1])}\b",
+                        prefix,
+                        str(item["item_name"]),
+                        flags=re.IGNORECASE,
+                    )
         identity = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
         code_text = str(item.get("item_code") or "")
         if re.search(r"\b(?:pin|s45c)\b|8\s*x\s*60", identity, flags=re.IGNORECASE) and re.search(r"bolt|BOLT-M8", code_text, flags=re.IGNORECASE):

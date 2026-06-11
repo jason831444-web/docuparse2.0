@@ -1,4 +1,5 @@
 from pathlib import Path
+from decimal import Decimal
 from types import SimpleNamespace
 
 from app.models.document import Document, DocumentType
@@ -113,6 +114,36 @@ def test_malformed_amounts_create_review_issue_without_corrupting_numeric_fields
     assert parsed.line_items[0]["line_total"] == 4000
     assert all("미확인" not in str(parsed.line_items[0].get(field, "")) for field in ["item_code", "quantity", "tax_amount", "line_total"])
     assert any(issue["code"] == "invalid_line_amount" for issue in issues)
+    assert workflow.workflow_metadata["review_required"] is True
+
+
+def test_item_code_name_conflict_blocks_auto_ready():
+    document = Document(
+        original_filename="conflict_invoice.txt",
+        stored_file_path="/tmp/conflict_invoice.txt",
+        mime_type="text/plain",
+        document_type=DocumentType.invoice,
+        vendor_name="동진부품",
+        customer_name="오성테크",
+        document_number="INV-1",
+        extracted_amount=Decimal("132000"),
+        currency="KRW",
+        line_items=[
+            {
+                "item_name": "S45C PIN 8X60",
+                "internal_item_code": "P-PIN-S45C-08X60",
+                "quantity": 200,
+                "unit": "EA",
+                "unit_price": 600,
+                "line_total": 132000,
+                "validation_warnings": ["item_code_name_conflict"],
+            }
+        ],
+    )
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, "세금계산서")
+    issues = workflow.workflow_metadata["normalized_review_issues"]
+
+    assert any(issue["code"] == "item_code_name_conflict" for issue in issues)
     assert workflow.workflow_metadata["review_required"] is True
 
 

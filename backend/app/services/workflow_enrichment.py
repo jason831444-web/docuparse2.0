@@ -265,6 +265,8 @@ class DocumentWorkflowEnrichmentService:
                     reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 공급가액이 합계금액보다 큽니다.", "line_items.supply_amount", index - 1))
                 elif warning == "invalid_line_total":
                     reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 공급가액, 세액, 합계금액 계산이 맞지 않습니다.", "line_items.line_total", index - 1))
+                elif warning == "item_code_name_conflict":
+                    reasons.append(self._review_reason("item_code_name_conflict", f"{index}번째 품목명과 품목코드 매칭이 충돌합니다.", "line_items.internal_item_code", index - 1))
             internal_code = item.get("internal_item_code")
             if item.get("item_code") in (None, "", []):
                 severity = "info" if internal_code not in (None, "", []) else "warning"
@@ -422,6 +424,7 @@ class DocumentWorkflowEnrichmentService:
             "missing_price_or_total",
             "amount_mismatch",
             "invalid_line_amount",
+            "item_code_name_conflict",
             "internal_item_unmatched",
             "internal_item_ambiguous",
             "item_matching_skipped",

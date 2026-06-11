@@ -186,6 +186,9 @@ def test_real_ocr_usd_invoice_keeps_full_document_number_and_items():
     assert len(parsed.line_items) == 3
     assert _line_total_sum(parsed) == Decimal("508")
     row1, row2, row3 = parsed.line_items
+    assert "O50C" not in str(row1.get("item_name") or "")
+    assert "HGW20" in str(row1.get("item_name") or "")
+    assert "880G" not in str(row2.get("item_name") or "")
     assert row1.get("item_code") == "HGW20-1000"
     assert _amount(row1.get("quantity")) == Decimal("8")
     assert _amount(row1.get("unit_price")) == Decimal("45")
@@ -225,6 +228,7 @@ def test_real_ocr_noise_cases_preserve_item_candidates_without_header_or_amount_
             for item in parsed.line_items:
                 assert _amount(item.get("quantity")) != Decimal("7199")
         if prefix == "07":
+            assert parsed.due_date and parsed.due_date.isoformat() == "2026-08-18"
             assert len(parsed.line_items) == 3
             for item in parsed.line_items:
                 name = str(item.get("item_name") or "")
@@ -238,5 +242,7 @@ def test_real_ocr_noise_cases_preserve_item_candidates_without_header_or_amount_
         if prefix == "10":
             first_name = str(parsed.line_items[0].get("item_name") or "")
             assert not re.match(r"^\s*(?:\d{1,3}\s+)?\d{4,}\s+\d{4,}\s+", first_name)
+            assert first_name == "베어링 하우징"
             second = parsed.line_items[1]
+            assert str(second.get("item_name") or "") == "S45C PIN 8X60"
             assert second.get("item_code") != "BOLT-M8-20"
