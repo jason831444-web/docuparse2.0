@@ -118,6 +118,7 @@ class DocumentParser:
         subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "subtotal total", "subtotal", "supply amount", "supply total"])
         tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "vat total", "vat", "tax", "w세액"])
         amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+        line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
         currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
@@ -236,22 +237,63 @@ class DocumentParser:
             if self._looks_like_computed_or_note_amount(line):
                 continue
             match = re.search(
-                rf"(?:^|\s)(?:{label_pattern})\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*(?:원|KRW|USD)?",
+                rf"(?:^|\s)(?:{label_pattern})\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?[A-Za-z]?)\s*(?:원|KRW|USD)?",
                 line,
                 flags=re.IGNORECASE,
             )
             if match:
-                value = self._to_decimal(match.group(1))
+                value = self._amount_from_labeled_match(match.group(1), line)
                 if value is not None:
                     values.append(value)
                     continue
             line_key = re.sub(r"[\s:：]+", "", line.lower())
             if line_key in normalized_label_keys and index + 1 < len(lines):
-                value = self._to_decimal(lines[index + 1])
+                lookahead = " ".join(self._amount_label_lookahead(lines, index + 1))
+                value = self._amount_from_labeled_match(lookahead, f"{line} {lookahead}")
                 if value is not None:
                     values.append(value)
         values = [value for value in values if value is not None]
         return values[-1] if values else None
+
+    def _amount_label_lookahead(self, lines: list[str], start_index: int) -> list[str]:
+        collected: list[str] = []
+        for line in lines[start_index:start_index + 4]:
+            if not collected and self._looks_like_amount_label_line(line):
+                break
+            if collected and self._looks_like_amount_label_line(line):
+                break
+            collected.append(line)
+            if re.search(r"\d", line) and not re.fullmatch(r"(?:KRW|USD|₩|\$)", line.strip(), flags=re.IGNORECASE):
+                break
+        return collected
+
+    def _looks_like_amount_label_line(self, line: str) -> bool:
+        key = re.sub(r"[\s:：]+", "", line.lower())
+        return key in {
+            "공급가액", "공급가액합계", "공급액", "공급금액", "subtotal", "supplyamount", "supplytotal",
+            "세액", "부가세", "vat", "tax",
+            "총액", "총합계", "합계", "합계금액", "invoicetotal", "grandtotal", "totaldue", "totalamount", "amountdue", "total",
+        }
+
+    def _amount_from_labeled_match(self, value_text: str, context: str) -> Decimal | None:
+        candidates: list[Decimal] = []
+        for token in re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?[A-Za-z]?", value_text):
+            cleaned = re.sub(r"[A-Za-z]$", "", token)
+            value = self._to_decimal(cleaned)
+            if value is not None and re.search(r"[CcGgLl]$", token):
+                value *= Decimal("10")
+            elif value is None:
+                value = self._to_decimal(token)
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            return None
+        value = max(candidates)
+        if re.search(r"\bUSD\b|\$", context, flags=re.IGNORECASE) and "." not in str(value_text) and value >= Decimal("10000"):
+            cents = value / Decimal("100")
+            if cents == cents.quantize(Decimal("0.01")):
+                return cents
+        return value
 
     def _looks_like_computed_or_note_amount(self, line: str) -> bool:
         lowered = line.lower()
@@ -339,7 +381,7 @@ class DocumentParser:
         for index, line in enumerate(lines[:-1]):
             if re.sub(r"[\s:：#]+", "", line.lower()) not in normalized_labels:
                 continue
-            value = self._normalize_document_number(lines[index + 1])
+            value = self._normalize_document_number_candidate(lines, index + 1)
             if value:
                 return value
         label_pattern = "|".join(re.escape(label) for label in labels)
@@ -356,6 +398,28 @@ class DocumentParser:
         if re.match(r"^OT-\d{4}-", text, flags=re.IGNORECASE):
             text = f"QT{text[2:]}"
         return text[:80] or None
+
+    def _normalize_document_number_candidate(self, lines: list[str], start_index: int) -> str | None:
+        first = self._normalize_document_number(lines[start_index] if start_index < len(lines) else "")
+        if not first:
+            return None
+        parts = [first]
+        for offset in range(start_index + 1, min(len(lines), start_index + 4)):
+            candidate = re.sub(r"\s+", "", lines[offset]).strip(" -:：[](){}")
+            if not candidate:
+                continue
+            if self._looks_like_document_number_continuation(candidate):
+                parts.append(candidate)
+                continue
+            break
+        return self._normalize_document_number("-".join(parts))
+
+    def _looks_like_document_number_continuation(self, value: str) -> bool:
+        if re.fullmatch(r"\d{4}-\d{2,4}(?:-\d{2,5})?", value):
+            return True
+        if re.fullmatch(r"[A-Z]{1,4}-?\d{2,5}", value, flags=re.IGNORECASE):
+            return True
+        return False
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
@@ -589,14 +653,48 @@ class DocumentParser:
             quantity, unit = self._parse_quantity_and_unit(normalized["quantity"])
             normalized["quantity"] = quantity
             normalized["unit"] = normalized["unit"] or unit
+        if item.get("_quantity_inferred_without_cell"):
+            normalized["quantity"] = None
+            normalized["_quantity_suppressed"] = True
         for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
             normalized[field] = self._normalize_number(normalized[field])
-        if normalized["quantity"] is None and normalized["unit"]:
+        normalized = self._repair_line_item_arithmetic(normalized)
+        normalized = self._suppress_implausible_line_item_numbers(normalized)
+        if normalized.get("quantity") is None and normalized.get("unit") and not normalized.get("_quantity_suppressed"):
             normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
         warnings = self._line_item_amount_warnings(normalized)
         if warnings:
             normalized["validation_warnings"] = warnings
-        return {key: value for key, value in normalized.items() if value not in (None, "")}
+        return {key: value for key, value in normalized.items() if value not in (None, "") and not str(key).startswith("_")}
+
+    def _suppress_implausible_line_item_numbers(self, item: dict) -> dict:
+        quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
+        supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+        tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
+        total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+        if quantity is not None and quantity > 5000:
+            tax_ok = supply is not None and tax is not None and abs(tax - supply * Decimal("0.1")) <= max(Decimal("1"), abs(supply) * Decimal("0.02"))
+            total_ok = supply is not None and tax is not None and total is not None and abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.02"))
+            if not (tax_ok and total_ok):
+                item.pop("quantity", None)
+                item.pop("unit_price", None)
+                item["_quantity_suppressed"] = True
+        return item
+
+    def _repair_line_item_arithmetic(self, item: dict) -> dict:
+        quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
+        unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
+        supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+        if quantity is None or quantity <= 0 or supply is None or supply <= 0:
+            return item
+        if unit_price is not None and abs((quantity * unit_price) - supply) <= max(Decimal("1"), abs(supply) * Decimal("0.02")):
+            return item
+        if unit_price is not None and unit_price > supply:
+            return item
+        repaired = supply / quantity
+        if repaired > 0 and repaired == repaired.to_integral_value() and Decimal("10") <= repaired <= Decimal("1000000"):
+            item["unit_price"] = int(repaired)
+        return item
 
     def _line_item_amount_warnings(self, item: dict) -> list[str]:
         warnings: list[str] = []
@@ -612,6 +710,286 @@ class DocumentParser:
         if supply is not None and tax is not None and total is not None and abs((supply + tax) - total) > max(Decimal("1"), abs(total) * Decimal("0.02")):
             warnings.append("invalid_line_total")
         return warnings
+
+    def _repair_line_items_against_document_totals(
+        self,
+        line_items: list[dict],
+        amount: Decimal | None,
+        subtotal: Decimal | None,
+        tax: Decimal | None,
+        lines: list[str],
+    ) -> list[dict]:
+        if not line_items or amount is None:
+            return line_items
+        if len(line_items) == 1 and self._line_item_amount_warnings(line_items[0]):
+            return line_items
+        if any("|" in line for line in lines) and any(self._line_item_amount_warnings(item) for item in line_items):
+            return line_items
+        current_total = self._line_items_total(line_items)
+        if current_total is None or abs(current_total - amount) <= max(Decimal("1"), abs(amount) * Decimal("0.02")):
+            return line_items
+        repaired = [dict(item) for item in line_items]
+        triples = self._valid_amount_triples_from_lines(lines)
+        used: set[tuple[Decimal, Decimal, Decimal]] = set()
+        for item in repaired:
+            item_total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+            item_tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
+            for supply_value, tax_value, total_value in triples:
+                if (supply_value, tax_value, total_value) in used:
+                    continue
+                if item_total is not None and item_total == supply_value:
+                    item["supply_amount"] = self._number_value(supply_value)
+                    item["tax_amount"] = self._number_value(tax_value)
+                    item["line_total"] = self._number_value(total_value)
+                    used.add((supply_value, tax_value, total_value))
+                    break
+                if item_tax is not None and item_tax == tax_value:
+                    item["supply_amount"] = self._number_value(supply_value)
+                    item["tax_amount"] = self._number_value(tax_value)
+                    item["line_total"] = self._number_value(total_value)
+                    used.add((supply_value, tax_value, total_value))
+                    break
+        effective_subtotal = subtotal
+        effective_tax = tax
+        if amount is not None and (
+            effective_subtotal is None
+            or effective_tax is None
+            or effective_subtotal < amount * Decimal("0.2")
+            or effective_tax < amount * Decimal("0.02")
+        ):
+            inferred_subtotal = (amount / Decimal("1.1")).quantize(Decimal("1"))
+            inferred_tax = amount - inferred_subtotal
+            if inferred_subtotal > 0 and inferred_tax >= 0 and abs((inferred_subtotal + inferred_tax) - amount) <= max(Decimal("1"), amount * Decimal("0.02")):
+                effective_subtotal = inferred_subtotal
+                effective_tax = inferred_tax
+
+        if effective_subtotal is not None and effective_tax is not None:
+            good_supply = Decimal("0")
+            good_tax = Decimal("0")
+            good_total = Decimal("0")
+            bad_indexes: list[int] = []
+            for index, item in enumerate(repaired):
+                supply_value = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+                tax_value = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
+                total_value = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+                line_total_ok = (
+                    supply_value is not None
+                    and tax_value is not None
+                    and total_value is not None
+                    and abs((supply_value + tax_value) - total_value) <= max(Decimal("1"), abs(total_value) * Decimal("0.02"))
+                )
+                tax_ok = (
+                    supply_value is not None
+                    and tax_value is not None
+                    and abs(tax_value - supply_value * Decimal("0.1")) <= max(Decimal("1"), abs(supply_value) * Decimal("0.02"))
+                )
+                if line_total_ok and tax_ok and total_value > amount * Decimal("0.05"):
+                    good_supply += supply_value
+                    good_tax += tax_value
+                    good_total += total_value
+                else:
+                    bad_indexes.append(index)
+            if len(bad_indexes) == 1:
+                index = bad_indexes[0]
+                residual_supply = effective_subtotal - good_supply
+                residual_tax = effective_tax - good_tax
+                residual_total = amount - good_total
+                if residual_supply > 0 and residual_tax >= 0 and residual_total > 0 and abs((residual_supply + residual_tax) - residual_total) <= max(Decimal("1"), residual_total * Decimal("0.02")):
+                    item = repaired[index]
+                    item["supply_amount"] = self._number_value(residual_supply)
+                    item["tax_amount"] = self._number_value(residual_tax)
+                    item["line_total"] = self._number_value(residual_total)
+                    self._repair_quantity_price_from_ocr_context(item, residual_supply, lines)
+            elif len(bad_indexes) > 1:
+                remaining_supply = effective_subtotal - good_supply
+                remaining_tax = effective_tax - good_tax
+                remaining_total = amount - good_total
+                for order, index in enumerate(bad_indexes):
+                    item = repaired[index]
+                    if order == len(bad_indexes) - 1:
+                        supply_value = remaining_supply
+                    else:
+                        supply_value = self._best_supply_from_item_context(item, remaining_supply, lines)
+                    if supply_value is None or supply_value <= 0:
+                        continue
+                    tax_value = supply_value * Decimal("0.1")
+                    total_value = supply_value + tax_value
+                    if total_value > remaining_total + max(Decimal("1"), remaining_total * Decimal("0.02")):
+                        continue
+                    item["supply_amount"] = self._number_value(supply_value)
+                    item["tax_amount"] = self._number_value(tax_value)
+                    item["line_total"] = self._number_value(total_value)
+                    self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
+                    remaining_supply -= supply_value
+                    remaining_tax -= tax_value
+                    remaining_total -= total_value
+        for item in repaired:
+            supply_value = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+            quantity_value = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
+            unit_price_value = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
+            if supply_value is None or supply_value <= 0:
+                continue
+            if (
+                quantity_value is None
+                or unit_price_value is None
+                or quantity_value <= 0
+                or unit_price_value <= 0
+                or abs((quantity_value * unit_price_value) - supply_value) > max(Decimal("1"), supply_value * Decimal("0.02"))
+            ):
+                self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
+        return [self._normalize_line_item(item) for item in repaired]
+
+    def _valid_amount_triples_from_lines(self, lines: list[str]) -> list[tuple[Decimal, Decimal, Decimal]]:
+        values: list[Decimal] = []
+        for line in lines:
+            for token in re.findall(r"\d[\d,]*(?:\.\d+)?[A-Za-z]?", line):
+                value = self._amount_from_labeled_match(token, line)
+                if value is not None and value > 0:
+                    values.append(value)
+        triples: list[tuple[Decimal, Decimal, Decimal]] = []
+        for i, supply_value in enumerate(values):
+            for j in range(i + 1, min(i + 5, len(values))):
+                tax_value = values[j]
+                for k in range(j + 1, min(j + 4, len(values))):
+                    total_value = values[k]
+                    if abs(tax_value - supply_value * Decimal("0.1")) <= max(Decimal("1"), supply_value * Decimal("0.02")) and abs(total_value - (supply_value + tax_value)) <= max(Decimal("1"), total_value * Decimal("0.02")):
+                        triple = (supply_value, tax_value, total_value)
+                        if triple not in triples:
+                            triples.append(triple)
+        return triples
+
+    def _repair_quantity_price_from_ocr_context(self, item: dict, supply: Decimal, lines: list[str]) -> None:
+        name = str(item.get("item_name") or "").split()[0]
+        if not name:
+            return
+        normalized_name = re.sub(r"[^0-9a-z가-힣]+", "", name.lower())
+        for index, line in enumerate(lines):
+            normalized_line = re.sub(r"[^0-9a-z가-힣]+", "", line.lower())
+            if name.lower() not in line.lower() and (not normalized_name or normalized_name not in normalized_line):
+                continue
+            window = " ".join(lines[index:index + 8])
+            raw_tokens = re.findall(r"(?:[BO])?\d[\d,]*(?:\.\d+)?[A-Za-z가-힣]?", window, flags=re.IGNORECASE)
+            numbers: list[tuple[int, Decimal, str]] = []
+            for position, token in enumerate(raw_tokens):
+                number = self._amount_from_labeled_match(self._normalize_ocr_numeric_token(token), window)
+                if number is not None and number > 0:
+                    numbers.append((position, number, token))
+            scored: list[tuple[int, Decimal, Decimal]] = []
+            identity = " ".join(str(item.get(field) or "") for field in ["item_code", "item_name", "specification"])
+            had_quantity = item.get("quantity") not in (None, "")
+            for position, number, token in numbers:
+                if number <= 0:
+                    continue
+                code_text = str(item.get("item_code") or item.get("document_item_code") or "")
+                if code_text and token.lower() in code_text.lower():
+                    continue
+                token_has_ocr_amount_suffix = bool(re.search(r"[CcGgLl]$", token))
+                token_has_spec_suffix = bool(re.search(r"[A-Za-z가-힣]$", token)) and not token_has_ocr_amount_suffix
+                price = supply / number
+                if (
+                    not token_has_spec_suffix
+                    and price > 0
+                    and price == price.to_integral_value()
+                    and Decimal("10") <= price <= Decimal("1000000")
+                ):
+                    score = 0
+                    if number == number.to_integral_value():
+                        score += 5
+                    if number <= Decimal("5000"):
+                        score += 3
+                    if re.search(r"(connector|pcb|cable|harness|커넥터|하네스)", identity, flags=re.IGNORECASE) and number >= 300 and price <= 5000:
+                        score += 8
+                    if re.search(r"(bolt|washer|볼트|와셔)", identity, flags=re.IGNORECASE) and number >= 100 and price <= 1000:
+                        score += 8
+                    if re.search(r"(plate|plt|bracket|철판|판|브라켓|플레이트)", identity, flags=re.IGNORECASE) and number <= 100 and price >= 1000:
+                        score += 8
+                    if str(number) in str(item.get("specification") or "") and len(numbers) > 1:
+                        score -= 6
+                    if number > Decimal("3000"):
+                        score -= 6
+                    if price < Decimal("100") and not re.search(r"(bolt|washer|볼트|와셔)", identity, flags=re.IGNORECASE):
+                        score -= 8
+                    score -= min(position, 6)
+                    scored.append((score, number, price))
+                if token_has_spec_suffix and not token_has_ocr_amount_suffix:
+                    continue
+                scales = [Decimal("1")] if token_has_ocr_amount_suffix else [Decimal("1"), Decimal("10"), Decimal("100")]
+                for scale in scales:
+                    if not had_quantity and not token_has_ocr_amount_suffix:
+                        continue
+                    if str(number) in str(item.get("specification") or "") and len(numbers) > 1 and not token_has_ocr_amount_suffix:
+                        continue
+                    price_candidate = number * scale
+                    if not (Decimal("10") <= price_candidate <= Decimal("1000000")):
+                        continue
+                    quantity = supply / price_candidate
+                    if quantity <= 0 or quantity != quantity.to_integral_value() or quantity > Decimal("5000"):
+                        continue
+                    score = 6
+                    if scale != 1:
+                        score += 5
+                    if token_has_ocr_amount_suffix:
+                        score += 10
+                    if re.search(r"(connector|pcb|cable|harness|커넥터|하네스)", identity, flags=re.IGNORECASE) and quantity >= 100 and price_candidate <= 5000:
+                        score += 8
+                    if re.search(r"(plate|plt|bracket|철판|판|브라켓|플레이트)", identity, flags=re.IGNORECASE) and quantity <= 100 and price_candidate >= 1000:
+                        score += 8
+                    if quantity > Decimal("3000"):
+                        score -= 6
+                    score -= min(position, 6)
+                    scored.append((score, quantity, price_candidate))
+            if scored:
+                scored.sort(key=lambda entry: (-entry[0], -entry[1]))
+                _, quantity, price = scored[0]
+                item["quantity"] = self._number_value(quantity)
+                item["unit_price"] = self._number_value(price)
+            return
+
+    def _best_supply_from_item_context(self, item: dict, remaining_supply: Decimal, lines: list[str]) -> Decimal | None:
+        name = str(item.get("item_name") or "").split()[0]
+        if not name:
+            return None
+        windows: list[tuple[int, str]] = []
+        identity_text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification", "item_code"])
+        identity_terms = [
+            term.lower()
+            for term in re.findall(r"[A-Za-z가-힣0-9]+", identity_text)
+            if len(term) >= 2 or re.fullmatch(r"[가-힣]", term)
+        ]
+        normalized_identity = re.sub(r"[^0-9a-z가-힣]+", "", identity_text.lower())
+        normalized_name = re.sub(r"[^0-9a-z가-힣]+", "", name.lower())
+        for index, line in enumerate(lines):
+            normalized_line = re.sub(r"[^0-9a-z가-힣]+", "", line.lower())
+            if name.lower() not in line.lower() and (not normalized_name or normalized_name not in normalized_line):
+                continue
+            window = " ".join(lines[index:index + 8])
+            normalized_window = re.sub(r"[^0-9a-z가-힣]+", "", window.lower())
+            score = sum(1 for term in identity_terms if term in window.lower() or term in normalized_window)
+            score += 2 * sum(1 for term in identity_terms if term in line.lower() or term in normalized_line)
+            if normalized_identity and normalized_window:
+                score += int(fuzz.partial_ratio(normalized_identity, normalized_window) // 10)
+            windows.append((score, window))
+        if not windows:
+            return None
+        windows.sort(key=lambda entry: -entry[0])
+        candidates: list[Decimal] = []
+        for _, window in windows[:1]:
+            for token in re.findall(r"\d[\d,]*(?:\.\d+)?[A-Za-z]?", window):
+                value = self._amount_from_labeled_match(token, window)
+                if value is not None and Decimal("1000") <= value <= remaining_supply:
+                    candidates.append(value)
+        if not candidates:
+            return None
+        candidates = sorted(set(candidates), reverse=True)
+        return candidates[0]
+
+    def _normalize_ocr_numeric_token(self, token: str) -> str:
+        value = str(token or "")
+        if re.match(r"^[Bb]\d", value):
+            value = f"8{value[1:]}"
+        elif re.match(r"^[Oo]\d", value):
+            value = f"0{value[1:]}"
+        return value
 
     def _clean_code_value(self, value: object) -> str | None:
         cleaned = self._clean_value(value)
