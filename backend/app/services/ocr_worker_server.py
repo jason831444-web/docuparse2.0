@@ -22,6 +22,7 @@ _provider: PaddleOCRProvider | None = None
 _provider_lock = threading.Lock()
 _inference_lock = threading.Lock()
 _last_error: str | None = None
+_requests_since_provider_reset = 0
 
 _RESETTABLE_PADDLE_ERRORS = (
     "Tensor holds no memory",
@@ -49,9 +50,29 @@ def _get_provider() -> PaddleOCRProvider:
 
 
 def _reset_provider() -> None:
-    global _provider
+    global _provider, _requests_since_provider_reset
     with _provider_lock:
         _provider = None
+        _requests_since_provider_reset = 0
+
+
+def _reset_after_requests_limit() -> int:
+    try:
+        return max(0, int(os.getenv("OCR_WORKER_RESET_AFTER_REQUESTS", "20")))
+    except ValueError:
+        return 20
+
+
+def _reset_provider_if_request_limit_reached() -> bool:
+    limit = _reset_after_requests_limit()
+    if limit <= 0 or _provider is None or _requests_since_provider_reset < limit:
+        return False
+    logger.info(
+        "OCR worker resetting PaddleOCR provider before request after %s successful requests",
+        _requests_since_provider_reset,
+    )
+    _reset_provider()
+    return True
 
 
 def _is_resettable_paddle_error(exc: Exception) -> bool:
@@ -85,12 +106,14 @@ def health() -> dict[str, Any]:
             "PADDLE_DISABLE_SIGNAL_HANDLER": os.getenv("PADDLE_DISABLE_SIGNAL_HANDLER"),
         },
         "last_error": _last_error,
+        "reset_after_requests": _reset_after_requests_limit(),
+        "requests_since_provider_reset": _requests_since_provider_reset,
     }
 
 
 @app.post("/ocr")
 def ocr(payload: OCRRequest):
-    global _last_error
+    global _last_error, _requests_since_provider_reset
     started = time.monotonic()
     image_path = Path(payload.image_path)
     if not image_path.exists():
@@ -98,8 +121,12 @@ def ocr(payload: OCRRequest):
         return JSONResponse(status_code=404, content={"ok": False, "error": _last_error})
     retry_used = False
     provider_reset_used = False
+    provider_reset_reason: str | None = None
     try:
         with _inference_lock:
+            if _reset_provider_if_request_limit_reached():
+                provider_reset_used = True
+                provider_reset_reason = "request_limit"
             try:
                 provider = _get_provider()
                 text, confidence, table_blocks = _run_provider_ocr(provider, image_path)
@@ -108,6 +135,7 @@ def ocr(payload: OCRRequest):
                     raise
                 retry_used = True
                 provider_reset_used = True
+                provider_reset_reason = "runtime_error"
                 logger.warning(
                     "OCR worker resetting PaddleOCR provider after runtime error for %s: %s",
                     image_path,
@@ -116,14 +144,17 @@ def ocr(payload: OCRRequest):
                 _reset_provider()
                 provider = _get_provider()
                 text, confidence, table_blocks = _run_provider_ocr(provider, image_path)
+            _requests_since_provider_reset += 1
         _last_error = None
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
-            "OCR worker request succeeded image_path=%s elapsed_ms=%s retry_used=%s provider_reset_used=%s text_length=%s confidence=%.4f",
+            "OCR worker request succeeded image_path=%s elapsed_ms=%s retry_used=%s provider_reset_used=%s provider_reset_reason=%s requests_since_reset=%s text_length=%s confidence=%.4f",
             image_path,
             elapsed_ms,
             retry_used,
             provider_reset_used,
+            provider_reset_reason,
+            _requests_since_provider_reset,
             len(text or ""),
             confidence,
         )
@@ -137,6 +168,8 @@ def ocr(payload: OCRRequest):
             "elapsed_ms": elapsed_ms,
             "retry_used": retry_used,
             "provider_reset_used": provider_reset_used,
+            "provider_reset_reason": provider_reset_reason,
+            "requests_since_provider_reset": _requests_since_provider_reset,
             "worker_attempt_count": 2 if retry_used else 1,
         }
     except Exception as exc:
@@ -156,6 +189,7 @@ def ocr(payload: OCRRequest):
                 "error": _last_error[-800:],
                 "retry_used": retry_used,
                 "provider_reset_used": provider_reset_used,
+                "provider_reset_reason": provider_reset_reason,
                 "elapsed_ms": elapsed_ms,
             },
         )

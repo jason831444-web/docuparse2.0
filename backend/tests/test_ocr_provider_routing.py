@@ -273,3 +273,43 @@ def test_ocr_worker_returns_clear_retry_failure_body(monkeypatch, tmp_path):
     assert payload["retry_used"] is True
     assert payload["provider_reset_used"] is True
     assert calls["reset"] == 1
+
+
+def test_ocr_worker_proactively_resets_provider_after_request_limit(monkeypatch, tmp_path):
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"fake")
+    calls = {"reset": 0}
+
+    class FakeProvider:
+        def _load(self):
+            return self
+
+        def _run_ocr(self, ocr, path: Path):
+            return [[[[0, 0], [1, 0], [1, 1], [0, 1]], ("PO-123 TEST", 0.97)]]
+
+        def _normalize_output(self, output):
+            return "PO-123 TEST", 0.97, []
+
+    def fake_reset_provider():
+        calls["reset"] += 1
+        monkeypatch.setattr(ocr_worker_server, "_provider", None)
+        monkeypatch.setattr(ocr_worker_server, "_requests_since_provider_reset", 0)
+
+    monkeypatch.setenv("OCR_WORKER_RESET_AFTER_REQUESTS", "1")
+    monkeypatch.setattr(ocr_worker_server, "_provider", object())
+    monkeypatch.setattr(ocr_worker_server, "_requests_since_provider_reset", 1)
+    monkeypatch.setattr(ocr_worker_server, "_get_provider", lambda: FakeProvider())
+    monkeypatch.setattr(ocr_worker_server, "_reset_provider", fake_reset_provider)
+    monkeypatch.setattr(ocr_worker_server, "_last_error", None)
+
+    client = TestClient(ocr_worker_server.app)
+    response = client.post("/ocr", json={"image_path": str(image_path)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["retry_used"] is False
+    assert payload["provider_reset_used"] is True
+    assert payload["provider_reset_reason"] == "request_limit"
+    assert payload["requests_since_provider_reset"] == 1
+    assert calls["reset"] == 1

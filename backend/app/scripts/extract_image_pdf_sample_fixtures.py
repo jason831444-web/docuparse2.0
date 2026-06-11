@@ -85,7 +85,7 @@ def extract_fixtures(args: argparse.Namespace) -> list[dict[str, Any]]:
             summary = _summary(prefix, pdf_path.name, payload, ok=True)
             summaries.append(summary)
             if getattr(args, "progress", False):
-                print("[fixture] done {prefix} {filename}: type={document_type} doc={document_number} currency={currency} total={extracted_amount} items={line_items_count} item_sum={line_items_total} provider={ocr_provider_succeeded} fallback={ocr_fallback_used}".format(**summary), flush=True)
+                print("[fixture] done {prefix} {filename}: id={document_id} type={document_type} profile={profile} doc={document_number} currency={currency} total={extracted_amount} items={line_items_count} item_sum={line_items_total} provider={ocr_provider_succeeded} fallback={ocr_fallback_used}".format(**summary), flush=True)
         except Exception as exc:
             payload = {
                 "ocr_text": "",
@@ -275,12 +275,24 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
     line_items_total = _line_items_total(line_items)
     workflow_metadata = parsed.get("workflow_metadata") or {}
     review_issues = workflow_metadata.get("normalized_review_issues") or parsed.get("normalized_review_issues") or []
+    category_interpretation = parsed.get("category_interpretation") or {}
+    profile = (
+        category_interpretation.get("profile")
+        or workflow_metadata.get("content_profile")
+        or workflow_metadata.get("workflow_mode")
+        or parsed.get("document_type")
+    )
     return {
         "prefix": prefix,
         "filename": filename,
         "ok": ok,
         "error": error,
+        "document_id": metadata.get("api_document_id"),
+        "processing_status": parsed.get("processing_status"),
+        "review_required": parsed.get("review_required"),
         "document_type": _value(parsed.get("document_type")),
+        "ai_document_type": parsed.get("ai_document_type"),
+        "profile": _value(profile),
         "document_number": parsed.get("document_number"),
         "vendor_name": parsed.get("vendor_name"),
         "customer_name": parsed.get("customer_name"),
@@ -288,6 +300,7 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
         "extracted_amount": parsed.get("extracted_amount"),
         "line_items_count": len(line_items),
         "line_items_total": line_items_total,
+        "line_items": [_line_item_summary(item) for item in line_items],
         "review_reasons": [issue.get("code") or issue.get("message") for issue in review_issues if isinstance(issue, dict)],
         "ocr_provider_succeeded": metadata.get("ocr_provider_succeeded"),
         "ocr_fallback_used": metadata.get("ocr_fallback_used"),
@@ -309,6 +322,30 @@ def _line_items_total(line_items: list[dict[str, Any]]) -> float | int | None:
     if not found:
         return None
     return int(total) if total == total.to_integral_value() else float(total)
+
+
+def _line_item_summary(item: dict[str, Any]) -> dict[str, Any]:
+    candidates = item.get("item_master_candidates") or []
+    candidate_codes = [
+        candidate.get("internal_item_code")
+        for candidate in candidates[:3]
+        if isinstance(candidate, dict) and candidate.get("internal_item_code")
+    ]
+    return {
+        "item_name": item.get("item_name"),
+        "item_code": item.get("item_code"),
+        "document_item_code": item.get("document_item_code"),
+        "internal_item_code": item.get("internal_item_code"),
+        "candidate_internal_item_codes": candidate_codes,
+        "quantity": item.get("quantity"),
+        "unit": item.get("unit"),
+        "unit_price": item.get("unit_price"),
+        "supply_amount": item.get("supply_amount"),
+        "tax_amount": item.get("tax_amount"),
+        "line_total": item.get("line_total"),
+        "matching_status": item.get("item_master_match_status") or item.get("matching_status"),
+        "validation_warnings": item.get("validation_warnings") or [],
+    }
 
 
 def _write_text(path: Path, value: str) -> None:

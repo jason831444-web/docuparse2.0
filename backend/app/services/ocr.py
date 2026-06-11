@@ -304,6 +304,8 @@ class OCRWorkerProvider:
             for key in (
                 "retry_used",
                 "provider_reset_used",
+                "provider_reset_reason",
+                "requests_since_provider_reset",
                 "worker_attempt_count",
             )
             if key in data

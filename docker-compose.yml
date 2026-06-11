@@ -92,6 +92,7 @@ services:
       PADDLEOCR_DEVICE: ${PADDLEOCR_DEVICE:-cpu}
       PADDLEOCR_LANG: ${PADDLEOCR_LANG:-korean}
       PADDLEOCR_OCR_VERSION: ${PADDLEOCR_OCR_VERSION:-PP-OCRv4}
+      OCR_WORKER_RESET_AFTER_REQUESTS: ${OCR_WORKER_RESET_AFTER_REQUESTS:-2}
       FLAGS_use_onednn: "0"
       FLAGS_use_mkldnn: "0"
       FLAGS_enable_pir_api: "0"
