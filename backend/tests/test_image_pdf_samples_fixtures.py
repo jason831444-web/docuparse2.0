@@ -183,7 +183,17 @@ def test_real_ocr_usd_invoice_keeps_full_document_number_and_items():
     assert parsed.document_number == "INV-US-2026-0806-019"
     assert parsed.currency == "USD"
     assert _amount(parsed.extracted_amount) == Decimal("508")
-    assert len(parsed.line_items) >= 3
+    assert len(parsed.line_items) == 3
+    assert _line_total_sum(parsed) <= Decimal("508")
+    keys = {
+        (
+            str(item.get("item_code") or item.get("document_item_code") or ""),
+            str(item.get("item_name") or ""),
+            str(item.get("specification") or ""),
+        )
+        for item in parsed.line_items
+    }
+    assert len(keys) == len(parsed.line_items)
 
 
 def test_real_ocr_noise_cases_preserve_item_candidates_without_header_or_amount_prefixes():

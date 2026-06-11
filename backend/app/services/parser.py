@@ -119,7 +119,9 @@ class DocumentParser:
         tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "vat total", "vat", "tax", "w세액"])
         amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
         line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
+        line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
         currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
+        line_items = self._suppress_untrusted_foreign_amounts(line_items, amount, currency)
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
@@ -300,7 +302,7 @@ class DocumentParser:
         return bool(re.search(r"(실제\s*품목\s*합계|품목\s*합계는|line\s*item\s*(?:sum|total)|computed)", lowered, flags=re.IGNORECASE))
 
     def _extract_currency(self, text: str) -> str | None:
-        if re.search(r"\bUSD\b|\$", text, flags=re.IGNORECASE):
+        if re.search(r"\bUSD\b|US\$|\$\s*\d|\d[\d,]*(?:\.\d+)?\s*(?:USD|US\$)", text, flags=re.IGNORECASE):
             return "USD"
         if re.search(r"\bKRW\b|₩|원", text, flags=re.IGNORECASE):
             return "KRW"
@@ -1006,9 +1008,9 @@ class DocumentParser:
         seen: set[tuple] = set()
         for item in items:
             key = (
-                item.get("item_name"),
-                item.get("item_code"),
-                item.get("specification"),
+                self._normalized_item_key(item.get("item_name")),
+                self._normalized_item_key(item.get("item_code")),
+                self._normalized_item_key(item.get("specification")),
                 item.get("quantity"),
                 item.get("line_total"),
             )
@@ -1017,6 +1019,63 @@ class DocumentParser:
             seen.add(key)
             deduped.append(item)
         return deduped
+
+    def _collapse_duplicate_line_item_sets(self, items: list[dict], document_total: Decimal | None) -> list[dict]:
+        if not items:
+            return items
+        collapsed = self._dedupe_line_items(items)
+        if document_total is None or document_total <= 0:
+            return collapsed
+        line_sum = self._line_items_total(collapsed)
+        if line_sum is None or line_sum <= 0:
+            return collapsed
+        ratio = line_sum / document_total
+        nearest = ratio.to_integral_value()
+        if nearest < 2 or abs(ratio - nearest) > Decimal("0.03"):
+            return collapsed
+        grouped: dict[tuple[str, str, str, str], dict] = {}
+        for item in collapsed:
+            key = (
+                self._normalized_item_key(item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")),
+                self._normalized_item_key(item.get("item_name")),
+                self._normalized_item_key(item.get("specification")),
+                str(item.get("line_total") or item.get("supply_amount") or ""),
+            )
+            existing = grouped.get(key)
+            if existing is None or self._line_item_quality_score(item) > self._line_item_quality_score(existing):
+                grouped[key] = item
+        reduced = list(grouped.values())
+        reduced_sum = self._line_items_total(reduced)
+        if reduced_sum is not None and reduced_sum < line_sum:
+            return reduced
+        return collapsed
+
+    def _suppress_untrusted_foreign_amounts(self, items: list[dict], document_total: Decimal | None, currency: str | None) -> list[dict]:
+        if currency != "USD" or document_total is None or document_total <= 0 or not items:
+            return items
+        line_sum = self._line_items_total(items)
+        if line_sum is None or line_sum <= document_total * Decimal("1.5"):
+            return items
+        cleaned: list[dict] = []
+        for item in items:
+            next_item = dict(item)
+            for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
+                next_item.pop(field, None)
+            next_item.setdefault("validation_warnings", [])
+            if "untrusted_ocr_amount" not in next_item["validation_warnings"]:
+                next_item["validation_warnings"].append("untrusted_ocr_amount")
+            cleaned.append(next_item)
+        return cleaned
+
+    def _line_item_quality_score(self, item: dict) -> int:
+        score = 0
+        for field in ["item_name", "item_code", "document_item_code", "source_item_code", "specification", "quantity", "unit_price", "supply_amount", "tax_amount", "line_total"]:
+            if item.get(field) not in (None, ""):
+                score += 1
+        return score
+
+    def _normalized_item_key(self, value: object) -> str:
+        return re.sub(r"[^0-9a-z가-힣]+", "", str(value or "").lower())
 
     def _looks_like_item_line(self, line: str) -> bool:
         lowered = line.lower()

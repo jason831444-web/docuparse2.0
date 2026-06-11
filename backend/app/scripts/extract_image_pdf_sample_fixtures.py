@@ -53,12 +53,15 @@ FAILURE_NOTES: dict[str, str] = {
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract real OCR fixtures for DocuParse image-based PDF samples.")
     parser.add_argument("--sample-dir", type=Path, default=DEFAULT_SAMPLE_DIR)
+    parser.add_argument("--samples-dir", type=Path, dest="sample_dir")
     parser.add_argument("--fixture-dir", type=Path, default=DEFAULT_FIXTURE_DIR)
     parser.add_argument("--mode", choices=["api", "worker"], default=os.getenv("DOCUPARSE_FIXTURE_MODE", "api"))
     parser.add_argument("--api-base", default=DEFAULT_BACKEND_API_BASE)
     parser.add_argument("--ocr-worker-url", default=DEFAULT_OCR_WORKER_URL)
     parser.add_argument("--render-dir", type=Path, default=Path(os.getenv("DOCUPARSE_FIXTURE_RENDER_DIR", "/app/uploads/fixture_rendered_pages")))
     parser.add_argument("--cooldown-seconds", type=float, default=float(os.getenv("DOCUPARSE_FIXTURE_COOLDOWN_SECONDS", "1.0")))
+    parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("DOCUPARSE_FIXTURE_TIMEOUT_SECONDS", "300")))
+    parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     summaries = extract_fixtures(args)
     print(json.dumps(summaries, ensure_ascii=False, indent=2))
@@ -71,13 +74,18 @@ def extract_fixtures(args: argparse.Namespace) -> list[dict[str, Any]]:
         prefix = pdf_path.name.split("_", 1)[0]
         started = time.monotonic()
         try:
+            if getattr(args, "progress", False):
+                print(f"[fixture] start {prefix} {pdf_path.name}", flush=True)
             if args.mode == "api":
-                payload = _process_with_backend_api(pdf_path, args.api_base)
+                payload = _process_with_backend_api(pdf_path, args.api_base, timeout_seconds=getattr(args, "timeout_seconds", 300.0))
             else:
                 payload = _process_with_worker_api(pdf_path, args.ocr_worker_url, args.render_dir)
             payload["processing_time_ms"] = int((time.monotonic() - started) * 1000)
             _write_fixture_set(args.fixture_dir, prefix, pdf_path.name, payload)
-            summaries.append(_summary(prefix, pdf_path.name, payload, ok=True))
+            summary = _summary(prefix, pdf_path.name, payload, ok=True)
+            summaries.append(summary)
+            if getattr(args, "progress", False):
+                print("[fixture] done {prefix} {filename}: type={document_type} doc={document_number} currency={currency} total={extracted_amount} items={line_items_count} item_sum={line_items_total} provider={ocr_provider_succeeded} fallback={ocr_fallback_used}".format(**summary), flush=True)
         except Exception as exc:
             payload = {
                 "ocr_text": "",
@@ -87,15 +95,18 @@ def extract_fixtures(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "processing_time_ms": int((time.monotonic() - started) * 1000),
             }
             _write_fixture_set(args.fixture_dir, prefix, pdf_path.name, payload, failure=str(exc))
-            summaries.append(_summary(prefix, pdf_path.name, payload, ok=False, error=str(exc)))
+            summary = _summary(prefix, pdf_path.name, payload, ok=False, error=str(exc))
+            summaries.append(summary)
+            if getattr(args, "progress", False):
+                print(f"[fixture] failed {prefix} {pdf_path.name}: {exc}", flush=True)
         time.sleep(max(0.0, args.cooldown_seconds))
     return summaries
 
 
-def _process_with_backend_api(pdf_path: Path, api_base: str) -> dict[str, Any]:
+def _process_with_backend_api(pdf_path: Path, api_base: str, *, timeout_seconds: float = 300.0) -> dict[str, Any]:
     document = _upload_document(pdf_path, api_base)
     document_id = document["id"]
-    document = _poll_document(document_id, api_base)
+    document = _poll_document(document_id, api_base, timeout_seconds=timeout_seconds)
     raw_text = document.get("raw_text") or ""
     metadata = document.get("ingestion_metadata") or {}
     raw_blocks = metadata.get("raw_extracted_blocks") or metadata.get("raw_blocks") or []
@@ -260,6 +271,10 @@ def _write_fixture_set(fixture_dir: Path, prefix: str, filename: str, payload: d
 def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, error: str | None = None) -> dict[str, Any]:
     parsed = payload.get("current_parsed") or {}
     metadata = payload.get("provider_metadata") or {}
+    line_items = parsed.get("line_items") or []
+    line_items_total = _line_items_total(line_items)
+    workflow_metadata = parsed.get("workflow_metadata") or {}
+    review_issues = workflow_metadata.get("normalized_review_issues") or parsed.get("normalized_review_issues") or []
     return {
         "prefix": prefix,
         "filename": filename,
@@ -271,11 +286,29 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
         "customer_name": parsed.get("customer_name"),
         "currency": parsed.get("currency"),
         "extracted_amount": parsed.get("extracted_amount"),
-        "line_items_count": len(parsed.get("line_items") or []),
+        "line_items_count": len(line_items),
+        "line_items_total": line_items_total,
+        "review_reasons": [issue.get("code") or issue.get("message") for issue in review_issues if isinstance(issue, dict)],
         "ocr_provider_succeeded": metadata.get("ocr_provider_succeeded"),
         "ocr_fallback_used": metadata.get("ocr_fallback_used"),
         "processing_time_ms": payload.get("processing_time_ms"),
     }
+
+
+def _line_items_total(line_items: list[dict[str, Any]]) -> float | int | None:
+    total = Decimal("0")
+    found = False
+    for item in line_items:
+        value = item.get("line_total") or item.get("total_amount") or item.get("total")
+        try:
+            if value not in (None, ""):
+                total += Decimal(str(value))
+                found = True
+        except Exception:
+            continue
+    if not found:
+        return None
+    return int(total) if total == total.to_integral_value() else float(total)
 
 
 def _write_text(path: Path, value: str) -> None:
