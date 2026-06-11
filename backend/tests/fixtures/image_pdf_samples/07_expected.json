@@ -1,0 +1,10 @@
+{
+  "currency": "KRW",
+  "customer_name": "제일기계",
+  "document_number": "PO-2026-0807-777",
+  "document_type": "purchase_order",
+  "issue_date": "2026-08-07",
+  "line_item_count_min": 3,
+  "status_expectation": "needs_review_allowed_for_malformed_amount",
+  "vendor_name": "신우금속"
+}

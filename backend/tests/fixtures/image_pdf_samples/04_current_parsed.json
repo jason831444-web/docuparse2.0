@@ -1,0 +1,62 @@
+{
+  "business_fields": {
+    "delivery_date": "2026-08-05",
+    "receiver_name": "박성호",
+    "receiving_location": "오성테크2공장"
+  },
+  "category": "delivery_note",
+  "currency": null,
+  "customer_name": "오성테크",
+  "document_number": "DN-2026-0804-055",
+  "document_type": "delivery_note",
+  "due_date": "2026-08-05",
+  "extracted_amount": null,
+  "extracted_date": "2026-08-04",
+  "issue_date": "2026-08-04",
+  "line_items": [
+    {
+      "document_item_code": "BRG-H-100",
+      "item_code": "BRG-H-100",
+      "item_name": "베어링 하우징",
+      "quantity": 25,
+      "source_item_code": "BRG-H-100",
+      "specification": "100mm",
+      "unit": "EA"
+    },
+    {
+      "document_item_code": "PIN-S45C-08",
+      "item_code": "PIN-S45C-08",
+      "item_name": "S45C PIN 8X60",
+      "quantity": 500,
+      "source_item_code": "PIN-S45C-08",
+      "specification": "8x60",
+      "unit": "EA"
+    },
+    {
+      "document_item_code": "BOLT-M8-20",
+      "item_code": "BOLT-M8-20",
+      "item_name": "육각볼트 M8x20",
+      "quantity": 1000,
+      "source_item_code": "BOLT-M8-20",
+      "specification": "M8x20",
+      "unit": "EA"
+    },
+    {
+      "document_item_code": "WASH-SUS-08",
+      "item_code": "WASH-SUS-08",
+      "item_name": "SUS WASHER M8",
+      "quantity": 1000,
+      "source_item_code": "WASH-SUS-08",
+      "specification": "M8",
+      "unit": "EA"
+    }
+  ],
+  "merchant_name": "대영부품",
+  "subtotal": null,
+  "tags": [
+    "delivery_note"
+  ],
+  "tax": null,
+  "title": "DN-2026-0804-055",
+  "vendor_name": "대영부품"
+}

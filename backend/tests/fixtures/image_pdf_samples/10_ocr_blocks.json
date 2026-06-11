@@ -1,0 +1,6 @@
+[
+  {
+    "content": "Page 1\n세금계산서\nPoor scan\nI distorted table\n발행일\n2026-08-10\n계산서번호\nINV-2026-0810-LOW\n고객사\n오성테크\n공급업체\n동진부품\n검토\n통호\nKRW\n지급기한\n2026-09-10\n2026\n공급가액\n하격\n단위\n단가\n품목명\n품목코드\n200\n300000\n30000\n베어리하을경\nBRG-H-100\nS45C PIN 8X60\nS45[\n120000\n3200\nBOLT-M8-20\nX20\n육각볼트M8X20\n총액:\n627000\n담당/검토/승인\nConfidence 낮음\n및Alescalation판단테스트용\n저품질\n스캔: OCR confidence/table",
+    "type": "api_raw_text"
+  }
+]

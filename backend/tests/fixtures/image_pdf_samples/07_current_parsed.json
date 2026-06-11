@@ -1,0 +1,21 @@
+{
+  "business_fields": {},
+  "category": "purchase_order",
+  "currency": "KRW",
+  "customer_name": "제일기계",
+  "document_number": "PO-2026-0807-777",
+  "document_type": "purchase_order",
+  "due_date": null,
+  "extracted_amount": 343200,
+  "extracted_date": "2026-08-07",
+  "issue_date": "2026-08-07",
+  "line_items": [],
+  "merchant_name": "신우금속",
+  "subtotal": null,
+  "tags": [
+    "purchase_order"
+  ],
+  "tax": 316,
+  "title": "PO-2026-0807-777",
+  "vendor_name": "신우금속"
+}

@@ -1,0 +1,31 @@
+{
+  "api_document_id": "532fb6ec-ed53-4434-b9a0-ad054c354f4b",
+  "api_extraction_method": "pdf_scanned_page_ocr",
+  "api_processing_status": "ready",
+  "api_provider_chain": "pdf_scanned_page_ocr+paddleocr_vl_unavailable+heuristic_fallback+qwen2_5_vl_unavailable+heuristic_interpretation+ai_interpretation_disabled",
+  "api_review_required": false,
+  "file_family": "pdf",
+  "file_size_bytes": 225292,
+  "image_only": true,
+  "mime_type": "application/pdf",
+  "ocr_engine": "ocr_worker_paddleocr",
+  "ocr_fallback_used": false,
+  "ocr_page_count": 1,
+  "ocr_provider_attempted": [
+    "ocr_worker_paddleocr"
+  ],
+  "ocr_provider_failed_reason": {},
+  "ocr_provider_succeeded": "ocr_worker_paddleocr",
+  "ocr_table_block_count": 0,
+  "ocr_worker_attempt_count": 1,
+  "ocr_worker_available": true,
+  "ocr_worker_elapsed_ms": 8046,
+  "ocr_worker_provider_reset_used": false,
+  "ocr_worker_retry_used": false,
+  "ocr_worker_url_used": "http://ocr-worker:8010",
+  "page_count": 1,
+  "partial_support": false,
+  "processing_time_ms": 9041,
+  "source_file_type": "pdf",
+  "text_layer_exists": false
+}

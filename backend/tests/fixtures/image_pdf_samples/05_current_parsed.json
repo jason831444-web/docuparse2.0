@@ -1,0 +1,64 @@
+{
+  "business_fields": {
+    "transaction_date": "2026-08-05"
+  },
+  "category": "transaction_statement",
+  "currency": "KRW",
+  "customer_name": "세진기계",
+  "document_number": "TS-2026-0805-451",
+  "document_type": "transaction_statement",
+  "due_date": null,
+  "extracted_amount": 517000,
+  "extracted_date": "2026-08-05",
+  "issue_date": "2026-08-05",
+  "line_items": [
+    {
+      "item_name": "SUS304 철판 2T",
+      "line_total": 110000,
+      "quantity": 4,
+      "specification": "1000x2000",
+      "supply_amount": 100000,
+      "tax_amount": 10000,
+      "unit": "EA",
+      "unit_price": 25000
+    },
+    {
+      "item_name": "SUS304 판 2.0T",
+      "line_total": 165000,
+      "quantity": 6,
+      "specification": "1000x2000",
+      "supply_amount": 150000,
+      "tax_amount": 15000,
+      "unit": "EA",
+      "unit_price": 25000
+    },
+    {
+      "item_name": "알루미늄 원형봉",
+      "line_total": 176000,
+      "quantity": 20,
+      "specification": "10mm",
+      "supply_amount": 160000,
+      "tax_amount": 16000,
+      "unit": "EA",
+      "unit_price": 8000
+    },
+    {
+      "item_name": "M8 HEX BOLT20",
+      "line_total": 66000,
+      "quantity": 500,
+      "specification": "M8x20",
+      "supply_amount": 60000,
+      "tax_amount": 6000,
+      "unit": "EA",
+      "unit_price": 120
+    }
+  ],
+  "merchant_name": "태성금속",
+  "subtotal": null,
+  "tags": [
+    "transaction_statement"
+  ],
+  "tax": null,
+  "title": "Statement",
+  "vendor_name": "태성금속"
+}

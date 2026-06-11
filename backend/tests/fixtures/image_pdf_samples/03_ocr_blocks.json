@@ -1,0 +1,6 @@
+[
+  {
+    "content": "Page 1\n세금계산서/INV이CE\nVendor SKU column must not become item\nTOWS\n계산서번호\nINV-2026-0803-332\n발행일\n2026-08-03\n공급업체\n성진전자부품\n고객사\n네오팩토리\n지급기한\n2026-09-02\n통화\nKRW\n발행\n2026\nLine\nItem Description\nVendor SKU\nSpecification\nOty\nUnit\nUnit Price\nSubtotal\nTota\nPCB Connector 12F\nCON-PCB-12F\n12편\n1500\n5000\n15000\n495000\n하네스500m\nCBL-HAR-5OC\n500m\n5[\n220\n770000\n77000\n847000\nAL6061환봉10파이\n10mm X 3000\nB00C\n240000\n24000\n264000\n공급가액:\n1460000\n부가세:\n146000\n합계금액:\n1606000\nX본문서는거래확인및ERP입력용입니다\n담당/검토/승인",
+    "type": "api_raw_text"
+  }
+]

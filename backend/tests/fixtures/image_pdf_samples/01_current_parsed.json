@@ -1,0 +1,74 @@
+{
+  "business_fields": {},
+  "category": "purchase_order",
+  "currency": "KRW",
+  "customer_name": "한빛제조",
+  "document_number": "PO-2026-0801",
+  "document_type": "purchase_order",
+  "due_date": "2026-08-14",
+  "extracted_amount": 594000,
+  "extracted_date": "2026-08-01",
+  "issue_date": "2026-08-01",
+  "line_items": [
+    {
+      "document_item_code": "PLT-SUS304-2T",
+      "item_code": "PLT-SUS304-2T",
+      "item_name": "SUS304 철판 2T",
+      "line_total": 330000,
+      "quantity": 12,
+      "source_item_code": "PLT-SUS304-2T",
+      "specification": "1000x2000",
+      "supply_amount": 300000,
+      "tax_amount": 30000,
+      "unit": "EA",
+      "unit_price": 25000
+    },
+    {
+      "document_item_code": "BOLT-M8-20",
+      "item_code": "BOLT-M8-20",
+      "item_name": "M8 육각볼트 20 mm",
+      "line_total": 105600,
+      "quantity": 800,
+      "source_item_code": "BOLT-M8-20",
+      "specification": "M8x20",
+      "supply_amount": 96000,
+      "tax_amount": 9600,
+      "unit": "EA",
+      "unit_price": 120
+    },
+    {
+      "document_item_code": "WASH-SUS-08",
+      "item_code": "WASH-SUS-08",
+      "item_name": "SUS WASHER M8",
+      "line_total": 35200,
+      "quantity": 800,
+      "source_item_code": "WASH-SUS-08",
+      "specification": "M8",
+      "supply_amount": 32000,
+      "tax_amount": 3200,
+      "unit": "EA",
+      "unit_price": 40
+    },
+    {
+      "document_item_code": "PLT-FIX-02",
+      "item_code": "PLT-FIX-02",
+      "item_name": "고정판 120x605]",
+      "line_total": 123200,
+      "quantity": 40,
+      "source_item_code": "PLT-FIX-02",
+      "specification": "120x60x5T",
+      "supply_amount": 112000,
+      "tax_amount": 11200,
+      "unit": "EA",
+      "unit_price": 2800
+    }
+  ],
+  "merchant_name": "대한정밀부품",
+  "subtotal": 540000,
+  "tags": [
+    "purchase_order"
+  ],
+  "tax": 54000,
+  "title": "PO-2026-0801",
+  "vendor_name": "대한정밀부품"
+}

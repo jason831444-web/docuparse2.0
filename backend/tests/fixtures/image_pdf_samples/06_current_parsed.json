@@ -1,0 +1,60 @@
+{
+  "business_fields": {
+    "payment_due_date": "2026-09-05"
+  },
+  "category": "invoice",
+  "currency": "USD",
+  "customer_name": "NeoFactory Korea",
+  "document_number": "INV-US-2026-0806-019",
+  "document_type": "invoice",
+  "due_date": "2026-09-05",
+  "extracted_amount": 508,
+  "extracted_date": "2026-08-06",
+  "issue_date": "2026-08-06",
+  "line_items": [
+    {
+      "document_item_code": "HGW20-1OOC",
+      "item_code": "HGW20-1OOC",
+      "item_name": "Guide Rail HGW2 O50C 3600 OOC3600",
+      "line_total": 3600,
+      "quantity": 1,
+      "source_item_code": "HGW20-1OOC",
+      "specification": "100Omn",
+      "supply_amount": 3600,
+      "unit": "EA",
+      "unit_price": 3600
+    },
+    {
+      "document_item_code": "CBL-HAR-500",
+      "item_code": "CBL-HAR-500",
+      "item_name": "Cable Harness 500 880G OOC3800",
+      "line_total": 3800,
+      "quantity": 3800,
+      "source_item_code": "CBL-HAR-500",
+      "specification": "500m",
+      "supply_amount": 3800,
+      "unit": "EA",
+      "unit_price": 1
+    },
+    {
+      "document_item_code": "CON-PCB-12P",
+      "item_code": "CON-PCB-12P",
+      "item_name": "PCB Connector 12 P5000 OOC6000",
+      "line_total": 6000,
+      "quantity": 500,
+      "source_item_code": "CON-PCB-12P",
+      "specification": "036",
+      "supply_amount": 6000,
+      "unit": "EA",
+      "unit_price": 12
+    }
+  ],
+  "merchant_name": "Global Motion Parts LLC",
+  "subtotal": 2,
+  "tags": [
+    "invoice"
+  ],
+  "tax": null,
+  "title": "INVOICE",
+  "vendor_name": "Global Motion Parts LLC"
+}

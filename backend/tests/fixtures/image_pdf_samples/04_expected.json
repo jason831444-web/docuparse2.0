@@ -1,0 +1,11 @@
+{
+  "amounts_required": false,
+  "customer_name": "오성테크",
+  "document_number": "DN-2026-0804-055",
+  "document_type": "delivery_note",
+  "due_date": "2026-08-05",
+  "issue_date": "2026-08-04",
+  "line_item_count": 4,
+  "status_expectation": "ready_possible",
+  "vendor_name": "대영부품"
+}

@@ -1,0 +1,12 @@
+{
+  "currency": "KRW",
+  "customer_name": "제일기계",
+  "document_number": "QT-2026-0808-009",
+  "document_type": "quotation",
+  "due_date": "2026-08-31",
+  "extracted_amount": 473000,
+  "issue_date": "2026-08-08",
+  "line_item_count": 2,
+  "status_expectation": "needs_review_for_missing_quantity",
+  "vendor_name": "한성산업"
+}

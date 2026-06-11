@@ -1,0 +1,6 @@
+[
+  {
+    "content": "Page 1\nCOMMERCIAL\nINVOICE\nForeign\ncurrency\nmixed\nKorean\nERP\nInvoice No\nINV-US\n2026-0806-019\nIssue\nDate\n2026-08-06\nSupplier\nGlobal Motion Parts LLC\nCustomer\nNeoFactory Korea\nPAID\nPayment Due\n2026-09-05\nCurrency\nUSD\n2026\nItem Description\nVendor SKU\nSpecification\nOty\nUnit\nUnit Price\nSubtotal\nTotal\nGuide Rail HGW2O\nHGW2O-1OOC\n[00Omn\n50C\n3600\nOOC\n3600\nCable Harness 500\nCBL-HAR-5OO\n500m\n880G\nOOC\n3800\nPCB Connector 12P\nCON-PCB-12P\n036\n5000\nOOC\n6000\nTotal\nAmount:\nUSD\n50800\nBank: Chase I Swift: CHASUS33/\n' Memo: invoice number required\n외화\nI 인보이스테스트:Vendor SKU는\n품목코드로만\n저리되어야합니다\n담당/검토/승인",
+    "type": "api_raw_text"
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "business_fields": {
+    "payment_due_date": "2026-09-10"
+  },
+  "category": "invoice",
+  "currency": "KRW",
+  "customer_name": "오성테크",
+  "document_number": "INV-2026-0810-LOW",
+  "document_type": "invoice",
+  "due_date": "2026-09-10",
+  "extracted_amount": 627000,
+  "extracted_date": "2026-08-10",
+  "issue_date": "2026-08-10",
+  "line_items": [],
+  "merchant_name": "동진부품",
+  "subtotal": null,
+  "tags": [
+    "invoice"
+  ],
+  "tax": null,
+  "title": "INV-2026-0810-LOW",
+  "vendor_name": "동진부품"
+}

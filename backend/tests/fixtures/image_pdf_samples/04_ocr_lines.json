@@ -1,0 +1,109 @@
+{
+  "lines": [
+    "Page 1",
+    "납품서",
+    "Delivery Note",
+    "no price",
+    "columns",
+    "납품번호",
+    "DN-2026-0804-055",
+    "발행일",
+    "2026-08-04",
+    "납품일",
+    "2026-08-05",
+    "공급업체",
+    "대영부품",
+    "고객사",
+    "오성테크",
+    "입고장소",
+    "오성테크2공장",
+    "자재창고",
+    "수령",
+    "수령자",
+    "박성호",
+    "차량번호",
+    "서울85가2311",
+    "2026",
+    "품목명",
+    "문서품목코드",
+    "규격",
+    "납품수량",
+    "단위",
+    "비고",
+    "베어링",
+    "하우징",
+    "BRG-H-1OO",
+    "100mm",
+    "25",
+    "EA",
+    "S45C PIN 8X60",
+    "PIN-S45C-08",
+    "8X60",
+    "500",
+    "EA",
+    "육각볼트",
+    "M8x20",
+    "BOLT-M8-20",
+    "M8x20",
+    "T000",
+    "가",
+    "SUS WASHER M8",
+    "WASH-SUS-O8",
+    "M8",
+    "1000",
+    "-",
+    "본납품서는",
+    "단가/금액",
+    "없이입고수량확인용으로",
+    "발행되었습니다",
+    "본문서는",
+    "거래확인및ERP입력용입니다",
+    "담당/검토/승인"
+  ],
+  "reconstructed_candidates": [
+    {
+      "confidence": 0.92,
+      "item": {
+        "item_code": "BRG-H-100",
+        "item_name": "베어링 하우징",
+        "quantity": 25,
+        "specification": "100mm",
+        "unit": "EA"
+      },
+      "source_line": "베어링 / 하우징 / BRG-H-1OO / 100mm / 25 / EA"
+    },
+    {
+      "confidence": 0.92,
+      "item": {
+        "item_code": "PIN-S45C-08",
+        "item_name": "S45C PIN 8X60",
+        "quantity": 500,
+        "specification": "8x60",
+        "unit": "EA"
+      },
+      "source_line": "S45C PIN 8x60 / PIN-S45C-08 / 8x60 / 500 / EA"
+    },
+    {
+      "confidence": 0.92,
+      "item": {
+        "item_code": "BOLT-M8-20",
+        "item_name": "육각볼트 M8x20",
+        "quantity": 1000,
+        "specification": "M8x20",
+        "unit": "EA"
+      },
+      "source_line": "육각볼트 / M8x20 / BOLT-M8-20 / M8x20 / T000 / 가"
+    },
+    {
+      "confidence": 0.92,
+      "item": {
+        "item_code": "WASH-SUS-08",
+        "item_name": "SUS WASHER M8",
+        "quantity": 1000,
+        "specification": "M8",
+        "unit": "EA"
+      },
+      "source_line": "SUS WASHER M8 / WASH-SUS-O8 / M8 / 1000 / 본납품서는 / 단가/금액 / 없이입고수량확인용으로 / 발행되었습니다 / 본문서는 / 거래확인및ERP입력용입니다 / 담당/검토/승인"
+    }
+  ]
+}

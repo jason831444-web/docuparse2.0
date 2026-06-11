@@ -1,0 +1,57 @@
+{
+  "business_fields": {
+    "delivery_terms": "발주",
+    "payment_terms": "검수",
+    "quotation_date": "2026-08-02",
+    "valid_until": "2026-08-22"
+  },
+  "category": "quotation",
+  "currency": "KRW",
+  "customer_name": "미래정밀",
+  "document_number": "QT-2026-0802",
+  "document_type": "quotation",
+  "due_date": "2026-08-22",
+  "extracted_amount": 485100,
+  "extracted_date": "2026-08-02",
+  "issue_date": "2026-08-02",
+  "line_items": [
+    {
+      "item_name": "스텐판 2T",
+      "line_total": 137500,
+      "quantity": 5,
+      "specification": "1000x2000",
+      "supply_amount": 125000,
+      "tax_amount": 12500,
+      "unit": "EA",
+      "unit_price": 25000
+    },
+    {
+      "item_name": "SUS304 철판 3T",
+      "line_total": 162800,
+      "quantity": 4,
+      "specification": "1000x2000",
+      "supply_amount": 148000,
+      "tax_amount": 14800,
+      "unit": "EA",
+      "unit_price": 37000
+    },
+    {
+      "item_name": "고정 플레이트",
+      "line_total": 184800,
+      "quantity": 60,
+      "specification": "120x60x5T",
+      "supply_amount": 168000,
+      "tax_amount": 16800,
+      "unit": "EA",
+      "unit_price": 2800
+    }
+  ],
+  "merchant_name": "한성산업",
+  "subtotal": 441000,
+  "tags": [
+    "quotation"
+  ],
+  "tax": 44100,
+  "title": "OT-2026-0802",
+  "vendor_name": "한성산업"
+}

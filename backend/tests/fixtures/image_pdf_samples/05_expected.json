@@ -1,0 +1,20 @@
+{
+  "currency": "KRW",
+  "customer_name": "세진기계",
+  "document_number": "TS-2026-0805-451",
+  "document_type": "transaction_statement",
+  "extracted_amount": 517000,
+  "forbidden_quantities": [
+    0.04,
+    111.012
+  ],
+  "issue_date": "2026-08-05",
+  "line_item_count": 4,
+  "line_totals": [
+    110000,
+    165000,
+    176000,
+    66000
+  ],
+  "vendor_name": "태성금속"
+}

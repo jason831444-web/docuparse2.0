@@ -1,0 +1,119 @@
+{
+  "lines": [
+    "Page 1",
+    "거래명세서",
+    "Transaction",
+    "Statement",
+    "거래명세서번호",
+    "[S-2026-0805-451",
+    "거래일자",
+    "2026-08-05",
+    "공급업체",
+    "태성금속",
+    "고객사",
+    "세진기계",
+    "담당자",
+    "확인",
+    "이민수",
+    "통화",
+    "KRW",
+    "2026",
+    "품목명",
+    "규격",
+    "수량",
+    "단위",
+    "단가",
+    "공급가액",
+    "세액",
+    "합계",
+    "SUS304",
+    "철판2T",
+    "1000x2000",
+    "25000",
+    "100000",
+    "10000",
+    "110000",
+    "SUS 304 판2OT",
+    "1000X2000",
+    "25000",
+    "150000",
+    "500C",
+    "6500G",
+    "알루미늄",
+    "원형봉",
+    "10mm",
+    "3000mm",
+    "800C",
+    "160000",
+    "16000",
+    "176000",
+    "M8 HEX BOLT 20",
+    "M8x20",
+    "500",
+    "5000L",
+    "500",
+    "56006",
+    "총액:",
+    "517000",
+    "본문서는거래확인및ERP입력용입니다",
+    "담당/검토/승인"
+  ],
+  "reconstructed_candidates": [
+    {
+      "confidence": 0.91,
+      "item": {
+        "item_name": "SUS304 철판 2T",
+        "line_total": 110000,
+        "quantity": 4,
+        "specification": "1000x2000",
+        "supply_amount": 100000,
+        "tax_amount": 10000,
+        "unit": "EA",
+        "unit_price": 25000
+      },
+      "source_line": "SUS304 / 철판2T / 1000x2000 / 25000 / 100000 / 10000 / 110000"
+    },
+    {
+      "confidence": 0.91,
+      "item": {
+        "item_name": "SUS304 판 2.0T",
+        "line_total": 6500,
+        "quantity": 0.04,
+        "specification": "1000x2000",
+        "supply_amount": 6000,
+        "tax_amount": 500,
+        "unit": "EA",
+        "unit_price": 150000
+      },
+      "source_line": "SUS 304 판2OT / 1000x2000 / 25000 / 150000 / 500C / 6500G"
+    },
+    {
+      "confidence": 0.91,
+      "item": {
+        "item_name": "알루미늄 원형봉",
+        "line_total": 176000,
+        "quantity": 20,
+        "specification": "10mm",
+        "supply_amount": 160000,
+        "tax_amount": 16000,
+        "unit": "EA",
+        "unit_price": 8000
+      },
+      "source_line": "알루미늄 / 원형봉 / 10mm / 3000mm / 800C / 160000 / 16000 / 176000"
+    },
+    {
+      "confidence": 0.91,
+      "item": {
+        "item_name": "M8 HEX BOLT20",
+        "line_total": 56006,
+        "quantity": 11.1012,
+        "specification": "M8x20",
+        "supply_amount": 55506,
+        "tax_amount": 500,
+        "unit": "EA",
+        "unit_price": 5000
+      },
+      "source_line": "M8 HEX BOLT 20 / M8x20 / 500 / 5000L / 500 / 56006"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "currency": "KRW",
+  "customer_name": "미래정밀",
+  "document_number": "QT-2026-0802",
+  "document_type": "quotation",
+  "due_date": "2026-08-22",
+  "extracted_amount": 485100,
+  "issue_date": "2026-08-02",
+  "line_item_count": 3,
+  "status_expectation": "needs_review_allowed_for_ambiguous_material",
+  "subtotal": 441000,
+  "tax": 44100,
+  "vendor_name": "한성산업"
+}

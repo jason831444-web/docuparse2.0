@@ -1,0 +1,6 @@
+[
+  {
+    "content": "Page 1\n발주서\nPurchase\nOrder\n발주번호\nPO-2026-0801\n-101\n발행일\n2026-08-01\n공급업체\n대한정밀부품\n고객사\n한빛제조\n납기요청일\n2026-08-14\n통화\nKRW\n승인\n2026\n품목명\n품목코드\n규격\n수량\n단위\n단가\n공급가액\n세액\n합겨\nSUS304철판 2T\nPLT-SUS304-2T\n1000x2000\n5A\n25000\n300000\n30000\n330000\nM8육각볼트\n20mm\nBOLT-M8-20\nM8x20\n80C\nEA\n96000\n9600\n105600\nSUS WASHER M8\nWASH-SUS-08\nM&\n80C\n32000\n320\n35200\n고정판\n120X605]\nPLT-FIX-O2\n120X60X57\n80C\n112000\n11200\n123200\n공급가액합계:\n540000\n부가세:\n54000\n총액:\n594000\n옷본문서는거래확인및ERP입력용입니다\n담당/검토/승인",
+    "type": "api_raw_text"
+  }
+]

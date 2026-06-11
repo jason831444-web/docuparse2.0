@@ -1,0 +1,11 @@
+{
+  "currency": "USD",
+  "customer_name": "NeoFactory Korea",
+  "document_number": "INV-US-2026-0806-019",
+  "document_type": "invoice",
+  "due_date": "2026-09-05",
+  "extracted_amount": 508.0,
+  "issue_date": "2026-08-06",
+  "line_item_count_min": 3,
+  "vendor_name": "Global Motion Parts LLC"
+}

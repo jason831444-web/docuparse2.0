@@ -1,0 +1,21 @@
+{
+  "currency": "KRW",
+  "customer_name": "네오팩토리",
+  "document_number": "INV-2026-0803-332",
+  "document_type": "invoice",
+  "due_date": "2026-09-02",
+  "extracted_amount": 1606000,
+  "forbidden_values": [
+    "3.3333333333333335"
+  ],
+  "issue_date": "2026-08-03",
+  "line_item_count": 3,
+  "line_totals": [
+    495000,
+    847000,
+    264000
+  ],
+  "subtotal": 1460000,
+  "tax": 146000,
+  "vendor_name": "성진전자부품"
+}

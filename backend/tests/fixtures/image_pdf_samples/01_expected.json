@@ -1,0 +1,20 @@
+{
+  "currency": "KRW",
+  "customer_name": "한빛제조",
+  "document_number": "PO-2026-0801",
+  "document_type": "purchase_order",
+  "due_date": "2026-08-14",
+  "extracted_amount": 594000,
+  "issue_date": "2026-08-01",
+  "line_item_count": 4,
+  "line_totals": [
+    330000,
+    105600,
+    35200,
+    123200
+  ],
+  "status_expectation": "ready_possible",
+  "subtotal": 540000,
+  "tax": 54000,
+  "vendor_name": "대한정밀부품"
+}

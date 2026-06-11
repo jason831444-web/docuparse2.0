@@ -1,0 +1,58 @@
+Page 1
+PURCHASE
+ORDER
+발주서
+Mixed
+Korean-English
+Wit
+noise
+PO No
+PO-2026-0809-MIX-888
+Issue Date
+2026-08-09
+Supplier
+대한정밀부품
+Customer
+한빛제조
+Due Date
+2026-08-28
+Currency
+KRW
+OK
+2026
+Item Name
+Spec
+Qty
+Unit
+Unit Price
+Supply
+VAT
+Tota!
+SUS304
+2|
+PLATE
+1000X 2000
+25000
+175000
+17500
+192500
+M8육각볼트
+M8x20
+I2InC
+20
+20
+144000
+14400
+158400
+SUS washer m8
+M&
+120
+48000
+4800
+52800
+TOTAL
+KRW
+403700
+본문서는
+거래확인및ER입력용입니다
+담당/검토/승인

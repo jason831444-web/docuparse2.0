@@ -1,0 +1,56 @@
+Page 1
+세금계산서/INV이CE
+Vendor SKU column must not become item
+TOWS
+계산서번호
+INV-2026-0803-332
+발행일
+2026-08-03
+공급업체
+성진전자부품
+고객사
+네오팩토리
+지급기한
+2026-09-02
+통화
+KRW
+발행
+2026
+Line
+Item Description
+Vendor SKU
+Specification
+Oty
+Unit
+Unit Price
+Subtotal
+Tota
+PCB Connector 12F
+CON-PCB-12F
+12편
+1500
+5000
+15000
+495000
+하네스500m
+CBL-HAR-5OC
+500m
+5[
+220
+770000
+77000
+847000
+AL6061환봉10파이
+10mm X 3000
+B00C
+240000
+24000
+264000
+공급가액:
+1460000
+부가세:
+146000
+합계금액:
+1606000
+X본문서는거래확인및ERP입력용입니다
+담당/검토/승인

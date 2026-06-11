@@ -1,0 +1,24 @@
+{
+  "business_fields": {
+    "quotation_date": "2026-08-08",
+    "valid_until": "2026-08-31"
+  },
+  "category": "quotation",
+  "currency": "KRW",
+  "customer_name": "제일기계",
+  "document_number": "QT-2026-0808-009",
+  "document_type": "quotation",
+  "due_date": "2026-08-31",
+  "extracted_amount": 47300,
+  "extracted_date": "2026-08-08",
+  "issue_date": "2026-08-08",
+  "line_items": [],
+  "merchant_name": "한성산업",
+  "subtotal": 2,
+  "tags": [
+    "quotation"
+  ],
+  "tax": null,
+  "title": "OT-2026-0808-009",
+  "vendor_name": "한성산업"
+}

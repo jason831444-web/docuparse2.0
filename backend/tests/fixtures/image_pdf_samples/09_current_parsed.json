@@ -1,0 +1,52 @@
+{
+  "business_fields": {},
+  "category": "purchase_order",
+  "currency": "KRW",
+  "customer_name": "한빛제조",
+  "document_number": "PO-2026-0809-MIX-888",
+  "document_type": "purchase_order",
+  "due_date": "2026-08-28",
+  "extracted_amount": 403700,
+  "extracted_date": "2026-08-09",
+  "issue_date": "2026-08-09",
+  "line_items": [
+    {
+      "item_name": "SUS304 2 PLATE",
+      "line_total": 192500,
+      "quantity": 7,
+      "specification": "1000x2000",
+      "supply_amount": 175000,
+      "tax_amount": 17500,
+      "unit": "EA",
+      "unit_price": 25000
+    },
+    {
+      "item_name": "M8 육각볼트",
+      "line_total": 144000,
+      "quantity": 7199,
+      "specification": "M8x20",
+      "supply_amount": 143980,
+      "tax_amount": 20,
+      "unit": "EA",
+      "unit_price": 20
+    },
+    {
+      "item_name": "SUS washer m8",
+      "line_total": 52800,
+      "quantity": 1,
+      "specification": "M8",
+      "supply_amount": 48000,
+      "tax_amount": 4800,
+      "unit": "EA",
+      "unit_price": 48000
+    }
+  ],
+  "merchant_name": "대한정밀부품",
+  "subtotal": null,
+  "tags": [
+    "purchase_order"
+  ],
+  "tax": 304,
+  "title": "PO-2026-0809-MIX-888",
+  "vendor_name": "대한정밀부품"
+}

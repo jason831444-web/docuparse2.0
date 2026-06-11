@@ -1,0 +1,14 @@
+{
+  "currency": "KRW",
+  "customer_name": "한빛제조",
+  "document_number": "PO-2026-0809-MIX-888",
+  "document_type": "purchase_order",
+  "due_date": "2026-08-28",
+  "extracted_amount": 403700,
+  "forbidden_quantities": [
+    7199
+  ],
+  "issue_date": "2026-08-09",
+  "line_item_count": 3,
+  "vendor_name": "대한정밀부품"
+}
