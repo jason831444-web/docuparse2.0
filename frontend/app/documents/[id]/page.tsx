@@ -25,6 +25,7 @@ import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { CategorySelector } from "@/components/category-selector";
+import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
-import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentSummaryDetailed, extractionMethodLabel, formatDateTime, informationalReviewIssues, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueSummary, titleCaseLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, informationalReviewIssues, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueSummary, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
@@ -109,6 +110,42 @@ function InfoGrid({ items }: { items: Array<[string, string | null | undefined]>
         </div>
       ))}
     </div>
+  );
+}
+
+function TaxonomyPolicyCard({ document }: { document: DocumentRecord }) {
+  const taxonomy = documentTaxonomy(document);
+  const subtype = documentSubtypeLabel(taxonomy.document_subtype);
+  const profileLabels = (taxonomy.document_profiles || []).map(documentProfileLabel).filter((label): label is string => Boolean(label));
+  const layout = layoutProfileLabel(taxonomy.layout_profile);
+  const policyLines = taxonomyPolicyLines(taxonomy);
+  if (!subtype && !profileLabels.length && !layout && !policyLines.length) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="size-5 text-primary" />
+          업무 분류 / 처리 정책
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <InfoGrid
+          items={[
+            ["업무 분류", subtype],
+            ["처리 정책", profileLabels.join(", ") || null],
+            ["레이아웃", layout],
+          ]}
+        />
+        {policyLines.length ? (
+          <div className="rounded-lg border bg-slate-50 p-4 text-sm text-slate-700">
+            <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">안내</p>
+            <ul className="space-y-1">
+              {policyLines.map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -412,6 +449,7 @@ export default function DocumentDetailPage() {
           <div className="mb-3 flex flex-wrap gap-2">
             <StatusBadge status={document.processing_status} />
             <Badge className="bg-accent text-accent-foreground">{categoryLabel}</Badge>
+            <TaxonomyBadges document={document} />
             {document.source_file_type ? <Badge variant="outline">{titleCaseLabel(document.source_file_type)}</Badge> : null}
             {document.is_favorite ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">즐겨찾기</Badge> : null}
           </div>
@@ -609,6 +647,7 @@ export default function DocumentDetailPage() {
         </section>
 
         <section className="space-y-6">
+          <TaxonomyPolicyCard document={document} />
           <WorkflowPanel document={document} />
           <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
             <CardHeader>
@@ -627,17 +666,29 @@ export default function DocumentDetailPage() {
               <InfoGrid
                 items={[
                   ["문서 유형", categoryLabel],
+                  ["업무 분류", documentSubtypeLabel(documentTaxonomy(document).document_subtype)],
                   ["처리 상태", titleCaseLabel(document.processing_status)],
                   ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
                   ["검토 필요 항목", blockingIssues.length ? blockingIssues.map(reviewIssueSummary).join(", ") : "없음"],
                 ]}
               />
-              <InfoIssueDetails items={infoIssues.map((issue) => issue.message_ko)} />
+              {blockingIssues.length ? (
+                <div className="grid gap-2">
+                  {blockingIssues.map((issue) => (
+                    <div key={`${issue.code}-${issue.field}-${issue.item_index}-${issue.message_ko}`} className="rounded-lg border border-amber-200 bg-white p-3 text-sm">
+                      <p className="font-medium text-amber-900">{reviewIssueSummary(issue)}</p>
+                      <p className="mt-1 text-xs text-amber-800">{reviewIssueDescription(issue)}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <InfoIssueDetails items={infoIssues.map((issue) => `${reviewIssueSummary(issue)}: ${reviewIssueDescription(issue)}`)} />
               {blockingIssues.some((issue) => reviewIssueAmountLines(issue).length) ? (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                   {blockingIssues.filter((issue) => reviewIssueAmountLines(issue).length).map((issue) => (
                     <div key={`${issue.code}-${issue.message_ko}`}>
-                      <p className="font-medium">{issue.message_ko}</p>
+                      <p className="font-medium">{reviewIssueSummary(issue)}</p>
+                      <p className="mt-1 text-xs">{reviewIssueDescription(issue)}</p>
                       <div className="mt-2 grid gap-1 text-xs sm:grid-cols-3">
                         {reviewIssueAmountLines(issue).map((line) => <span key={line}>{line}</span>)}
                       </div>

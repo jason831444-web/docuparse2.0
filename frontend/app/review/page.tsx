@@ -5,10 +5,11 @@ import Link from "next/link";
 import { CheckCircle2, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import { StatusBadge } from "@/components/status-badge";
+import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, reviewIssueSummary } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, reviewIssueDescription, reviewIssueSummary } from "@/lib/utils";
 import type { DocumentListResponse, DocumentRecord, ManufacturingLineItem } from "@/types/document";
 
 export default function ReviewPage() {
@@ -152,7 +153,12 @@ function ReviewTable({
                     <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{document.original_filename}</p>
                     <div className="mt-2"><StatusBadge status={document.processing_status} /></div>
                   </td>
-                  <td className="px-3 py-3 align-top">{profileLabelForDocument(document)}</td>
+                  <td className="px-3 py-3 align-top">
+                    <div className="grid gap-1">
+                      <span>{profileLabelForDocument(document)}</span>
+                      <span className="flex flex-wrap gap-1"><TaxonomyBadges document={document} maxProfiles={1} /></span>
+                    </div>
+                  </td>
                   <td className="px-3 py-3 align-top">{document.vendor_name || "공급업체 미확인"}<br /><span className="text-muted-foreground">{document.customer_name || "고객사 미확인"}</span></td>
                   <td className="px-3 py-3 align-top">{businessIssueDate(document) || "-"}<br /><span className="text-muted-foreground">{businessFieldDate(document) || ""}</span></td>
                   <td className="max-w-56 px-3 py-3 align-top">{item.item_name || "-"}</td>
@@ -166,7 +172,12 @@ function ReviewTable({
                   <td className="px-3 py-3 align-top">{item.line_total ?? "-"}</td>
                   <td className="px-3 py-3 align-top">{formatMoney(document.extracted_amount, document.currency || "KRW")}</td>
                   <td className="max-w-72 px-3 py-3 align-top text-xs">
-                    {issues.length ? issues.map((issue) => <p key={`${issue.code}-${issue.field}-${issue.item_index}`} className={hasConflict || hasAmountIssue ? "font-medium text-red-700" : "text-amber-700"}>{reviewIssueSummary(issue)}</p>) : <span className="text-muted-foreground">-</span>}
+                    {issues.length ? issues.map((issue) => (
+                      <div key={`${issue.code}-${issue.field}-${issue.item_index}`} className={hasConflict || hasAmountIssue ? "text-red-700" : "text-amber-700"}>
+                        <p className="font-medium">{reviewIssueSummary(issue)}</p>
+                        <p className="mt-0.5 text-[11px]">{reviewIssueDescription(issue)}</p>
+                      </div>
+                    )) : <span className="text-muted-foreground">-</span>}
                   </td>
                 </tr>
               );

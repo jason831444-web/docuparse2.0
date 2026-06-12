@@ -4,6 +4,7 @@ import { Calendar, DollarSign, FileType2, Star, Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
+import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { documentDisplayTitle, documentSummaryShort, formatDate, formatMoney, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
@@ -38,6 +39,7 @@ export function DocumentCard({ document, selected = false, onSelect, returnTo }:
         </div>
           <div className="flex flex-wrap gap-2">
             <Badge className="bg-accent text-accent-foreground">{primaryCategoryLabel(document)}</Badge>
+            <TaxonomyBadges document={document} maxProfiles={1} />
             {document.source_file_type ? <Badge variant="outline">{document.source_file_type.toUpperCase()}</Badge> : null}
           </div>
           <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">

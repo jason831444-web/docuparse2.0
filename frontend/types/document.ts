@@ -16,6 +16,16 @@ export type DocumentType =
   | "other";
 export type ProcessingStatus = "uploaded" | "queued" | "processing" | "ready" | "needs_review" | "confirmed" | "completed" | "failed";
 
+export interface DocumentTaxonomy {
+  document_subtype?: string | null;
+  document_profile?: string | null;
+  document_profiles?: string[];
+  layout_profile?: string | null;
+  amount_required?: boolean | null;
+  party_required?: boolean | null;
+  evidence?: string[];
+}
+
 export interface FolderSummary {
   label: string;
   value: string;

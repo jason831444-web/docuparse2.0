@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Star } from "lucide-react";
 
 import { StatusBadge } from "@/components/status-badge";
+import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { Badge } from "@/components/ui/badge";
 import { documentDisplayTitle, documentSummaryShort, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
@@ -32,6 +33,7 @@ export function DocumentRow({ document, selected = false, onSelect, returnTo }: 
       </Link>
       <div className="flex min-w-0 flex-wrap gap-2 lg:justify-self-start">
         <Badge className="bg-accent text-accent-foreground">{primaryCategoryLabel(document)}</Badge>
+        <TaxonomyBadges document={document} maxProfiles={1} />
         {document.source_file_type ? <Badge variant="outline">{titleCaseLabel(document.source_file_type)}</Badge> : null}
       </div>
       <div className="min-w-0 text-sm text-muted-foreground">

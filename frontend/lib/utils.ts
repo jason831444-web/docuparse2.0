@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { DocumentTaxonomy } from "@/types/document";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -39,6 +40,36 @@ const LABEL_ALIASES: Record<string, string> = {
   retail: "소매",
 };
 
+const DOCUMENT_SUBTYPE_LABELS: Record<string, string> = {
+  tax_invoice: "세금계산서",
+  commercial_invoice: "상업송장",
+  return_note: "반품 문서",
+  credit_note: "차감/크레딧 문서",
+  internal_transfer: "내부 이동서",
+};
+
+const DOCUMENT_PROFILE_LABELS: Record<string, string> = {
+  tax_document: "세금 문서",
+  priced_document: "금액 문서",
+  foreign_currency_document: "외화 문서",
+  return_document: "반품/차감 문서",
+  inventory_movement_document: "재고 이동 문서",
+  no_price_document: "금액 없음 정상",
+  quality_document: "품질/검사 문서",
+  statement_document: "거래/정산 문서",
+  option_quote_document: "옵션 견적 문서",
+};
+
+const LAYOUT_PROFILE_LABELS: Record<string, string> = {
+  text_layer_pdf: "텍스트 PDF",
+  scanned_pdf: "스캔 PDF",
+  photographed_pdf: "사진 기반 PDF",
+  fax_misaligned: "팩스/정렬 불량",
+  multipage_table: "다중 페이지 표",
+  sparse_table: "희소 표",
+  dense_table: "밀집 표",
+};
+
 export function titleCaseLabel(value?: string | null): string {
   if (!value) return "미분류";
   if (value.includes(">")) return value.split(">").map((part) => titleCaseLabel(part)).join(" > ");
@@ -48,6 +79,103 @@ export function titleCaseLabel(value?: string | null): string {
     .replaceAll("_", " ")
     .replaceAll("-", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function optionalString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
+function optionalBoolean(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
+function optionalStringList(...values: unknown[]) {
+  const merged: string[] = [];
+  values.forEach((value) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (typeof item === "string" && item.trim() && !merged.includes(item)) merged.push(item);
+      });
+    }
+  });
+  return merged;
+}
+
+export function documentTaxonomy(document: {
+  document_type?: string | null;
+  workflow_metadata?: Record<string, unknown> | null;
+  ingestion_metadata?: Record<string, unknown> | null;
+}): DocumentTaxonomy {
+  const workflow = asRecord(document.workflow_metadata);
+  const ingestion = asRecord(document.ingestion_metadata);
+  const workflowTaxonomy = asRecord(workflow.taxonomy);
+  const ingestionTaxonomy = asRecord(ingestion.taxonomy);
+  const documentProfile = optionalString(workflowTaxonomy.document_profile, workflow.document_profile, ingestionTaxonomy.document_profile);
+  const documentProfiles = optionalStringList(workflowTaxonomy.document_profiles, workflow.document_profiles, ingestionTaxonomy.document_profiles);
+  if (documentProfile && !documentProfiles.includes(documentProfile)) documentProfiles.unshift(documentProfile);
+  return {
+    document_subtype: optionalString(workflowTaxonomy.document_subtype, workflow.document_subtype, ingestionTaxonomy.document_subtype),
+    document_profile: documentProfile,
+    document_profiles: documentProfiles,
+    layout_profile: optionalString(workflowTaxonomy.layout_profile, workflow.layout_profile, ingestionTaxonomy.layout_profile),
+    amount_required: optionalBoolean(workflowTaxonomy.amount_required, workflow.amount_required, ingestionTaxonomy.amount_required),
+    party_required: optionalBoolean(workflowTaxonomy.party_required, workflow.party_required, ingestionTaxonomy.party_required),
+    evidence: optionalStringList(workflowTaxonomy.evidence, workflow.taxonomy_evidence, ingestionTaxonomy.evidence),
+  };
+}
+
+export function documentSubtypeLabel(value?: string | null) {
+  if (!value) return null;
+  return DOCUMENT_SUBTYPE_LABELS[value] || titleCaseLabel(value);
+}
+
+export function documentProfileLabel(value?: string | null) {
+  if (!value) return null;
+  return DOCUMENT_PROFILE_LABELS[value] || titleCaseLabel(value);
+}
+
+export function layoutProfileLabel(value?: string | null) {
+  if (!value) return null;
+  return LAYOUT_PROFILE_LABELS[value] || titleCaseLabel(value);
+}
+
+export function taxonomyPolicyLines(taxonomy: DocumentTaxonomy) {
+  const profiles = new Set(taxonomy.document_profiles || []);
+  const lines: string[] = [];
+  if (profiles.has("no_price_document")) lines.push("이 문서는 금액/통화가 없어도 정상일 수 있습니다. 품목명과 수량을 중심으로 검토하세요.");
+  if (profiles.has("tax_document")) lines.push("공급가액, 세액, 합계금액의 일치 여부를 확인해야 합니다.");
+  if (profiles.has("return_document")) lines.push("관련 원문서 번호와 차감 금액의 방향을 확인해야 합니다.");
+  if (profiles.has("inventory_movement_document")) lines.push("거래처보다 출고/입고 위치와 요청 수량 확인이 중요합니다.");
+  if (profiles.has("foreign_currency_document")) lines.push("외화 금액과 통화 단위, 환율 메모를 함께 확인하세요.");
+  if (profiles.has("quality_document")) lines.push("입고수량, 합격수량, 불량수량과 판정 값을 확인하세요.");
+  if (profiles.has("option_quote_document")) lines.push("옵션 라인은 단순 합산하지 말고 선택 대상인지 확인하세요.");
+  return Array.from(new Set(lines));
+}
+
+export function taxonomyBadgeLabels(document: {
+  document_type?: string | null;
+  workflow_metadata?: Record<string, unknown> | null;
+  ingestion_metadata?: Record<string, unknown> | null;
+}, maxProfiles = 2) {
+  const taxonomy = documentTaxonomy(document);
+  const labels: Array<{ key: string; label: string; tone: "subtype" | "profile" | "layout" }> = [];
+  const subtype = documentSubtypeLabel(taxonomy.document_subtype);
+  if (subtype) labels.push({ key: `subtype-${taxonomy.document_subtype}`, label: subtype, tone: "subtype" });
+  (taxonomy.document_profiles || []).slice(0, maxProfiles).forEach((profile) => {
+    const label = documentProfileLabel(profile);
+    if (label) labels.push({ key: `profile-${profile}`, label, tone: "profile" });
+  });
+  return labels;
 }
 
 export function documentDisplayTitle(document: { document_number?: string | null; title?: string | null; original_filename?: string | null }) {
@@ -157,11 +285,14 @@ export interface NormalizedReviewIssue {
 
 export function normalizedReviewIssues(document: {
   workflow_metadata?: Record<string, unknown> | null;
+  ingestion_metadata?: Record<string, unknown> | null;
   warnings?: string[];
   low_confidence_fields?: string[];
   review_required?: boolean;
 }): NormalizedReviewIssue[] {
   const metadata = document.workflow_metadata ?? {};
+  const taxonomy = documentTaxonomy(document);
+  const noPriceDocument = (taxonomy.document_profiles || []).includes("no_price_document") || taxonomy.amount_required === false;
   const fromMetadata = Array.isArray(metadata.normalized_review_issues)
     ? metadata.normalized_review_issues
     : Array.isArray(metadata.review_reasons)
@@ -183,6 +314,10 @@ export function normalizedReviewIssues(document: {
           difference: typeof issue.difference === "string" || typeof issue.difference === "number" ? issue.difference : undefined,
           currency: typeof issue.currency === "string" ? issue.currency : undefined,
         };
+    if (noPriceDocument && normalized.code === "missing_price_or_total") {
+      normalized.severity = "info";
+      normalized.message_ko = "이 문서 유형에서는 금액 정보가 없을 수 있습니다.";
+    }
     if (!normalized.message_ko) return;
     const messageKey = normalized.message_ko.replace(/\s+/g, " ").trim();
     const key = `${normalized.code}:${normalized.field || ""}:${normalized.item_index ?? ""}:${messageKey}`;
@@ -223,8 +358,35 @@ export function reviewIssueAmountLines(issue: NormalizedReviewIssue) {
 }
 
 export function reviewIssueSummary(issue: NormalizedReviewIssue) {
-  if (issue.code === "amount_mismatch") return "문서 총액과 품목 합계 불일치";
-  return issue.message_ko;
+  const labels: Record<string, string> = {
+    missing_price_or_total: "금액/총액 누락",
+    untrusted_ocr_amount: "금액 OCR 신뢰도 낮음",
+    amount_mismatch: "품목 합계와 총액 불일치",
+    line_items_total_mismatch: "품목 합계와 총액 불일치",
+    ambiguous_item_match: "품목 매칭 모호",
+    internal_item_ambiguous: "품목 매칭 모호",
+    internal_item_unmatched: "내부 품목 미매칭",
+    item_code_name_conflict: "품목명/코드 충돌",
+    missing_line_items: "품목 정보 누락",
+    missing_quantity: "수량 누락",
+  };
+  return labels[issue.code] || issue.message_ko;
+}
+
+export function reviewIssueDescription(issue: NormalizedReviewIssue) {
+  const descriptions: Record<string, string> = {
+    missing_price_or_total: "이 문서 유형에서는 총액 확인이 필요할 수 있습니다.",
+    untrusted_ocr_amount: "OCR이 읽은 금액이 불확실하여 사람 검토가 필요합니다.",
+    amount_mismatch: "품목별 금액 합계와 문서 총액이 맞지 않습니다.",
+    line_items_total_mismatch: "품목별 금액 합계와 문서 총액이 맞지 않습니다.",
+    ambiguous_item_match: "사내 품목 master와 정확히 일치하지 않습니다.",
+    internal_item_ambiguous: "사내 품목 master와 정확히 일치하지 않습니다.",
+    internal_item_unmatched: "사내 품목 master에서 확실한 항목을 찾지 못했습니다.",
+    item_code_name_conflict: "문서 품목명과 선택된 내부 품목코드가 서로 맞지 않을 수 있습니다.",
+    missing_line_items: "표 또는 품목 후보가 충분히 구조화되지 않았습니다.",
+    missing_quantity: "ERP 입력에 필요한 수량을 확인해야 합니다.",
+  };
+  return descriptions[issue.code] || issue.message_ko;
 }
 
 export function displayWarningsWithoutReviewDuplicates(
