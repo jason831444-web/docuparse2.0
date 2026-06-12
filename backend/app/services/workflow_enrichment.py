@@ -235,9 +235,11 @@ class DocumentWorkflowEnrichmentService:
     def _manufacturing_review_reasons(self, document: Document, business_fields: dict[str, str | list[str]]) -> list[dict[str, Any]]:
         reasons: list[dict[str, Any]] = []
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
-        if not (document.vendor_name or document.merchant_name):
+        no_price_quantity_doc = self._is_no_price_quantity_document(document)
+        party_optional_doc = no_price_quantity_doc or self._is_internal_transfer_document(document)
+        if not party_optional_doc and not (document.vendor_name or document.merchant_name):
             reasons.append(self._review_reason("missing_vendor_name", "공급업체가 추출되지 않았습니다.", "vendor_name"))
-        if not document.customer_name:
+        if not party_optional_doc and not document.customer_name:
             reasons.append(self._review_reason("missing_customer_name", "고객사가 추출되지 않았습니다.", "customer_name"))
         if not document.document_number:
             reasons.append(self._review_reason("missing_document_number", f"{self._manufacturing_number_label(doc_type)} 미확인", "document_number"))
@@ -254,7 +256,7 @@ class DocumentWorkflowEnrichmentService:
                 reasons.append(self._review_reason("missing_item_name", f"{index}번째 품목의 품목명이 비어 있습니다.", "line_items.item_name", index - 1))
             if item.get("quantity") in (None, "", []):
                 reasons.append(self._review_reason("missing_quantity", f"{index}번째 품목의 수량이 비어 있습니다.", "line_items.quantity", index - 1))
-            if doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+            if not no_price_quantity_doc and doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 reasons.append(self._review_reason("missing_price_or_total", f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.", "line_items.unit_price", index - 1))
             for warning in item.get("validation_warnings") or []:
                 if warning == "invalid_tax_greater_than_total":
@@ -301,6 +303,28 @@ class DocumentWorkflowEnrichmentService:
             ))
         return self._dedupe_review_reasons(reasons)
 
+    def _is_internal_transfer_document(self, document: Document) -> bool:
+        values = [
+            getattr(document, "category", None),
+            *(getattr(document, "tags", None) or []),
+            getattr(document, "document_number", None),
+        ]
+        text = " ".join(str(value or "") for value in values)
+        return bool(re.search(r"internal[_ -]?transfer|\bTRF[-_ ]?\d{4}|사업장|자재\s*이동", text, flags=re.IGNORECASE))
+
+    def _is_no_price_quantity_document(self, document: Document) -> bool:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        if doc_type in {"delivery_note", "inspection_report"}:
+            return True
+        if self._is_internal_transfer_document(document):
+            return True
+        if document.extracted_amount is not None or document.subtotal is not None or document.tax is not None:
+            return False
+        return bool(document.line_items) and any(
+            item.get("quantity") not in (None, "", []) or item.get("item_code") not in (None, "", []) or item.get("document_item_code") not in (None, "", [])
+            for item in document.line_items or []
+        )
+
     def _normalized_review_issues(self, document: Document, review_reasons: list[dict[str, Any]]) -> list[dict[str, Any]]:
         issues = self._dedupe_review_reasons(list(review_reasons), by_message=True)
         known_messages = {self._normalize_review_message(str(issue.get("message_ko"))) for issue in issues if issue.get("message_ko")}
@@ -332,7 +356,35 @@ class DocumentWorkflowEnrichmentService:
             if normalized_message not in known_messages:
                 issues.append(self._review_reason(code, message, self._low_confidence_field(field), item_index=item_index))
                 known_messages.add(normalized_message)
-        return self._dedupe_review_reasons(issues, by_message=True)
+        return self._collapse_repeated_item_issues(self._dedupe_review_reasons(issues, by_message=True))
+
+    def _collapse_repeated_item_issues(self, issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        collapsible = {
+            "missing_quantity": ("여러 품목의 수량 확인이 필요합니다.", "line_items.quantity"),
+            "missing_price_or_total": ("여러 품목의 단가 또는 합계금액 확인이 필요합니다.", "line_items.unit_price"),
+            "missing_document_item_code": ("여러 품목의 문서 품목코드 확인이 필요합니다.", "line_items.item_code"),
+        }
+        counts: dict[str, int] = {}
+        for issue in issues:
+            code = str(issue.get("code") or "")
+            if code in collapsible and issue.get("item_index") is not None:
+                counts[code] = counts.get(code, 0) + 1
+        collapsed_codes = {code for code, count in counts.items() if count >= 4}
+        if not collapsed_codes:
+            return issues
+        collapsed: list[dict[str, Any]] = []
+        emitted: set[str] = set()
+        for issue in issues:
+            code = str(issue.get("code") or "")
+            if code not in collapsed_codes or issue.get("item_index") is None:
+                collapsed.append(issue)
+                continue
+            if code in emitted:
+                continue
+            message, field = collapsible[code]
+            collapsed.append(self._review_reason(code, f"{message} ({counts[code]}건)", field))
+            emitted.add(code)
+        return self._dedupe_review_reasons(collapsed, by_message=True)
 
     def _is_legacy_amount_mismatch_message(self, message: str) -> bool:
         return "문서 합계금액" in message and "품목 합계금액" in message and "일치하지 않습니다" in message

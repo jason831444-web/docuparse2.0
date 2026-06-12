@@ -492,6 +492,8 @@ class DocumentProcessor:
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
         if doc_type not in manufacturing_types:
             return False
+        no_price_quantity_doc = self._is_no_price_quantity_document(document)
+        party_optional_doc = no_price_quantity_doc or self._is_internal_transfer_document(document)
         low_confidence = list(document.low_confidence_fields or [])
         if not document.line_items:
             low_confidence.append("missing_line_items")
@@ -503,7 +505,7 @@ class DocumentProcessor:
                 low_confidence.append(f"missing_item_name{code_suffix}")
             if item.get("quantity") in (None, "", []):
                 low_confidence.append(f"missing_quantity{code_suffix}")
-            if doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+            if not no_price_quantity_doc and doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 low_confidence.append(f"missing_price_or_total{code_suffix}")
             if item.get("validation_warnings"):
                 low_confidence.append(f"invalid_line_amount{code_suffix}")
@@ -520,12 +522,39 @@ class DocumentProcessor:
             low_confidence.append("missing_document_number")
         if not (document.issue_date or document.extracted_date):
             low_confidence.append("missing_issue_date")
+        if party_optional_doc:
+            low_confidence = [
+                field for field in low_confidence
+                if field not in {"missing_vendor_name", "missing_customer_name"}
+            ]
         if doc_type == "purchase_order" and not document.due_date:
             low_confidence.append("missing_due_date")
         if doc_type == "invoice" and not document.due_date:
             low_confidence.append("missing_payment_due_date")
         document.low_confidence_fields = sorted(set(low_confidence))
         return bool(document.low_confidence_fields)
+
+    def _is_internal_transfer_document(self, document: Document) -> bool:
+        values = [
+            getattr(document, "category", None),
+            *(getattr(document, "tags", None) or []),
+            getattr(document, "document_number", None),
+        ]
+        text = " ".join(str(value or "") for value in values)
+        return bool(re.search(r"internal[_ -]?transfer|\bTRF[-_ ]?\d{4}|사업장|자재\s*이동", text, flags=re.IGNORECASE))
+
+    def _is_no_price_quantity_document(self, document: Document) -> bool:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        if doc_type in {"delivery_note", "inspection_report"}:
+            return True
+        if self._is_internal_transfer_document(document):
+            return True
+        if document.extracted_amount is not None or document.subtotal is not None or document.tax is not None:
+            return False
+        return bool(document.line_items) and any(
+            item.get("quantity") not in (None, "", []) or item.get("item_code") not in (None, "", []) or item.get("document_item_code") not in (None, "", [])
+            for item in document.line_items or []
+        )
 
     def _is_manufacturing_type(self, document: Document) -> bool:
         return getattr(document.document_type, "value", str(document.document_type or "")) in {

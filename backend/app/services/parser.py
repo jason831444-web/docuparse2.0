@@ -646,6 +646,9 @@ class DocumentParser:
         special_items = self._extract_special_quantity_table_items(lines)
         if special_items and self._should_use_sparse_special_items(items):
             items.extend(special_items)
+        repeated_amount_items = self._extract_sparse_repeated_amount_table_items(lines)
+        if repeated_amount_items and self._should_use_repeated_amount_items(items, repeated_amount_items):
+            items = repeated_amount_items
         table_row_indexes = self._table_row_indexes(lines)
         for line_index, line in enumerate(lines):
             if line_index in table_row_indexes:
@@ -676,6 +679,29 @@ class DocumentParser:
         )
         return structured_count <= 1
 
+    def _should_use_repeated_amount_items(self, items: list[dict], repeated_items: list[dict]) -> bool:
+        if len(repeated_items) < 4:
+            return False
+        if not items:
+            return True
+        current_named = sum(1 for item in items if item.get("item_name"))
+        current_name_diversity = {
+            self._normalized_item_key(item.get("item_name"))
+            for item in items
+            if item.get("item_name")
+        }
+        if current_named > 3 and (len(current_name_diversity) > 2 or len(repeated_items) < current_named * 2):
+            return False
+        if len(repeated_items) < current_named + 2:
+            return False
+        current_total = self._line_items_total(items)
+        repeated_total = self._line_items_total(repeated_items)
+        if current_total is None:
+            return True
+        if repeated_total is None:
+            return True
+        return repeated_total >= current_total
+
     def _extract_special_quantity_table_items(self, lines: list[str]) -> list[dict]:
         items: list[dict] = []
         items.extend(self._extract_inspection_report_line_items(lines))
@@ -683,6 +709,135 @@ class DocumentParser:
         items.extend(self._extract_option_quotation_line_items(lines))
         items.extend(self._extract_statement_date_line_items(lines))
         return [self._normalize_line_item(item) for item in items if item.get("item_name")]
+
+    def _extract_sparse_repeated_amount_table_items(self, lines: list[str]) -> list[dict]:
+        text = "\n".join(lines)
+        if not re.search(r"(품목명|item\s*(?:name|description)|description)", text, flags=re.IGNORECASE):
+            return []
+        if not re.search(r"(단가|공급가액|합계금액|subtotal|amount|unit\s*price)", text, flags=re.IGNORECASE):
+            return []
+
+        starts: list[int] = []
+        for index, line in enumerate(lines):
+            if self._looks_like_sparse_repeated_item_name(line):
+                starts.append(index)
+        if len(starts) < 4:
+            return []
+
+        items: list[dict] = []
+        for pos, start in enumerate(starts):
+            end = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
+            segment = [line for line in lines[start:end] if str(line or "").strip()]
+            item = self._parse_sparse_repeated_amount_segment(segment)
+            if item:
+                items.append(self._normalize_line_item(item))
+        return items
+
+    def _looks_like_sparse_repeated_item_name(self, line: str) -> bool:
+        value = self._clean_value(line) or ""
+        if not value:
+            return False
+        if self._looks_like_business_label(value) or self._looks_like_instruction_or_note(value):
+            return False
+        if self._looks_like_amount_label_line(value):
+            return False
+        if self._extract_unit(value) and len(value) <= 4:
+            return False
+        if self._internal_item_code_from_line(value) or self._extract_item_code(value):
+            return False
+        if re.fullmatch(r"[-\d,.\[\]A-Za-z]+", value) and not re.search(r"(bolt|washer|pin|plate|rail|guide|cable|connector)", value, flags=re.IGNORECASE):
+            return False
+        if not re.search(r"[A-Za-z가-힣]", value):
+            return False
+        if re.search(
+            r"(볼트|와셔|베어링|하우징|핀|브라켓|플레이트|스페이서|철판|환봉|하네스|커넥터|"
+            r"bolt|washer|bearing|housing|pin|bracket|plate|spacer|harness|connector|rail|guide)",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        return False
+
+    def _parse_sparse_repeated_amount_segment(self, segment: list[str]) -> dict | None:
+        if not segment:
+            return None
+        name = self._clean_value(segment[0])
+        if not name:
+            return None
+        spec = None
+        item_code = None
+        unit = None
+        numeric_values: list[Decimal] = []
+        untrusted_supply_only = False
+        for raw in segment[1:]:
+            value = self._clean_value(raw) or ""
+            if not value:
+                continue
+            if self._looks_like_amount_label_line(value) or self._looks_like_instruction_or_note(value):
+                break
+            if item_code is None:
+                item_code = self._extract_item_code(value) or self._internal_item_code_from_line(value)
+            if spec is None and self._looks_like_sparse_spec_value(value):
+                spec = value
+                continue
+            unit = unit or self._extract_unit(value)
+            for token in re.findall(r"\[?\d[\d,]*(?:\.\d+)?[A-Za-z]?", value):
+                amount = self._amount_from_labeled_match(self._normalize_ocr_numeric_token(token.strip("[]")), value)
+                if amount is not None and amount > 0:
+                    numeric_values.append(amount)
+        if not numeric_values and not item_code and not spec:
+            return None
+        item: dict = {"item_name": name}
+        if item_code:
+            item["item_code"] = item_code
+        if spec:
+            item["specification"] = spec
+        if unit:
+            item["unit"] = unit
+        elif numeric_values:
+            item["unit"] = "EA"
+
+        amount_values = [value for value in numeric_values if value >= Decimal("1000")]
+        if amount_values:
+            triples = self._valid_amount_triples_from_values(numeric_values)
+            if triples:
+                supply, tax, total = triples[-1]
+                item["supply_amount"] = self._number_value(supply)
+                item["tax_amount"] = self._number_value(tax)
+                item["line_total"] = self._number_value(total)
+            else:
+                # In heavily fragmented long tables the OCR often preserves only
+                # per-line supply amounts. Keep the row candidate for review but
+                # do not pretend that a line total is known.
+                item["supply_amount"] = self._number_value(amount_values[-1])
+                item["validation_warnings"] = ["untrusted_ocr_amount"]
+                untrusted_supply_only = True
+
+        supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+        if supply is not None and supply > 0 and not untrusted_supply_only:
+            pair = self._choose_krw_quantity_price(
+                " ".join(str(item.get(field) or "") for field in ["item_name", "specification", "item_code"]),
+                supply,
+                " ".join(segment),
+            )
+            if pair:
+                item["quantity"] = self._number_value(pair[0])
+                item["unit_price"] = self._number_value(pair[1])
+        return item
+
+    def _looks_like_sparse_spec_value(self, value: str) -> bool:
+        return bool(re.search(r"\d+\s*[xX]\s*\d+|\d+(?:\.\d+)?\s*(?:mm|T)|\bM\d+\b", value, flags=re.IGNORECASE))
+
+    def _valid_amount_triples_from_values(self, values: list[Decimal]) -> list[tuple[Decimal, Decimal, Decimal]]:
+        triples: list[tuple[Decimal, Decimal, Decimal]] = []
+        for i, supply_value in enumerate(values):
+            for j in range(i + 1, min(i + 4, len(values))):
+                tax_value = values[j]
+                for k in range(j + 1, min(j + 4, len(values))):
+                    total_value = values[k]
+                    if abs(tax_value - supply_value * Decimal("0.1")) <= max(Decimal("1"), supply_value * Decimal("0.02")) and abs(total_value - (supply_value + tax_value)) <= max(Decimal("1"), total_value * Decimal("0.02")):
+                        triples.append((supply_value, tax_value, total_value))
+        return triples
 
     def _extract_inspection_report_line_items(self, lines: list[str]) -> list[dict]:
         text = "\n".join(lines)
@@ -1017,6 +1172,9 @@ class DocumentParser:
         if normalized.get("quantity") is None and normalized.get("unit") and not normalized.get("_quantity_suppressed"):
             normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
         warnings = self._line_item_amount_warnings(normalized)
+        for warning in item.get("validation_warnings") or []:
+            if warning not in warnings:
+                warnings.append(warning)
         if warnings:
             normalized["validation_warnings"] = warnings
         return {key: value for key, value in normalized.items() if value not in (None, "") and not str(key).startswith("_")}
@@ -1074,6 +1232,8 @@ class DocumentParser:
         lines: list[str],
     ) -> list[dict]:
         if not line_items or amount is None:
+            return line_items
+        if any("untrusted_ocr_amount" in (item.get("validation_warnings") or []) for item in line_items):
             return line_items
         if len(line_items) == 1 and self._line_item_amount_warnings(line_items[0]):
             return line_items
@@ -1364,6 +1524,7 @@ class DocumentParser:
                 self._normalized_item_key(item.get("item_code")),
                 self._normalized_item_key(item.get("specification")),
                 item.get("quantity"),
+                item.get("supply_amount"),
                 item.get("line_total"),
             )
             if key in seen:
@@ -1696,6 +1857,9 @@ class DocumentParser:
             segment_repaired: list[dict] = []
             changed = False
             for item, segment in zip(repaired, segments):
+                if "untrusted_ocr_amount" in (item.get("validation_warnings") or []):
+                    segment_repaired.append(item)
+                    continue
                 recovered = self._recover_krw_segment_amount_row(item, segment)
                 if recovered:
                     segment_repaired.append(recovered)
@@ -1705,6 +1869,8 @@ class DocumentParser:
             if changed:
                 repaired = segment_repaired
         for item in repaired:
+            if "untrusted_ocr_amount" in (item.get("validation_warnings") or []):
+                continue
             supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
             tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
             total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None

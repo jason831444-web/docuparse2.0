@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build a compact PASS/WARN/FAIL report from DocuParse E2E regression logs.")
+    parser.add_argument("--log", action="append", type=Path, required=True, help="E2E log produced by run_image_pdf_sample_regression. Can be repeated.")
+    parser.add_argument("--ground-truth", action="append", type=Path, default=[], help="Optional ground_truth.json file. Can be repeated.")
+    parser.add_argument("--output-json", type=Path, default=Path("/tmp/docuparse_e2e_logs/combined_regression_report.json"))
+    parser.add_argument("--output-md", type=Path, default=Path("/tmp/docuparse_e2e_logs/combined_regression_report.md"))
+    args = parser.parse_args()
+
+    truth = _load_ground_truth(args.ground_truth)
+    rows: list[dict[str, Any]] = []
+    for log_path in args.log:
+        for result in _load_log_results(log_path):
+            rows.append(_compare_result(result, truth.get(_truth_key(result.get("filename") or "")), source=str(log_path)))
+
+    args.output_json.parent.mkdir(parents=True, exist_ok=True)
+    args.output_json.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    args.output_md.write_text(_markdown_report(rows), encoding="utf-8")
+    print(f"Wrote {args.output_json}")
+    print(f"Wrote {args.output_md}")
+
+
+def _load_ground_truth(paths: list[Path]) -> dict[str, dict[str, Any]]:
+    truth: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        if not path.exists():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for entry in data if isinstance(data, list) else data.values():
+            filename = str(entry.get("file") or entry.get("filename") or "")
+            expected = entry.get("expected") or entry
+            if filename:
+                truth[_truth_key(filename)] = expected
+                # Photo and text-layer sets share the same logical names except
+                # for the real/photo prefix.
+                truth[_truth_key(filename.replace("_real_", "_photo_"))] = expected
+                truth[_truth_key(filename.replace("_photo_", "_real_"))] = expected
+    return truth
+
+
+def _truth_key(filename: str) -> str:
+    return re.sub(r"^(?:\d+_)?(?:real|photo)_", "", Path(filename).name.lower())
+
+
+def _load_log_results(path: Path) -> list[dict[str, Any]]:
+    text = path.read_text(encoding="utf-8")
+    marker = "\nJSON\n"
+    if marker in text:
+        payload = text.rsplit(marker, 1)[1].strip()
+        return json.loads(payload)
+    start = text.rfind("\n[")
+    if start >= 0:
+        return json.loads(text[start + 1:].strip())
+    raise ValueError(f"Could not find JSON result array in {path}")
+
+
+def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, source: str) -> dict[str, Any]:
+    reasons: list[str] = []
+    status = "PASS"
+    expected = expected or {}
+
+    def check(field: str, actual_key: str, expected_key: str | None = None) -> None:
+        nonlocal status
+        expected_value = expected.get(expected_key or field)
+        actual_value = result.get(actual_key)
+        if expected_value in (None, "", []):
+            return
+        if str(expected_value) != str(actual_value):
+            reasons.append(f"{field}: expected {expected_value}, got {actual_value}")
+            status = "FAIL"
+
+    check("type", "document_type", "document_type")
+    check("doc_no", "document_number", "document_number")
+    check("currency", "currency", "currency")
+
+    expected_total = expected.get("total_amount")
+    actual_total = result.get("extracted_amount")
+    if expected_total not in (None, "", []):
+        if _decimal(expected_total) != _decimal(actual_total):
+            reasons.append(f"total: expected {expected_total}, got {actual_total}")
+            status = "FAIL"
+
+    expected_count = expected.get("line_items")
+    actual_count = result.get("line_items_count")
+    if expected_count not in (None, "", []):
+        if actual_count is None or int(actual_count) < int(expected_count):
+            reasons.append(f"line_items_count: expected at least {expected_count}, got {actual_count}")
+            status = "WARN" if status == "PASS" else status
+
+    if result.get("error"):
+        reasons.append(str(result["error"]))
+        status = "FAIL"
+
+    return {
+        "filename": result.get("filename"),
+        "expected_type": expected.get("document_type"),
+        "actual_type": result.get("document_type"),
+        "expected_doc_no": expected.get("document_number"),
+        "actual_doc_no": result.get("document_number"),
+        "expected_total": expected.get("total_amount"),
+        "actual_total": result.get("extracted_amount"),
+        "expected_currency": expected.get("currency"),
+        "actual_currency": result.get("currency"),
+        "expected_line_items_count": expected_count,
+        "actual_line_items_count": actual_count,
+        "processing_status": result.get("processing_status"),
+        "review_required": result.get("review_required"),
+        "status": status,
+        "reasons": reasons,
+        "source": source,
+    }
+
+
+def _decimal(value: Any) -> Decimal | None:
+    try:
+        if value in (None, "", []):
+            return None
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _markdown_report(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "# DocuParse E2E Regression Report",
+        "",
+        "| Status | Filename | Type | Doc No | Total | Currency | Items | Reasons |",
+        "|---|---|---|---|---:|---|---:|---|",
+    ]
+    for row in rows:
+        reasons = "<br>".join(row.get("reasons") or [])
+        lines.append(
+            "| {status} | {filename} | {actual_type} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {reasons} |".format(
+                **{key: row.get(key) if row.get(key) is not None else "" for key in row}
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    main()

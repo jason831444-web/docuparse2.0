@@ -378,6 +378,90 @@ def test_realistic_photo_usd_invoice_total_uses_usd_total_label_not_exchange_rat
     assert parsed.extracted_amount == 650
 
 
+def test_realistic_photo_long_invoice_preserves_fragmented_repeated_rows_for_review():
+    text = "\n".join([
+        "거래처",
+        "월합계",
+        "인보이스",
+        "공급업체",
+        "대한정밀부품",
+        "고객사",
+        "한빛제조",
+        "계산서번호",
+        "INV-2026-",
+        "-0920-LONG",
+        "품목명",
+        "규격",
+        "단위",
+        "단가",
+        "공급가액",
+        "M8육각볼트",
+        "M8x20",
+        "11",
+        "[01",
+        "11550",
+        "SUS WASHER M8",
+        "M8",
+        "12",
+        "E4",
+        "110",
+        "13200",
+        "M8육각볼트",
+        "M8X20",
+        "3",
+        "115",
+        "14950",
+        "SUS WASHER M8",
+        "M8",
+        "2",
+        "16800",
+        "M8육각볼트",
+        "M8x20",
+        "150",
+        "18750",
+        "SUS WASHER M8",
+        "M8",
+        "166",
+        "20800",
+        "M8육각볼트",
+        "M8X2C",
+        "17",
+        "22950",
+        "SUS WASHER M8",
+        "M8",
+        "5200",
+        "M8육각볼트",
+        "M8X20",
+        "21C",
+        "3255",
+        "SUS WASHER MS",
+        "ME",
+        "240",
+        "4",
+        "M8육각볼트",
+        "M8X20",
+        "250",
+        "43750",
+        "합계금액",
+        "431200",
+        "*다품목월합계문서",
+        "페이지하단합계와마지막페이지총합계를",
+        "구분해야함",
+    ])
+
+    parsed = DocumentParser().parse(text, "20_photo_invoice_multipage_many_lines.pdf")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-2026-0920-LONG"
+    assert parsed.extracted_amount == 431200
+    assert len(parsed.line_items) >= 8
+    assert any(item["item_name"] == "SUS WASHER M8" for item in parsed.line_items)
+    assert any(item["item_name"] == "M8육각볼트" for item in parsed.line_items)
+    assert all("합계금액" not in item.get("item_name", "") for item in parsed.line_items)
+    assert sum(1 for item in parsed.line_items if item.get("validation_warnings") == ["untrusted_ocr_amount"]) >= 5
+    assert all(item.get("line_total") is None for item in parsed.line_items if "untrusted_ocr_amount" in item.get("validation_warnings", []))
+
+
 def test_vertical_paddleocr_quotation_without_item_codes_reconstructs_amount_rows():
     text = "\n".join([
         "견적서",
