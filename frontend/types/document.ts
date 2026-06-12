@@ -26,6 +26,35 @@ export interface DocumentTaxonomy {
   evidence?: string[];
 }
 
+export type ReviewIssueStatus = "open" | "resolved" | "ignored" | "blocked";
+
+export interface ReviewIssueState {
+  key: string;
+  code?: string | null;
+  field?: string | null;
+  item_index?: number | null;
+  status?: ReviewIssueStatus | string | null;
+  message_ko?: string | null;
+  note?: string | null;
+  updated_at?: string | null;
+  resolved_at?: string | null;
+}
+
+export interface DocumentReviewMetadata {
+  issues?: ReviewIssueState[];
+  reviewed_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  approval_note?: string | null;
+  review_state?: string | null;
+  approved?: boolean | null;
+  approval_validation?: {
+    ok?: boolean;
+    blocking?: string[];
+    warnings?: string[];
+  } | null;
+}
+
 export interface FolderSummary {
   label: string;
   value: string;

@@ -196,6 +196,11 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "export_policy": policy["export_policy"],
                 "export_blocked": policy["export_blocked"],
                 "export_warning": policy["export_warning"],
+                "approved": policy["approved"],
+                "review_state": policy["review_state"],
+                "reviewed_at": policy["reviewed_at"],
+                "approved_at": policy["approved_at"],
+                "approval_note": policy["approval_note"],
                 "taxonomy_evidence": ", ".join(taxonomy.get("evidence") or []),
             })
     return rows
@@ -238,6 +243,7 @@ def _export_taxonomy(document: Document) -> dict:
 
 def _export_policy(document: Document, taxonomy: dict) -> dict:
     profiles = set(taxonomy.get("document_profiles") or [])
+    review = _review_metadata(document)
     amount_required = taxonomy.get("amount_required")
     party_required = taxonomy.get("party_required")
     if amount_required is None:
@@ -253,15 +259,23 @@ def _export_policy(document: Document, taxonomy: dict) -> dict:
         warnings.append("amount_direction_requires_review")
         if not _related_document_number(document):
             warnings.append("related_document_missing")
-    if document.review_required:
+    if document.review_required and not review.get("approved"):
         warnings.append("review_required")
+    if review.get("approval_validation", {}).get("blocking"):
+        warnings.append("approval_validation_blocking")
     return {
         "amount_required": bool(amount_required),
         "party_required": bool(party_required),
         "export_policy": _policy_name(taxonomy, amount_required=bool(amount_required)),
-        "export_blocked": False,
+        "export_blocked": bool(review.get("approval_validation", {}).get("blocking")),
         "export_warning": ", ".join(dict.fromkeys(warnings)),
         "related_document_number": _related_document_number(document),
+        "approved": bool(review.get("approved")),
+        "review_state": review.get("review_state"),
+        "reviewed_at": review.get("reviewed_at"),
+        "approved_at": review.get("approved_at"),
+        "approval_note": review.get("approval_note"),
+        "forced_approval": bool(review.get("forced_approval")),
     }
 
 
@@ -308,6 +322,12 @@ def _review_reason_text(document: Document) -> str:
     for warning in document.warnings or []:
         values.append(str(warning))
     return ", ".join(dict.fromkeys(values))
+
+
+def _review_metadata(document: Document) -> dict:
+    metadata = document.workflow_metadata or {}
+    review = metadata.get("review") if isinstance(metadata.get("review"), dict) else {}
+    return review
 
 
 def _line_review_flags(document: Document, item_index: int) -> str:

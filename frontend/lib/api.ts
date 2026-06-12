@@ -27,7 +27,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail ?? "요청에 실패했습니다");
+    throw new Error(typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail ?? "요청에 실패했습니다"));
   }
   return response.json() as Promise<T>;
 }
@@ -83,8 +83,13 @@ export const api = {
     window.URL.revokeObjectURL(url);
   },
   reprocess: (id: string) => request<DocumentRecord>(`/documents/${id}/reprocess`, { method: "POST" }),
-  confirm: (id: string) => request<DocumentRecord>(`/documents/${id}/confirm`, { method: "POST" }),
+  confirm: (id: string, payload?: { approval_note?: string | null }) =>
+    request<DocumentRecord>(`/documents/${id}/confirm`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
   markNeedsReview: (id: string) => request<DocumentRecord>(`/documents/${id}/needs-review`, { method: "POST" }),
+  updateReviewIssue: (id: string, payload: { key: string; status: "open" | "resolved" | "ignored" | "blocked"; note?: string | null }) =>
+    request<DocumentRecord>(`/documents/${id}/review/issues`, { method: "POST", body: JSON.stringify(payload) }),
+  reopenReview: (id: string, payload?: { note?: string | null }) =>
+    request<DocumentRecord>(`/documents/${id}/review/reopen`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
   toggleFavorite: (id: string) => request<DocumentRecord>(`/documents/${id}/favorite`, { method: "POST" }),
   exportCsvUrl: (params = new URLSearchParams()) => `${API_BASE}/documents/export/csv${params.toString() ? `?${params.toString()}` : ""}`,
   exportExcelUrl: (params = new URLSearchParams()) => `${API_BASE}/documents/export/xlsx${params.toString() ? `?${params.toString()}` : ""}`,

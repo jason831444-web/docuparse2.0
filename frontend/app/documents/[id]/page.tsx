@@ -34,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
-import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, informationalReviewIssues, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueSummary, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, informationalReviewIssues, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueSummary, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
@@ -226,11 +226,13 @@ export default function DocumentDetailPage() {
   const [activeTab, setActiveTab] = useState<DetailTab>("original");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
+  const [approvalNote, setApprovalNote] = useState("");
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
     setDocument(item);
     form.reset(toForm(item));
+    setApprovalNote(documentReviewMetadata(item).approval_note || "");
   }, [form]);
 
   useEffect(() => {
@@ -297,11 +299,11 @@ export default function DocumentDetailPage() {
   async function confirmDocument() {
     setSaving(true);
     try {
-      const updated = await api.confirm(params.id);
+      const updated = await api.confirm(params.id, { approval_note: approvalNote || null });
       syncDocument(updated);
       toast.success("확정 완료로 변경했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "확정 처리에 실패했습니다");
+      toast.error(error instanceof Error ? `확정 처리 실패: ${error.message}` : "확정 처리에 실패했습니다");
     } finally {
       setSaving(false);
     }
@@ -315,6 +317,19 @@ export default function DocumentDetailPage() {
       toast.success("검토 필요 상태로 변경했습니다");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "검토 상태를 변경하지 못했습니다");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setReviewIssueStatus(key: string, status: "open" | "resolved" | "ignored" | "blocked") {
+    setSaving(true);
+    try {
+      const updated = await api.updateReviewIssue(params.id, { key, status });
+      syncDocument(updated);
+      toast.success(status === "resolved" ? "검토 항목을 해결됨으로 표시했습니다" : status === "ignored" ? "검토 항목을 무시로 표시했습니다" : "검토 항목 상태를 변경했습니다");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "검토 항목 상태를 변경하지 못했습니다");
     } finally {
       setSaving(false);
     }
@@ -441,6 +456,9 @@ export default function DocumentDetailPage() {
   const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
   const displayTitle = documentDisplayTitle(document);
+  const reviewMetadata = documentReviewMetadata(document);
+  const openIssueCount = (reviewMetadata.issues || []).filter((issue) => !["resolved", "ignored"].includes(String(issue.status || "open"))).length;
+  const resolvedIssueCount = (reviewMetadata.issues || []).filter((issue) => ["resolved", "ignored"].includes(String(issue.status || ""))).length;
 
   return (
     <main className="shell py-8">
@@ -669,15 +687,39 @@ export default function DocumentDetailPage() {
                   ["업무 분류", documentSubtypeLabel(documentTaxonomy(document).document_subtype)],
                   ["처리 상태", titleCaseLabel(document.processing_status)],
                   ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
+                  ["검토 진행", `${openIssueCount}개 열림 / ${resolvedIssueCount}개 해결`],
+                  ["승인 일시", reviewMetadata.approved_at ? formatDateTime(reviewMetadata.approved_at) : null],
                   ["검토 필요 항목", blockingIssues.length ? blockingIssues.map(reviewIssueSummary).join(", ") : "없음"],
                 ]}
               />
+              <div className="grid gap-2 rounded-lg border bg-white p-3">
+                <label className="grid gap-2 text-sm font-medium">
+                  승인 메모
+                  <Textarea
+                    className="min-h-20"
+                    placeholder="예: 원본 PDF와 대조 후 ERP 입력 전 확인 완료"
+                    value={approvalNote}
+                    onChange={(event) => setApprovalNote(event.target.value)}
+                  />
+                </label>
+                <p className="text-xs text-muted-foreground">검토 완료 버튼을 누르면 이 메모가 workflow metadata에 저장됩니다.</p>
+              </div>
               {blockingIssues.length ? (
                 <div className="grid gap-2">
                   {blockingIssues.map((issue) => (
                     <div key={`${issue.code}-${issue.field}-${issue.item_index}-${issue.message_ko}`} className="rounded-lg border border-amber-200 bg-white p-3 text-sm">
-                      <p className="font-medium text-amber-900">{reviewIssueSummary(issue)}</p>
-                      <p className="mt-1 text-xs text-amber-800">{reviewIssueDescription(issue)}</p>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-amber-900">{reviewIssueSummary(issue)}</p>
+                          <p className="mt-1 text-xs text-amber-800">{reviewIssueDescription(issue)}</p>
+                        </div>
+                        {issue.key ? (
+                          <div className="flex gap-1">
+                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => setReviewIssueStatus(issue.key!, "resolved")}>해결</Button>
+                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => setReviewIssueStatus(issue.key!, "ignored")}>무시</Button>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   ))}
                 </div>

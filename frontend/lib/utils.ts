@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { DocumentTaxonomy } from "@/types/document";
+import type { DocumentReviewMetadata } from "@/types/document";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -272,6 +273,7 @@ export function businessIssueDate(document: { document_type?: string | null; iss
 }
 
 export interface NormalizedReviewIssue {
+  key?: string;
   code: string;
   message_ko: string;
   field?: string;
@@ -293,6 +295,15 @@ export function normalizedReviewIssues(document: {
   const metadata = document.workflow_metadata ?? {};
   const taxonomy = documentTaxonomy(document);
   const noPriceDocument = (taxonomy.document_profiles || []).includes("no_price_document") || taxonomy.amount_required === false;
+  const review = asRecord(metadata.review);
+  const reviewIssues = Array.isArray(review.issues) ? review.issues : [];
+  const reviewStatusByKey = new Map<string, string>();
+  reviewIssues.forEach((issue) => {
+    if (issue && typeof issue === "object") {
+      const record = issue as Record<string, unknown>;
+      if (typeof record.key === "string" && typeof record.status === "string") reviewStatusByKey.set(record.key, record.status);
+    }
+  });
   const fromMetadata = Array.isArray(metadata.normalized_review_issues)
     ? metadata.normalized_review_issues
     : Array.isArray(metadata.review_reasons)
@@ -305,6 +316,7 @@ export function normalizedReviewIssues(document: {
       ? { code: "validation_warning", message_ko: issue }
       : {
           code: String(issue.code || "review_required"),
+          key: typeof issue.key === "string" ? issue.key : undefined,
           message_ko: String(issue.message_ko || ""),
           field: typeof issue.field === "string" ? issue.field : undefined,
           item_index: typeof issue.item_index === "number" ? issue.item_index : undefined,
@@ -317,6 +329,11 @@ export function normalizedReviewIssues(document: {
     if (noPriceDocument && normalized.code === "missing_price_or_total") {
       normalized.severity = "info";
       normalized.message_ko = "이 문서 유형에서는 금액 정보가 없을 수 있습니다.";
+    }
+    normalized.key ||= `${normalized.code}:${normalized.field || "document"}:${normalized.item_index ?? ""}`;
+    const reviewStatus = reviewStatusByKey.get(normalized.key);
+    if (reviewStatus === "resolved" || reviewStatus === "ignored") {
+      normalized.severity = "info";
     }
     if (!normalized.message_ko) return;
     const messageKey = normalized.message_ko.replace(/\s+/g, " ").trim();
@@ -341,6 +358,21 @@ export function normalizedReviewIssues(document: {
   return issues;
 }
 
+export function documentReviewMetadata(document: { workflow_metadata?: Record<string, unknown> | null }): DocumentReviewMetadata {
+  const metadata = asRecord(document.workflow_metadata);
+  const review = asRecord(metadata.review);
+  return {
+    issues: Array.isArray(review.issues) ? review.issues.filter((item): item is NonNullable<DocumentReviewMetadata["issues"]>[number] => Boolean(item && typeof item === "object" && "key" in item)) : [],
+    reviewed_at: optionalString(review.reviewed_at),
+    approved_at: optionalString(review.approved_at),
+    approved_by: optionalString(review.approved_by),
+    approval_note: optionalString(review.approval_note),
+    review_state: optionalString(review.review_state),
+    approved: typeof review.approved === "boolean" ? review.approved : null,
+    approval_validation: asRecord(review.approval_validation) as DocumentReviewMetadata["approval_validation"],
+  };
+}
+
 export function reviewIssueAmountLines(issue: NormalizedReviewIssue) {
   if (issue.code !== "amount_mismatch") return [];
   const currency = issue.currency || "KRW";
@@ -361,8 +393,8 @@ export function reviewIssueSummary(issue: NormalizedReviewIssue) {
   const labels: Record<string, string> = {
     missing_price_or_total: "금액/총액 누락",
     untrusted_ocr_amount: "금액 OCR 신뢰도 낮음",
-    amount_mismatch: "품목 합계와 총액 불일치",
-    line_items_total_mismatch: "품목 합계와 총액 불일치",
+    amount_mismatch: "문서 총액과 품목 합계 불일치",
+    line_items_total_mismatch: "문서 총액과 품목 합계 불일치",
     ambiguous_item_match: "품목 매칭 모호",
     internal_item_ambiguous: "품목 매칭 모호",
     internal_item_unmatched: "내부 품목 미매칭",

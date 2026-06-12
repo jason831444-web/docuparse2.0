@@ -23,6 +23,9 @@ from app.schemas.document import (
     DocumentStats,
     DocumentUpdate,
     FolderSummary,
+    ReviewApprovalRequest,
+    ReviewIssueUpdate,
+    ReviewReopenRequest,
 )
 from app.services.export import document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
 from app.services.category_taxonomy import category_path_for, clean_tags_for_context, display_label, normalize_category_value
@@ -31,6 +34,7 @@ from app.services.queue_service import get_document_queue
 from app.services.storage import get_storage_service
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 from app.services.document_processor import DocumentProcessor
+from app.services.review_workflow import approve_document, reopen_document, review_metadata, update_issue_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -433,6 +437,7 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    previous_review = (document.workflow_metadata or {}).get("review") if isinstance(document.workflow_metadata, dict) else None
     values = sanitize_for_postgres(payload.model_dump(exclude_unset=True))
     if "category" in values:
         values["category"] = normalize_category_value(values.get("category"))
@@ -454,7 +459,10 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     document.key_dates = workflow.key_dates
     document.urgency_level = workflow.urgency_level
     document.follow_up_required = workflow.follow_up_required
-    document.workflow_metadata = sanitize_for_postgres(workflow.workflow_metadata or None)
+    workflow_metadata = workflow.workflow_metadata or {}
+    if isinstance(previous_review, dict):
+        workflow_metadata["review"] = previous_review
+    document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
     document.tags = clean_tags_for_context(
         document.tags,
         category=document.category,
@@ -464,7 +472,6 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
         follow_up_required=workflow.follow_up_required,
         urgency_level=workflow.urgency_level,
     )
-    workflow_metadata = workflow.workflow_metadata or {}
     document.review_required = bool(workflow_metadata.get("review_required")) if "review_required" in workflow_metadata else bool(workflow.warnings)
     if document.processing_status not in {ProcessingStatus.processing, ProcessingStatus.queued, ProcessingStatus.failed, ProcessingStatus.confirmed}:
         document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
@@ -475,10 +482,15 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
 
 
 @router.post("/{document_id}/confirm", response_model=DocumentRead)
-def confirm_document(document_id: UUID, db: Session = Depends(get_db)) -> DocumentRead:
+def confirm_document(document_id: UUID, payload: ReviewApprovalRequest | None = None, db: Session = Depends(get_db)) -> DocumentRead:
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    validation = approve_document(document, approval_note=payload.approval_note if payload else None)
+    if not validation.ok:
+        db.add(document)
+        db.commit()
+        raise HTTPException(status_code=409, detail={"message": "Approval blocked by unresolved review issues.", **validation.to_dict()})
     document.review_required = False
     document.processing_status = ProcessingStatus.confirmed
     db.add(document)
@@ -492,6 +504,44 @@ def mark_document_needs_review(document_id: UUID, db: Session = Depends(get_db))
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    document.review_required = True
+    document.processing_status = ProcessingStatus.needs_review
+    reopen_document(document)
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return _to_read(document)
+
+
+@router.get("/{document_id}/review", response_model=dict)
+def get_document_review(document_id: UUID, db: Session = Depends(get_db)) -> dict:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return review_metadata(document)
+
+
+@router.post("/{document_id}/review/issues", response_model=DocumentRead)
+def update_document_review_issue(document_id: UUID, payload: ReviewIssueUpdate, db: Session = Depends(get_db)) -> DocumentRead:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        update_issue_status(document, payload.key, payload.status, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return _to_read(document)
+
+
+@router.post("/{document_id}/review/reopen", response_model=DocumentRead)
+def reopen_document_review(document_id: UUID, payload: ReviewReopenRequest | None = None, db: Session = Depends(get_db)) -> DocumentRead:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    reopen_document(document, note=payload.note if payload else None)
     document.review_required = True
     document.processing_status = ProcessingStatus.needs_review
     db.add(document)

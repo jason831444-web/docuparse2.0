@@ -120,6 +120,20 @@ class BulkDocumentRequest(BaseModel):
     ids: list[UUID] = Field(min_length=1, max_length=100)
 
 
+class ReviewApprovalRequest(BaseModel):
+    approval_note: str | None = Field(default=None, max_length=1000)
+
+
+class ReviewIssueUpdate(BaseModel):
+    key: str = Field(min_length=1, max_length=240)
+    status: str = Field(pattern="^(open|resolved|ignored|blocked)$")
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ReviewReopenRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ActivitySummary(BaseModel):
     recent_uploads: list[DocumentRead] = Field(default_factory=list)
     recent_edits: list[DocumentRead] = Field(default_factory=list)
