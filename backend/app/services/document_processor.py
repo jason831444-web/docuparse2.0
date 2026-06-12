@@ -155,6 +155,11 @@ class DocumentProcessor:
             document.title = self._apply_title_hint(document.title, interpretation)
             document.category = self._apply_category_hint(document.category, interpretation)
             document.document_type = self._refined_document_type(document.document_type, interpretation)
+            if self._is_return_or_credit_parsed_document(parsed, raw_text):
+                document.document_type = parsed.document_type
+                document.ai_document_type = parsed.document_type
+                document.category = "return_note"
+                document.tags = ["return_note"]
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.document_type = parsed.document_type
                 document.ai_document_type = parsed.document_type
@@ -441,6 +446,14 @@ class DocumentProcessor:
         interpretation.profile = doc_type
         interpretation.subtype = doc_type
         return interpretation
+
+    def _is_return_or_credit_parsed_document(self, parsed: object, raw_text: str) -> bool:
+        doc_number = str(getattr(parsed, "document_number", "") or "")
+        text = "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:10])
+        return bool(
+            re.search(r"^RTN[-_ ]?\d{4}", doc_number, flags=re.IGNORECASE)
+            or re.search(r"(반품\s*/?\s*차감|반품\s*요청|차감\s*요청|return\s+note|credit\s+note)", text, flags=re.IGNORECASE)
+        )
 
     def _sum_line_item_field(self, line_items: list[dict], field: str) -> Decimal | None:
         total = Decimal("0")

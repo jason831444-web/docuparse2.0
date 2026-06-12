@@ -231,6 +231,153 @@ def test_vertical_paddleocr_purchase_order_table_reconstructs_items_and_totals()
     assert parsed.line_items[3]["line_total"] == 123200
 
 
+def test_realistic_photo_option_quote_preserves_option_line_items_without_totaling_all_options():
+    text = "\n".join([
+        "견",
+        "적서",
+        "고객사",
+        "미래정밀",
+        "공급엽체",
+        "한성산엽",
+        "견적번호",
+        "QT-2026-0912-ALT",
+        "단위",
+        "단가",
+        "공급가액",
+        "규격",
+        "24500",
+        "245000",
+        "스텐판2T션A",
+        "SU5304 2T",
+        "F",
+        "EA",
+        "31000",
+        "310000",
+        "스텐판2T션B",
+        "SUS3162T",
+        "A2",
+        "2800",
+        "168000",
+        "SU5304브라켓",
+        "50X80X3T",
+        "VAT",
+        "별도10%",
+        "선택시합계",
+        "얌션별상이",
+        "*옵션A/8중하나선택필요",
+        "옵션라인을",
+        "모두합산하면안됨",
+    ])
+
+    parsed = DocumentParser().parse(text, "12_photo_quote_options_multiple_valid_until.pdf")
+
+    assert parsed.document_type == DocumentType.quotation
+    assert parsed.vendor_name == "한성산엽"
+    assert parsed.document_number == "QT-2026-0912-ALT"
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 3
+    assert [item["supply_amount"] for item in parsed.line_items] == [245000, 310000, 168000]
+
+
+def test_realistic_photo_special_quantity_documents_do_not_hallucinate_amounts():
+    inspection_text = "\n".join([
+        "입고검사성적서",
+        "공급업체",
+        "대영부품",
+        "고객사",
+        "오성테크",
+        "검사번호",
+        "QC-2026-0918-044",
+        "Lot No",
+        "입고수량",
+        "합격수량",
+        "불량수량",
+        "베어링하우징",
+        "LOT-BRG-0918-A",
+        "100mn",
+        "49",
+        "S45C PIN 8X60",
+        "LOT-PIN-O918-B",
+        "300",
+        "*불량1EA는반품예정ERP매입전품질담당확인필요",
+    ])
+    transfer_text = "\n".join([
+        "사업장간",
+        "자재",
+        "이동",
+        "요청서",
+        "문서번호",
+        "TRF-2026-0922-002",
+        "내부품목코드",
+        "규격",
+        "요청수림",
+        "품목명",
+        "SUS304 2T PLATE",
+        "M-PLT-SUS304-2T-1000X20001000X2000",
+        "EA",
+        "M8육각볼트",
+        "P-BOLT-M8-20-ZN",
+        "M8x20",
+        "SU5304평와셔M8",
+        "P-WASH-SUS3O4-M8",
+        "*거래처문서가아니라내부사엽장이동문서분류확인필요",
+    ])
+
+    inspection = DocumentParser().parse(inspection_text, "18_photo_incoming_inspection_report.pdf")
+    transfer = DocumentParser().parse(transfer_text, "22_photo_internal_branch_transfer_delivery.pdf")
+
+    assert inspection.document_type == DocumentType.inspection_report
+    assert inspection.currency is None
+    assert inspection.extracted_amount is None
+    assert len(inspection.line_items) == 2
+    assert all("line_total" not in item for item in inspection.line_items)
+
+    assert transfer.document_number == "TRF-2026-0922-002"
+    assert transfer.currency is None
+    assert transfer.extracted_amount is None
+    assert len(transfer.line_items) == 3
+    assert all("line_total" not in item for item in transfer.line_items)
+
+
+def test_realistic_photo_usd_invoice_total_uses_usd_total_label_not_exchange_rate_note():
+    text = "\n".join([
+        "COMMERCIAL",
+        "INVOICE",
+        "Vendor",
+        "Global Motion Parts LLC",
+        "Customer",
+        "NeoFactory Korea",
+        "Invoice No",
+        "INV-US-2026-0916-Ex",
+        "Currency",
+        "USD",
+        "Exchange",
+        "Rate NdtESD",
+        "370 KRW참고",
+        "Description",
+        "Vendor SKU",
+        "Spec",
+        "Unit Price",
+        "Linear Guide Rail HGW2O",
+        "HGW2O-1000",
+        "1000mm",
+        "4500",
+        "Subtotal USD",
+        "65000",
+        "Ta",
+        "000",
+        "Total USD",
+        "65000",
+        "*통관/회계입력시원화환산기준일확인필요",
+    ])
+
+    parsed = DocumentParser().parse(text, "16_photo_commercial_invoice_exchange_rate.pdf")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.currency == "USD"
+    assert parsed.extracted_amount == 650
+
+
 def test_vertical_paddleocr_quotation_without_item_codes_reconstructs_amount_rows():
     text = "\n".join([
         "견적서",
