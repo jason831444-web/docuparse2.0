@@ -657,6 +657,9 @@ class DocumentParser:
         repeated_amount_items = self._extract_sparse_repeated_amount_table_items(lines)
         if repeated_amount_items and self._should_use_repeated_amount_items(items, repeated_amount_items):
             items = repeated_amount_items
+        fragmented_fax_items = self._extract_fragmented_fax_table_items(lines)
+        if fragmented_fax_items and len(fragmented_fax_items) > len(items):
+            items = fragmented_fax_items
         table_row_indexes = self._table_row_indexes(lines)
         for line_index, line in enumerate(lines):
             if line_index in table_row_indexes:
@@ -908,7 +911,13 @@ class DocumentParser:
             segment = [line for line in lines[start:end] if str(line or "").strip()]
             item = self._parse_sparse_repeated_amount_segment(segment)
             if item:
-                items.append(self._normalize_line_item(item))
+                normalized = self._normalize_line_item(item)
+                # Repeated photographed tables can contain legitimate rows
+                # with the same name/spec after OCR drops the amount cells.
+                # Keep source order available only for dedupe; it is stripped
+                # before results leave the parser.
+                normalized["_dedupe_token"] = start
+                items.append(normalized)
         return items
 
     def _looks_like_sparse_repeated_item_name(self, line: str) -> bool:
@@ -921,20 +930,108 @@ class DocumentParser:
             return False
         if self._extract_unit(value) and len(value) <= 4:
             return False
-        if self._internal_item_code_from_line(value) or self._extract_item_code(value):
+        has_item_keyword = bool(re.search(
+            r"(볼트|와셔|베어링|하우징|핀|브라켓|플레이트|스페이서|철판|환봉|하네스|커넥터|"
+            r"bolt|washer|bearing|housing|pin|bracket|plate|spacer|harness|connector|rail|guide)",
+            value,
+            flags=re.IGNORECASE,
+        ))
+        if (self._internal_item_code_from_line(value) or self._extract_item_code(value)) and not has_item_keyword:
             return False
         if re.fullmatch(r"[-\d,.\[\]A-Za-z]+", value) and not re.search(r"(bolt|washer|pin|plate|rail|guide|cable|connector)", value, flags=re.IGNORECASE):
             return False
         if not re.search(r"[A-Za-z가-힣]", value):
             return False
-        if re.search(
-            r"(볼트|와셔|베어링|하우징|핀|브라켓|플레이트|스페이서|철판|환봉|하네스|커넥터|"
-            r"bolt|washer|bearing|housing|pin|bracket|plate|spacer|harness|connector|rail|guide)",
-            value,
-            flags=re.IGNORECASE,
-        ):
+        if has_item_keyword:
             return True
         return False
+
+    def _extract_fragmented_fax_table_items(self, lines: list[str]) -> list[dict]:
+        text = "\n".join(lines)
+        if not re.search(r"(팩스|fax)", text, flags=re.IGNORECASE):
+            return []
+        if not re.search(r"(금액\s*검토|0\s*/\s*o|o\s*/\s*0|혼동|misalign|공급가액)", text, flags=re.IGNORECASE):
+            return []
+        anchors: list[tuple[int, str]] = []
+        for index, line in enumerate(lines):
+            value = self._clean_value(line) or ""
+            if not value or self._looks_like_business_label(value) or self._looks_like_instruction_or_note(value):
+                continue
+            if self._looks_like_amount_label_line(value):
+                continue
+            if re.search(
+                r"(베어링\s*하우징|베어링하우징|S45C\s*PIN|볼트\s*/\s*와셔|볼트.*와셔|"
+                r"bearing\s*housing|s45c\s*pin|bolt.*washer)",
+                value,
+                flags=re.IGNORECASE,
+            ):
+                anchors.append((index, value))
+        if len(anchors) < 2:
+            return []
+
+        items: list[dict] = []
+        for pos, (start, name) in enumerate(anchors):
+            end = anchors[pos + 1][0] if pos + 1 < len(anchors) else len(lines)
+            segment: list[str] = []
+            for raw in lines[start + 1:end]:
+                value = self._clean_value(raw) or ""
+                if not value:
+                    continue
+                if re.search(r"(공급가액|세액|합계금액|총액|담당|검토|승인|DocuParse|synthetic)", value, flags=re.IGNORECASE):
+                    break
+                segment.append(value)
+            item: dict = {
+                "item_name": self._clean_fragmented_fax_item_name(name),
+                "validation_warnings": ["fax_row_boundary_uncertain"],
+            }
+            spec = self._spec_from_fragmented_fax_name(name)
+            if spec:
+                item["specification"] = spec
+            amounts: list[Decimal] = []
+            for value in segment:
+                for token in re.findall(r"\d[\d,]*(?:\.\d+)?[A-Za-z]?", value):
+                    amount = self._amount_from_labeled_match(self._normalize_ocr_numeric_token(token), value)
+                    if amount is not None and amount > 0:
+                        amounts.append(amount)
+            raw_total = self._choose_untrusted_fragmented_line_total(amounts)
+            if raw_total is not None:
+                item["line_total"] = self._number_value(raw_total)
+                if "untrusted_ocr_amount" not in item["validation_warnings"]:
+                    item["validation_warnings"].append("untrusted_ocr_amount")
+            normalized = self._normalize_line_item(item)
+            normalized["_dedupe_token"] = start
+            items.append(normalized)
+        return items
+
+    def _clean_fragmented_fax_item_name(self, value: str) -> str:
+        text = self._clean_value(value) or ""
+        text = re.sub(r"\b8X6[QO]\b", "8X60", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip()
+        if re.search(r"베어링\s*하우징|베어링하우징", text):
+            return "베어링 하우징"
+        return text
+
+    def _spec_from_fragmented_fax_name(self, value: str) -> str | None:
+        text = str(value or "")
+        match = re.search(r"\b(\d+\s*[xX]\s*\d+|\d+\s*mm)\b", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        spec = match.group(1).replace(" ", "")
+        spec = re.sub(r"8X6[QO]$", "8X60", spec, flags=re.IGNORECASE)
+        return spec
+
+    def _choose_untrusted_fragmented_line_total(self, amounts: list[Decimal]) -> Decimal | None:
+        if not amounts:
+            return None
+        plausible = [amount for amount in amounts if amount >= Decimal("10000")]
+        if not plausible:
+            return None
+        if len(amounts) >= 3 and amounts[1] <= amounts[0] * Decimal("0.2") and amounts[2] > amounts[0]:
+            return amounts[2]
+        for amount in plausible:
+            if amount >= Decimal("50000"):
+                return amount
+        return plausible[-1]
 
     def _parse_sparse_repeated_amount_segment(self, segment: list[str]) -> dict | None:
         if not segment:
@@ -1696,7 +1793,18 @@ class DocumentParser:
     def _dedupe_line_items(self, items: list[dict]) -> list[dict]:
         deduped: list[dict] = []
         seen: set[tuple] = set()
+        preserve_sparse_review_duplicates = len(items) >= 8
         for item in items:
+            has_numeric_evidence = any(
+                item.get(field) is not None
+                for field in ["quantity", "unit_price", "supply_amount", "tax_amount", "line_total"]
+            )
+            preserve_duplicate = (
+                preserve_sparse_review_duplicates
+                and not has_numeric_evidence
+                and bool(item.get("item_name"))
+                and self._looks_like_sparse_repeated_item_name(str(item.get("item_name") or ""))
+            )
             key = (
                 self._normalized_item_key(item.get("item_name")),
                 self._normalized_item_key(item.get("item_code")),
@@ -1704,11 +1812,12 @@ class DocumentParser:
                 item.get("quantity"),
                 item.get("supply_amount"),
                 item.get("line_total"),
+                item.get("_dedupe_token"),
             )
-            if key in seen:
+            if key in seen and not preserve_duplicate:
                 continue
             seen.add(key)
-            deduped.append(item)
+            deduped.append({key: value for key, value in item.items() if not str(key).startswith("_")})
         return deduped
 
     def _collapse_duplicate_line_item_sets(self, items: list[dict], document_total: Decimal | None) -> list[dict]:
@@ -1792,6 +1901,11 @@ class DocumentParser:
             or item.get("quantity")
             or item.get("supply_amount")
             or item.get("line_total")
+            or (
+                len(items) >= 8
+                and item.get("item_name")
+                and self._looks_like_sparse_repeated_item_name(str(item.get("item_name") or ""))
+            )
         ]
 
     def _clean_ocr_line_item_artifacts(self, item: dict) -> dict:

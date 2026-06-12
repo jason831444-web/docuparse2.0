@@ -1426,6 +1426,138 @@ def test_visual_fax_numbered_table_avoids_over_split_and_normalizes_ocr_zero_amo
     assert parsed.line_items[2]["unit"] == "SET"
 
 
+def test_photographed_long_invoice_preserves_repeated_rows_when_amount_cells_drop_out():
+    text = "\n".join([
+        "거래처",
+        "월합계",
+        "인보이스",
+        "계산서번호",
+        "INV-2026-0920-LONG",
+        "품목명",
+        "규격",
+        "단위",
+        "단가",
+        "공급가액",
+        "M8육각볼트",
+        "M8x20",
+        "11",
+        "[01",
+        "11550",
+        "SUS WASHER M8",
+        "M8",
+        "12",
+        "E4",
+        "110",
+        "13200",
+        "M8육각볼트",
+        "M8X20",
+        "3",
+        "115",
+        "14950",
+        "SUS WASHER M8",
+        "M8",
+        "2",
+        "16800",
+        "M8육각볼트",
+        "M8x20",
+        "150",
+        "18750",
+        "SUS WASHER M8",
+        "M8",
+        "166",
+        "20800",
+        "M8육각볼트",
+        "M8X2C",
+        "17",
+        "22950",
+        "SUS WASHER M8",
+        "M8",
+        "5200",
+        "M8육각볼트",
+        "M8x20",
+        "-",
+        "755",
+        "SUS WASHER M8",
+        "M8",
+        "20C",
+        "M8육각볼트",
+        "M8X20",
+        "21C",
+        "3255",
+        "SUS WASHER M8",
+        "ME",
+        "220",
+        "M8육각볼트",
+        "M8X2",
+        "230",
+        "795",
+        "SUS WASHER MS",
+        "ME",
+        "240",
+        "4",
+        "M8육각볼트",
+        "M8X20",
+        "250",
+        "43750",
+        "합계금액",
+        "431200",
+    ])
+
+    parsed = DocumentParser().parse(text, "20_photo_invoice_multipage_many_lines.pdf")
+
+    assert parsed.document_number == "INV-2026-0920-LONG"
+    assert parsed.extracted_amount == 431200
+    assert len(parsed.line_items) == 15
+    assert parsed.line_items[11]["item_name"] == "SUS WASHER M8"
+    assert parsed.line_items[13]["item_name"] == "SUS WASHER MS"
+    assert "line_total" not in parsed.line_items[11]
+    assert "line_total" not in parsed.line_items[13]
+    assert any("untrusted_ocr_amount" in item.get("validation_warnings", []) for item in parsed.line_items)
+
+
+def test_photographed_fax_fragmented_rows_split_safe_item_candidates_without_inventing_missing_row():
+    text = "\n".join([
+        "팩스",
+        "발주서",
+        "발주번호",
+        "FAXx-PO-2026-0921",
+        "품목명",
+        "공급가액",
+        "베어링하우징",
+        "800C",
+        "16000",
+        "1600",
+        "176000",
+        "S45C PIN 8X6Q",
+        "50000",
+        "500C",
+        "66000",
+        "16000",
+        "1600C",
+        "176000",
+        "공급가액",
+        "380000",
+        "세액",
+        "38000",
+        "합계금액",
+        "418000",
+        "팩스스캔으로이/0혼동발생가능",
+        "금액검토필요",
+    ])
+
+    parsed = DocumentParser().parse(text, "21_photo_fax_po_misaligned_amounts.pdf")
+
+    assert parsed.document_number == "FAX-PO-2026-0921"
+    assert parsed.extracted_amount == 418000
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["item_name"] == "베어링 하우징"
+    assert parsed.line_items[0]["line_total"] == 176000
+    assert parsed.line_items[1]["item_name"] == "S45C PIN 8X60"
+    assert parsed.line_items[1]["line_total"] == 66000
+    assert all("fax_row_boundary_uncertain" in item.get("validation_warnings", []) for item in parsed.line_items)
+    assert all("untrusted_ocr_amount" in item.get("validation_warnings", []) for item in parsed.line_items)
+
+
 def test_visual_internal_transfer_numbered_table_preserves_quantities_without_amounts():
     text = "\n".join([
         "사업장간 자재 이동 요청서",
