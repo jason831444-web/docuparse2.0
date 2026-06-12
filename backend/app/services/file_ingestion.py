@@ -82,7 +82,12 @@ class FileIngestionService:
             mime_type=detected.mime_type,
             extraction_method="image_ocr_fast_path",
             normalized_text=self._normalize_text(text),
-            raw_extracted_blocks=[{"type": "image_ocr_text", "content": text, "table_blocks": result["table_blocks"]}],
+            raw_extracted_blocks=[{
+                "type": "image_ocr_text",
+                "content": text,
+                "table_blocks": result["table_blocks"],
+                "line_candidates": result["line_candidates"],
+            }],
             extraction_warnings=warnings,
             file_metadata={**self._metadata(path, detected), **result["metadata"]},
             ocr_confidence=confidence,
@@ -97,6 +102,7 @@ class FileIngestionService:
                 "text": result.text,
                 "confidence": result.confidence,
                 "table_blocks": result.table_blocks,
+                "line_candidates": result.line_candidates,
                 "metadata": {
                     "ocr_engine": result.engine_name,
                     "ocr_confidence": result.confidence,
@@ -119,6 +125,7 @@ class FileIngestionService:
             "text": text,
             "confidence": confidence,
             "table_blocks": [],
+            "line_candidates": [],
             "metadata": {
                 "ocr_engine": getattr(self.ocr, "engine_name", self.ocr.__class__.__name__),
                 "ocr_confidence": confidence,

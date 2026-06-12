@@ -34,6 +34,17 @@ class FakePaddleProvider:
             provider_attempted=[self.engine_name],
             provider_succeeded=self.engine_name,
             table_blocks=[{"rows": [["품목명", "수량"], ["볼트", "10"]]}],
+            line_candidates=[
+                {
+                    "text": "볼트",
+                    "confidence": 0.94,
+                    "bbox": [[10.0, 20.0], [50.0, 20.0], [50.0, 38.0], [10.0, 38.0]],
+                    "x_min": 10.0,
+                    "y_min": 20.0,
+                    "x_max": 50.0,
+                    "y_max": 38.0,
+                }
+            ],
         )
 
 
@@ -127,6 +138,19 @@ def test_provider_diagnostics_are_saved_in_image_ingestion_metadata(tmp_path):
     assert normalized.file_metadata["ocr_provider_failed_reason"]["paddleocr"] == "paddle unavailable"
 
 
+def test_image_ingestion_preserves_ocr_line_candidates_in_raw_blocks(tmp_path):
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"fake")
+    ocr = OCRService(paddle_provider=FakePaddleProvider(), tesseract_provider=FakeTesseractProvider(), prefer_paddleocr=True)
+    ingestion = FileIngestionService(detector=ImageDetector(), ocr=ocr)
+
+    normalized = ingestion.ingest(image_path, "scan.png", "image/png")
+
+    assert normalized.file_metadata["ocr_line_candidate_count"] == 1
+    assert normalized.raw_extracted_blocks[0]["line_candidates"][0]["text"] == "볼트"
+    assert normalized.raw_extracted_blocks[0]["line_candidates"][0]["bbox"]
+
+
 def test_all_ocr_provider_failures_return_empty_result_without_raising(tmp_path):
     class BrokenProvider:
         engine_name = "broken"
@@ -195,11 +219,49 @@ def test_paddleocr_provider_prefers_legacy_ocr_api_over_predict(tmp_path):
     provider = PaddleOCRProvider()
 
     output = provider._run_ocr(ocr, image_path)
-    text, confidence, _ = provider._normalize_output(output)
+    text, confidence, _, line_candidates = provider._normalize_output(output)
 
     assert ocr.calls == ["ocr:False"]
     assert text == "PO-123 TEST"
     assert confidence == 0.98
+    assert line_candidates == [
+        {
+            "text": "PO-123 TEST",
+            "confidence": 0.98,
+            "bbox": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            "x_min": 0.0,
+            "y_min": 0.0,
+            "x_max": 1.0,
+            "y_max": 1.0,
+        }
+    ]
+
+
+def test_paddleocr_output_normalization_preserves_bbox_candidates():
+    provider = PaddleOCRProvider()
+    output = [
+        [
+            [[10, 20], [120, 20], [120, 42], [10, 42]],
+            ("M8 볼트 / 와셔 SET", 0.91),
+        ],
+        {
+            "rec_text": "합계",
+            "rec_score": 0.86,
+            "bbox": [[500, 700], [620, 700], [620, 730], [500, 730]],
+        },
+    ]
+
+    text, confidence, table_blocks, line_candidates = provider._normalize_output(output)
+
+    assert "M8 볼트 / 와셔 SET" in text
+    assert "합계" in text
+    assert table_blocks == []
+    assert confidence == 0.885
+    assert line_candidates[0]["text"] == "M8 볼트 / 와셔 SET"
+    assert line_candidates[0]["x_min"] == 10.0
+    assert line_candidates[0]["y_max"] == 42.0
+    assert line_candidates[1]["text"] == "합계"
+    assert line_candidates[1]["confidence"] == 0.86
 
 
 def test_ocr_worker_resets_provider_and_retries_paddle_runtime_error(monkeypatch, tmp_path):

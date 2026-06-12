@@ -144,11 +144,19 @@ def _process_with_worker_api(pdf_path: Path, worker_url: str, render_dir: Path) 
         text = str(response.get("text") or "").strip()
         if text:
             texts.append(f"Page {index}\n{text}")
-        blocks.append({"type": "pdf_page_ocr", "page": index, "image_path": str(image_path), "content": text, "table_blocks": response.get("table_blocks") or []})
+        blocks.append({
+            "type": "pdf_page_ocr",
+            "page": index,
+            "image_path": str(image_path),
+            "content": text,
+            "table_blocks": response.get("table_blocks") or [],
+            "line_candidates": response.get("line_candidates") or [],
+        })
         provider_metadata["ocr_provider_attempted"].append("ocr_worker_paddleocr")
         provider_metadata["ocr_provider_succeeded"] = response.get("engine_name") or "ocr_worker_paddleocr"
         provider_metadata["ocr_engine"] = response.get("engine_name") or "ocr_worker_paddleocr"
         provider_metadata["ocr_worker_elapsed_ms"] = (provider_metadata.get("ocr_worker_elapsed_ms") or 0) + int(response.get("elapsed_ms") or 0)
+        provider_metadata["ocr_line_candidate_count"] = (provider_metadata.get("ocr_line_candidate_count") or 0) + len(response.get("line_candidates") or [])
         confidences.append(float(response.get("confidence") or 0.0))
     ocr_text = "\n\n".join(texts).strip()
     parsed = DocumentParser().parse(ocr_text, pdf_path.name)

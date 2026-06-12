@@ -49,11 +49,13 @@ class PdfExtractionService:
             return result
 
         ocr_texts = []
+        page_blocks: list[dict[str, Any]] = []
         confidences = []
         provider_attempted: list[str] = []
         provider_failed_reason: dict[str, str] = {}
         provider_succeeded: str | None = None
         table_block_count = 0
+        line_candidate_count = 0
         worker_elapsed_ms = 0
         worker_url_used: str | None = None
         worker_available: bool | None = None
@@ -69,6 +71,8 @@ class PdfExtractionService:
                 provider_failed_reason.update(ocr_result.provider_failed_reason)
                 provider_succeeded = provider_succeeded or ocr_result.provider_succeeded
                 table_block_count += len(ocr_result.table_blocks)
+                page_line_candidates = [_with_page(candidate, index) for candidate in ocr_result.line_candidates]
+                line_candidate_count += len(page_line_candidates)
                 worker_elapsed_ms += ocr_result.elapsed_ms or 0
                 worker_url_used = worker_url_used or ocr_result.ocr_worker_url_used
                 worker_available = ocr_result.ocr_worker_available if worker_available is None else worker_available
@@ -81,11 +85,21 @@ class PdfExtractionService:
                 provider_name = getattr(self.ocr, "engine_name", self.ocr.__class__.__name__)
                 provider_attempted.append(provider_name)
                 provider_succeeded = provider_succeeded or provider_name
+                page_line_candidates = []
+                ocr_result = None
             confidences.append(confidence)
             if page_text.strip():
                 ocr_texts.append(f"Page {index}\n{page_text.strip()}")
+            page_blocks.append({
+                "type": "pdf_page_ocr",
+                "page": index,
+                "image_path": str(image_path),
+                "content": f"Page {index}\n{page_text.strip()}" if page_text.strip() else "",
+                "table_blocks": ocr_result.table_blocks if ocr_result is not None else [],
+                "line_candidates": page_line_candidates,
+            })
         result.text = "\n\n".join(ocr_texts).strip()
-        result.blocks = [{"type": "pdf_page_ocr", "page": index + 1, "image_path": str(image), "content": ocr_texts[index] if index < len(ocr_texts) else ""} for index, image in enumerate(rendered)]
+        result.blocks = page_blocks
         result.ocr_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         result.extraction_method = "pdf_scanned_page_ocr"
         result.metadata["ocr_engine"] = provider_succeeded or getattr(self.ocr, "engine_name", self.ocr.__class__.__name__)
@@ -94,6 +108,7 @@ class PdfExtractionService:
         result.metadata["ocr_provider_succeeded"] = provider_succeeded
         result.metadata["ocr_provider_failed_reason"] = provider_failed_reason
         result.metadata["ocr_table_block_count"] = table_block_count
+        result.metadata["ocr_line_candidate_count"] = line_candidate_count
         result.metadata["ocr_worker_url_used"] = worker_url_used
         result.metadata["ocr_worker_elapsed_ms"] = worker_elapsed_ms or None
         result.metadata["ocr_worker_available"] = worker_available
@@ -146,3 +161,11 @@ class PdfExtractionService:
         except Exception:
             return rendered
         return rendered
+
+
+def _with_page(candidate: dict[str, Any], page: int) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {"text": str(candidate), "page": page}
+    if candidate.get("page") == page:
+        return candidate
+    return {**candidate, "page": page}

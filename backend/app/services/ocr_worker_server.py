@@ -80,9 +80,13 @@ def _is_resettable_paddle_error(exc: Exception) -> bool:
     return any(pattern in message for pattern in _RESETTABLE_PADDLE_ERRORS)
 
 
-def _run_provider_ocr(provider: PaddleOCRProvider, image_path: Path) -> tuple[str, float, list[dict[str, Any]]]:
+def _run_provider_ocr(provider: PaddleOCRProvider, image_path: Path) -> tuple[str, float, list[dict[str, Any]], list[dict[str, Any]]]:
     raw = provider._run_ocr(provider._load(), image_path)
-    return provider._normalize_output(raw)
+    normalized = provider._normalize_output(raw)
+    if len(normalized) == 3:
+        text, confidence, table_blocks = normalized
+        return text, confidence, table_blocks, []
+    return normalized
 
 
 @app.get("/health")
@@ -129,7 +133,7 @@ def ocr(payload: OCRRequest):
                 provider_reset_reason = "request_limit"
             try:
                 provider = _get_provider()
-                text, confidence, table_blocks = _run_provider_ocr(provider, image_path)
+                text, confidence, table_blocks, line_candidates = _run_provider_ocr(provider, image_path)
             except Exception as exc:
                 if not _is_resettable_paddle_error(exc):
                     raise
@@ -143,7 +147,7 @@ def ocr(payload: OCRRequest):
                 )
                 _reset_provider()
                 provider = _get_provider()
-                text, confidence, table_blocks = _run_provider_ocr(provider, image_path)
+                text, confidence, table_blocks, line_candidates = _run_provider_ocr(provider, image_path)
             _requests_since_provider_reset += 1
         _last_error = None
         elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -164,7 +168,7 @@ def ocr(payload: OCRRequest):
             "text": text,
             "confidence": confidence,
             "table_blocks": table_blocks,
-            "line_candidates": [],
+            "line_candidates": line_candidates,
             "elapsed_ms": elapsed_ms,
             "retry_used": retry_used,
             "provider_reset_used": provider_reset_used,

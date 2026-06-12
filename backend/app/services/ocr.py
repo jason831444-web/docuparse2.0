@@ -136,6 +136,7 @@ class PaddleOCRProvider:
         text = str(payload.get("text") or "")
         confidence = _clamp_confidence(payload.get("confidence"))
         table_blocks = payload.get("table_blocks") if isinstance(payload.get("table_blocks"), list) else []
+        line_candidates = payload.get("line_candidates") if isinstance(payload.get("line_candidates"), list) else []
         return OCRResult(
             text=text.strip(),
             confidence=confidence,
@@ -143,6 +144,7 @@ class PaddleOCRProvider:
             provider_attempted=[self.engine_name],
             provider_succeeded=self.engine_name,
             table_blocks=table_blocks,
+            line_candidates=line_candidates,
         )
 
     def _parse_worker_payload(self, output: str) -> dict[str, Any]:
@@ -220,10 +222,12 @@ class PaddleOCRProvider:
             return ocr.predict(str(image_path))
         raise RuntimeError("PaddleOCR object exposes neither legacy ocr(...) nor predict(...)")
 
-    def _normalize_output(self, output: Any) -> tuple[str, float, list[dict[str, Any]]]:
+    def _normalize_output(self, output: Any) -> tuple[str, float, list[dict[str, Any]], list[dict[str, Any]]]:
         lines: list[str] = []
         confidences: list[float] = []
         table_blocks: list[dict[str, Any]] = []
+        line_candidates: list[dict[str, Any]] = []
+        seen_candidates: set[tuple[str, tuple[tuple[float, float], ...] | None]] = set()
         for item in self._walk(output):
             if isinstance(item, dict):
                 text = item.get("text") or item.get("rec_text") or item.get("label")
@@ -232,16 +236,20 @@ class PaddleOCRProvider:
                     table_blocks.append(item.get("res"))
                 if text:
                     lines.append(str(text))
+                    candidate = _ocr_line_candidate_from_mapping(item, str(text), score)
+                    _append_unique_line_candidate(line_candidates, seen_candidates, candidate)
                 if score is not None:
                     confidences.append(_clamp_confidence(score))
             elif isinstance(item, (list, tuple)) and len(item) >= 2:
                 maybe_text = item[1]
                 if isinstance(maybe_text, (list, tuple)) and maybe_text and isinstance(maybe_text[0], str):
                     lines.append(str(maybe_text[0]))
+                    candidate = _ocr_line_candidate(str(maybe_text[0]), maybe_text[1] if len(maybe_text) > 1 else None, item[0])
+                    _append_unique_line_candidate(line_candidates, seen_candidates, candidate)
                     if len(maybe_text) > 1:
                         confidences.append(_clamp_confidence(maybe_text[1]))
         confidence = sum(confidences) / len(confidences) if confidences else (0.80 if lines else 0.0)
-        return "\n".join(line for line in lines if line.strip()), confidence, table_blocks
+        return "\n".join(line for line in lines if line.strip()), confidence, table_blocks, line_candidates
 
     def _walk(self, value: Any):
         if isinstance(value, dict):
@@ -442,6 +450,92 @@ def _paddleocr_vl_status() -> tuple[bool, str | None]:
         return True, None
     except Exception as exc:
         return False, str(exc)
+
+
+def _ocr_line_candidate_from_mapping(item: dict[str, Any], text: str, score: object) -> dict[str, Any] | None:
+    bbox = (
+        item.get("bbox")
+        or item.get("box")
+        or item.get("points")
+        or item.get("poly")
+        or item.get("polygon")
+        or item.get("dt_poly")
+        or item.get("dt_polys")
+        or item.get("text_region")
+    )
+    return _ocr_line_candidate(text, score, bbox)
+
+
+def _ocr_line_candidate(text: str, score: object, bbox: object) -> dict[str, Any] | None:
+    normalized_bbox = _normalize_bbox_points(bbox)
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None
+    candidate: dict[str, Any] = {
+        "text": stripped,
+        "confidence": _clamp_confidence(score),
+    }
+    if normalized_bbox:
+        candidate["bbox"] = normalized_bbox
+        xs = [point[0] for point in normalized_bbox]
+        ys = [point[1] for point in normalized_bbox]
+        candidate.update({
+            "x_min": min(xs),
+            "y_min": min(ys),
+            "x_max": max(xs),
+            "y_max": max(ys),
+        })
+    return candidate
+
+
+def _normalize_bbox_points(value: object) -> list[list[float]] | None:
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, dict):
+        if all(key in value for key in ("x_min", "y_min", "x_max", "y_max")):
+            try:
+                x_min = float(value["x_min"])
+                y_min = float(value["y_min"])
+                x_max = float(value["x_max"])
+                y_max = float(value["y_max"])
+            except (TypeError, ValueError):
+                return None
+            return [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]]
+        for key in ("bbox", "box", "points", "poly", "polygon"):
+            if key in value:
+                return _normalize_bbox_points(value[key])
+        return None
+    if not isinstance(value, (list, tuple)):
+        return None
+    points: list[list[float]] = []
+    for point in value:
+        if isinstance(point, np.ndarray):
+            point = point.tolist()
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        try:
+            points.append([float(point[0]), float(point[1])])
+        except (TypeError, ValueError):
+            continue
+    return points if len(points) >= 2 else None
+
+
+def _append_unique_line_candidate(
+    candidates: list[dict[str, Any]],
+    seen: set[tuple[str, tuple[tuple[float, float], ...] | None]],
+    candidate: dict[str, Any] | None,
+) -> None:
+    if not candidate:
+        return
+    bbox = candidate.get("bbox")
+    bbox_key = tuple((round(float(point[0]), 2), round(float(point[1]), 2)) for point in bbox) if isinstance(bbox, list) else None
+    key = (str(candidate.get("text") or ""), bbox_key)
+    if key in seen:
+        return
+    seen.add(key)
+    candidates.append(candidate)
 
 
 def _clamp_confidence(value: object) -> float:
