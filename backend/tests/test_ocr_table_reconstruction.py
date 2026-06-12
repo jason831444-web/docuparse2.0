@@ -870,3 +870,87 @@ def test_vertical_paddleocr_poor_ocr_keeps_incomplete_line_item_candidate():
     assert item["unit"] == "EA"
     assert item["unit_price"] == 12000
     assert item["line_total"] == 105600
+
+
+def test_no_price_delivery_quantity_table_does_not_promote_quantities_to_amounts():
+    text = "\n".join([
+        "납품서",
+        "납품번호",
+        "DN-2026-0914-2F",
+        "발행일",
+        "2026-09-14",
+        "납품일",
+        "2026-09-15",
+        "공급업체",
+        "대영부품",
+        "고객사",
+        "오성테크",
+        "품목명",
+        "문서품목코드",
+        "규격",
+        "발주수량",
+        "납품수량",
+        "베어링하우징",
+        "BRG-H-1O0",
+        "100mm",
+        "50",
+        "40",
+        "S45C PIN 8X60",
+        "PIN-8X60",
+        "8X60",
+        "300",
+        "300",
+        "*금액정보없는수량확인용납품서",
+    ])
+
+    parsed = DocumentParser().parse(text, "14_real_delivery_note_partial_receipt_no_prices.pdf")
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.document_number == "DN-2026-0914-2F"
+    assert parsed.extracted_amount is None
+    assert parsed.subtotal is None
+    assert parsed.tax is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) >= 2
+    assert all("line_total" not in item for item in parsed.line_items)
+    assert all("supply_amount" not in item for item in parsed.line_items)
+
+
+def test_split_invoice_number_prefers_long_strong_candidate_over_short_label_value():
+    text = "\n".join([
+        "전자세금계산서",
+        "계산서번호",
+        "INV-2026-",
+        "-0920-LONG",
+        "발행일",
+        "2026-09-20",
+        "공급업체",
+        "대한정밀부품",
+        "고객사",
+        "한빛제조",
+        "총액",
+        "431200",
+    ])
+
+    parsed = DocumentParser().parse(text, "20_real_invoice_multipage_many_lines.pdf")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-2026-0920-LONG"
+
+
+def test_document_number_keeps_multiple_suffix_segments():
+    text = "\n".join([
+        "발주서",
+        "발주번호",
+        "PO-2026-0809-MIX-888",
+        "공급업체",
+        "대한정밀부품",
+        "고객사",
+        "한빛제조",
+        "TOTAL KRW 403,700",
+    ])
+
+    parsed = DocumentParser().parse(text, "09_image_po_mixed_korean_english_noise.pdf")
+
+    assert parsed.document_type == DocumentType.purchase_order
+    assert parsed.document_number == "PO-2026-0809-MIX-888"

@@ -916,13 +916,13 @@ def _candidate_sort_quantity(quantity: Decimal | None) -> Decimal:
 
 def _field_for_vertical_header(value: str) -> str | None:
     key = re.sub(r"[^0-9a-z가-힣]+", "", value.lower())
-    if key in {"품목명", "품복명", "품명", "itemname", "itemdescription", "description"}:
+    if key in {"품목명", "품복명", "품명", "목명", "반품품목", "itemname", "itemdescription", "description"}:
         return "item_name"
     if key in {"품목코드", "문서품목코드", "품번", "거래처코드", "거래처품목코드", "itemcode", "vendorsku", "sku", "partno", "partnumber"}:
         return "item_code"
     if key in {"규격", "사양", "spec", "specification", "size", "dimension"}:
         return "specification"
-    if key in {"수량", "수링", "논량", "주문수량", "납품수량", "qty", "oty", "quantity"}:
+    if key in {"수량", "수링", "논량", "주문수량", "납품수량", "발주수량", "요청수량", "요청수림", "입고수량", "합격수량", "불량수량", "qty", "oty", "quantity"}:
         return "quantity"
     if key in {"단위", "unit"}:
         return "unit"

@@ -31,6 +31,7 @@ MANUFACTURING_TYPE_INDICATORS = [
     (DocumentType.quotation, ["견적서", "견적번호", "견적일", "유효기간", "견적유효기간", "납기조건", "결제조건", "quotation", "quote"]),
     (DocumentType.purchase_order, ["발주서", "발주번호", "발주처", "납기일", "purchase order", "po no"]),
     (DocumentType.transaction_statement, ["거래명세서", "거래명세서번호", "거래일자", "transaction statement"]),
+    (DocumentType.inspection_report, ["입고검사성적서", "검사성적서", "검사번호", "입고수량", "합격수량", "불량수량", "inspection report"]),
 ]
 
 CATEGORY_KEYWORDS = {
@@ -115,14 +116,23 @@ class DocumentParser:
         doc_type = self._guess_document_type(joined, filename)
         line_items = self._extract_line_items(lines)
         document_scope_text = self._document_scope_text(lines)
-        subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "subtotal total", "subtotal", "supply amount", "supply total"])
-        tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "vat total", "vat", "tax", "w세액"])
-        amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
-        line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
-        line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
-        currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
-        line_items = self._suppress_untrusted_foreign_amounts(line_items, amount, currency)
+        no_price_delivery = self._is_no_price_delivery_note(lines, doc_type)
+        if no_price_delivery:
+            subtotal = None
+            tax = None
+            amount = None
+            currency = None
+        else:
+            subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "subtotal total", "subtotal", "supply amount", "supply total"])
+            tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "vat total", "vat", "tax", "w세액"])
+            amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
+            line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
+            currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
+            line_items = self._suppress_untrusted_foreign_amounts(line_items, amount, currency)
         line_items = self._repair_ocr_table_postprocess(line_items, amount, currency, lines)
+        if no_price_delivery:
+            line_items = [self._strip_line_item_amount_fields(item) for item in line_items]
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
@@ -154,12 +164,29 @@ class DocumentParser:
     def _guess_document_type(self, text: str, filename: str) -> DocumentType:
         content = text.lower()
         first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])
+        scored_types: list[tuple[int, DocumentType]] = []
         for document_type, keywords in MANUFACTURING_TYPE_INDICATORS:
             strong_hits = sum(1 for keyword in keywords if keyword.lower() in first_lines)
             content_hits = sum(1 for keyword in keywords if keyword.lower() in content)
-            threshold = 1 if document_type != DocumentType.transaction_statement else 2
-            if strong_hits >= 1 or content_hits >= threshold:
-                return document_type
+            score = strong_hits * 6 + content_hits
+            if document_type == DocumentType.purchase_order and re.search(r"\b(?:PO|FAXx?-PO|FAX-PO)[-_ ]?\d{4}|발주서|발주번호", text, flags=re.IGNORECASE):
+                score += 8
+            if document_type == DocumentType.quotation and re.search(r"\bQT[-_ ]?\d{4}|견적서|견적번호", text, flags=re.IGNORECASE):
+                score += 8
+            if document_type == DocumentType.invoice and re.search(r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}|계산서번호|세금계산서|invoice", text, flags=re.IGNORECASE):
+                score += 8
+            if document_type == DocumentType.delivery_note and re.search(r"\bDN[-_ ]?\d{4}|납품서|납품번호", text, flags=re.IGNORECASE):
+                score += 8
+            if document_type == DocumentType.transaction_statement and re.search(r"\bTS[-_ ]?\d{4}|거래명세서", text, flags=re.IGNORECASE):
+                score += 8
+            if document_type == DocumentType.inspection_report and re.search(r"\b(?:IQC|QC)[-_ ]?\d{4}|입고검사|검사번호|합격수량", text, flags=re.IGNORECASE):
+                score += 10
+            if score > 0:
+                scored_types.append((score, document_type))
+        if scored_types:
+            scored_types.sort(key=lambda entry: -entry[0])
+            if scored_types[0][0] >= 7:
+                return scored_types[0][1]
         if re.search(r"\bINV[-_ ]?\d{4}|\b(?:invoice|tax)\s*(?:no|number)", content, flags=re.IGNORECASE):
             return DocumentType.invoice
         if re.search(r"\bQT[-_ ]?\d{4}|\b(?:quotation|quote)\s*(?:no|number)", content, flags=re.IGNORECASE):
@@ -336,6 +363,8 @@ class DocumentParser:
                 if not value:
                     continue
                 value = self._truncate_at_business_label_boundary(value)
+                if self._looks_like_business_label(value):
+                    continue
                 if self._looks_like_instruction_or_note(value):
                     continue
                 return value[:120] or None
@@ -347,9 +376,19 @@ class DocumentParser:
             return None
         value = re.sub(r"\s+", " ", match.group(1)).strip(" -:：")
         value = self._truncate_at_business_label_boundary(value)
-        if self._looks_like_instruction_or_note(value):
+        if self._looks_like_instruction_or_note(value) or self._looks_like_business_label(value):
             return None
         return value[:120] or None
+
+    def _looks_like_business_label(self, value: str) -> bool:
+        key = re.sub(r"[\s:：#/-]+", "", value.lower())
+        labels = {
+            "공급업체", "공급자", "공급받는자", "고객사", "고객시", "구매처", "발주처", "수신처",
+            "납품처", "계산서번호", "발주번호", "견적번호", "납품번호", "거래명세서번호", "문서번호",
+            "작성일자", "작성일", "발행일", "지급기한", "유효기간", "검사번호", "관련납품서",
+            "vendor", "supplier", "customer", "buyer", "invoice no", "invoice number", "po no",
+        }
+        return key in {re.sub(r"[\s:：#/-]+", "", label.lower()) for label in labels}
 
     def _truncate_at_business_label_boundary(self, value: str) -> str:
         boundary_labels = [
@@ -394,25 +433,73 @@ class DocumentParser:
         ]
         normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
         lines = [line.strip() for line in text.splitlines()]
+        strong = self._best_document_number_from_text(text)
+        best_labeled: str | None = None
         for index, line in enumerate(lines[:-1]):
             if re.sub(r"[\s:：#]+", "", line.lower()) not in normalized_labels:
                 continue
             value = self._normalize_document_number_candidate(lines, index + 1)
-            if value:
-                return value
+            if value and self._document_number_score(value) >= 20:
+                if best_labeled is None or self._document_number_score(value) > self._document_number_score(best_labeled):
+                    best_labeled = value
+        if strong and (
+            best_labeled is None
+            or self._document_number_score(strong) >= self._document_number_score(best_labeled)
+            or len(strong) > len(best_labeled) + 3
+        ):
+            return strong
+        if best_labeled:
+            return best_labeled
         label_pattern = "|".join(re.escape(label) for label in labels)
         match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", text, flags=re.IGNORECASE)
-        return self._normalize_document_number(match.group(1)) if match else None
+        value = self._normalize_document_number(match.group(1)) if match else None
+        if value and self._document_number_score(value) >= 20:
+            return value
+        return None
+
+    def _best_document_number_from_text(self, text: str) -> str | None:
+        patterns = [
+            r"\b(?:FAXx?-)?PO0?[-_ ]?\d{4}[-_ ]?[0O]?\d{3,4}(?:[-_ ][A-Z0-9]{2,8}){0,2}\b",
+            r"\bQT[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{2,8}){0,2}\b",
+            r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}(?:[-_ ]?[A-Z0-9]{2,8}){1,4}\b",
+            r"\bDN[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
+            r"\bTS[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
+            r"\b(?:I?QC|QC)[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
+            r"\bRTN[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
+            r"\bTRF[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
+        ]
+        candidates: list[str] = []
+        compact_text = re.sub(r"(?<=\bINV-\d{4})-\s*-\s*(?=\d)", "-", text, flags=re.IGNORECASE)
+        for pattern in patterns:
+            candidates.extend(match.group(0) for match in re.finditer(pattern, compact_text, flags=re.IGNORECASE))
+        normalized = [self._normalize_document_number(candidate) for candidate in candidates]
+        normalized = [candidate for candidate in normalized if candidate]
+        if not normalized:
+            return None
+        normalized.sort(key=lambda value: (-self._document_number_score(value), -len(value)))
+        return normalized[0]
 
     def _normalize_document_number(self, value: object) -> str | None:
         text = re.sub(r"\s+", "", str(value or "")).strip(" -:：[](){}")
         if not text:
             return None
         text = text.replace("_", "-")
+        text = re.sub(r"^FAXx-", "FAX-", text, flags=re.IGNORECASE)
+        text = re.sub(r"^PO0-", "PO-", text, flags=re.IGNORECASE)
+        text = re.sub(r"^(QC-)", "IQC-", text, flags=re.IGNORECASE)
         if re.match(r"^S-\d{4}-\d{4}-", text, flags=re.IGNORECASE):
             text = f"T{text}"
         if re.match(r"^OT-\d{4}-", text, flags=re.IGNORECASE):
             text = f"QT{text[2:]}"
+        parts = text.split("-")
+        fixed_parts: list[str] = []
+        for index, part in enumerate(parts):
+            if index >= 1 and re.fullmatch(r"[0-9O]{3,4}", part, flags=re.IGNORECASE):
+                part = part.replace("O", "0").replace("o", "0")
+            if index >= 2 and re.fullmatch(r"[0-9O]{2,5}", part, flags=re.IGNORECASE):
+                part = part.replace("O", "0").replace("o", "0")
+            fixed_parts.append(part)
+        text = "-".join(fixed_parts)
         return text[:80] or None
 
     def _normalize_document_number_candidate(self, lines: list[str], start_index: int) -> str | None:
@@ -430,12 +517,51 @@ class DocumentParser:
             break
         return self._normalize_document_number("-".join(parts))
 
+    def _document_number_score(self, value: str) -> int:
+        text = str(value or "")
+        if self._looks_like_business_label(text):
+            return -100
+        score = 0
+        if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|QC|RTN|TRF|FAX-PO)-", text, flags=re.IGNORECASE):
+            score += 40
+        if re.search(r"\d{4}", text):
+            score += 10
+        if text.count("-") >= 2:
+            score += 8
+        if re.search(r"[가-힣]", text):
+            score -= 35
+        return score
+
     def _looks_like_document_number_continuation(self, value: str) -> bool:
         if re.fullmatch(r"\d{4}-\d{2,4}(?:-\d{2,5})?", value):
             return True
         if re.fullmatch(r"[A-Z]{1,4}-?\d{2,5}", value, flags=re.IGNORECASE):
             return True
         return False
+
+    def _is_no_price_delivery_note(self, lines: list[str], doc_type: DocumentType) -> bool:
+        if doc_type != DocumentType.delivery_note:
+            return False
+        text = "\n".join(lines)
+        if re.search(r"(단가\s*/?\s*금액\s*없이|금액\s*정보\s*없|no\s+price\s+columns|수량\s*확인용)", text, flags=re.IGNORECASE):
+            return True
+        has_delivery_quantity_headers = bool(re.search(r"(발주수량|납품수량|잔량|입고수량)", text))
+        has_amount_headers = bool(re.search(r"(단가|공급가액|공급액|세액|부가세|합계금액|총액|unit\s*price|subtotal|tax|total)", text, flags=re.IGNORECASE))
+        return has_delivery_quantity_headers and not has_amount_headers
+
+    def _strip_line_item_amount_fields(self, item: dict) -> dict:
+        stripped = dict(item)
+        for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
+            stripped.pop(field, None)
+        warnings = [
+            warning for warning in stripped.get("validation_warnings", [])
+            if warning not in {"missing_price_or_total", "invalid_line_total", "amount_mismatch"}
+        ]
+        if warnings:
+            stripped["validation_warnings"] = warnings
+        else:
+            stripped.pop("validation_warnings", None)
+        return stripped
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
@@ -1149,7 +1275,14 @@ class DocumentParser:
 
     def _looks_like_footer_note_item(self, item: dict) -> bool:
         text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
-        return bool(re.search(r"(문서\s*총액|주의|검토\s*필요|본문서는|ERP\s*입력용|담당\s*/\s*검토\s*/\s*승인|총액\s*:)", text, flags=re.IGNORECASE))
+        return bool(re.search(
+            r"(문서\s*총액|주의|검토\s*필요|본문서는|ERP\s*입력용|담당|검토|승인|총액\s*:|"
+            r"DocuParse\s+realistic|synthetic\s+data|옵션.*선택|모두\s*합산하면\s*안|"
+            r"전월이월|품목\s*합계에\s*포함하지|통관/회계|거래처\s*문서가\s*아니라|"
+            r"반품\s*문서|품질\s*담당|페이지\s*하단|금액\s*정보\s*없는\s*수량\s*확인용)",
+            text,
+            flags=re.IGNORECASE,
+        ))
 
     def _repair_usd_vertical_invoice_rows(
         self,
