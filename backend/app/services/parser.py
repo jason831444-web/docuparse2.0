@@ -516,7 +516,7 @@ class DocumentParser:
                 part = part.replace("O", "0").replace("o", "0")
             fixed_parts.append(part)
         text = "-".join(fixed_parts)
-        return text[:80] or None
+        return text.upper()[:80] or None
 
     def _normalize_document_number_candidate(self, lines: list[str], start_index: int) -> str | None:
         first = self._normalize_document_number(lines[start_index] if start_index < len(lines) else "")

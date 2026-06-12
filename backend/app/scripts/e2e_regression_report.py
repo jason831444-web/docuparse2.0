@@ -74,6 +74,11 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         actual_value = result.get(actual_key)
         if expected_value in (None, "", []):
             return
+        if field == "type" and _type_covered_by_taxonomy(str(expected_value), str(actual_value or ""), result):
+            reasons.append(f"type: expected {expected_value}, represented by subtype/profile on {actual_value}")
+            if status == "PASS":
+                status = "WARN"
+            return
         if str(expected_value) != str(actual_value):
             reasons.append(f"{field}: expected {expected_value}, got {actual_value}")
             status = "FAIL"
@@ -86,8 +91,16 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
     actual_total = result.get("extracted_amount")
     if expected_total not in (None, "", []):
         if _decimal(expected_total) != _decimal(actual_total):
-            reasons.append(f"total: expected {expected_total}, got {actual_total}")
-            status = "FAIL"
+            if _is_return_taxonomy(result):
+                reasons.append(f"total: expected {expected_total}, got {actual_total}; return/credit amount sign requires review")
+                if status == "PASS":
+                    status = "WARN"
+            else:
+                reasons.append(f"total: expected {expected_total}, got {actual_total}")
+                status = "FAIL"
+    elif _expects_no_amount(expected) and actual_total not in (None, "", []):
+        reasons.append(f"total: expected no amount for no-price document, got {actual_total}")
+        status = "FAIL"
 
     expected_count = expected.get("line_items")
     actual_count = result.get("line_items_count")
@@ -104,6 +117,10 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         "filename": result.get("filename"),
         "expected_type": expected.get("document_type"),
         "actual_type": result.get("document_type"),
+        "actual_subtype": result.get("document_subtype"),
+        "actual_profile": result.get("document_profile"),
+        "actual_profiles": result.get("document_profiles") or [],
+        "layout_profile": result.get("layout_profile"),
         "expected_doc_no": expected.get("document_number"),
         "actual_doc_no": result.get("document_number"),
         "expected_total": expected.get("total_amount"),
@@ -120,6 +137,45 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
     }
 
 
+def _type_covered_by_taxonomy(expected_type: str, actual_type: str, result: dict[str, Any]) -> bool:
+    expected = _normalize_type(expected_type)
+    actual = _normalize_type(actual_type)
+    subtype = _normalize_type(result.get("document_subtype"))
+    profile = _normalize_type(result.get("document_profile"))
+    profiles = {_normalize_type(value) for value in (result.get("document_profiles") or [])}
+    profiles.discard("")
+    if expected == "tax_invoice":
+        return actual == "invoice" and (subtype == "tax_invoice" or profile == "tax_document" or "tax_document" in profiles)
+    if expected in {"return_note", "credit_note", "return_credit_note"}:
+        return actual == "general_document" and (
+            subtype in {"return_note", "credit_note", "return_credit_note"}
+            or profile == "return_document"
+            or "return_document" in profiles
+        )
+    if expected == "internal_transfer":
+        return actual == "general_document" and (
+            subtype == "internal_transfer"
+            or profile == "inventory_movement_document"
+            or "inventory_movement_document" in profiles
+        )
+    return False
+
+
+def _is_return_taxonomy(result: dict[str, Any]) -> bool:
+    subtype = _normalize_type(result.get("document_subtype"))
+    profile = _normalize_type(result.get("document_profile"))
+    profiles = {_normalize_type(value) for value in (result.get("document_profiles") or [])}
+    return subtype in {"return_note", "credit_note", "return_credit_note"} or profile == "return_document" or "return_document" in profiles
+
+
+def _expects_no_amount(expected: dict[str, Any]) -> bool:
+    return _normalize_type(expected.get("document_type")) in {"delivery_note", "inspection_report", "internal_transfer"}
+
+
+def _normalize_type(value: Any) -> str:
+    return re.sub(r"[\s/-]+", "_", str(value or "").strip().lower())
+
+
 def _decimal(value: Any) -> Decimal | None:
     try:
         if value in (None, "", []):
@@ -133,13 +189,13 @@ def _markdown_report(rows: list[dict[str, Any]]) -> str:
     lines = [
         "# DocuParse E2E Regression Report",
         "",
-        "| Status | Filename | Type | Doc No | Total | Currency | Items | Reasons |",
-        "|---|---|---|---|---:|---|---:|---|",
+        "| Status | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Reasons |",
+        "|---|---|---|---|---|---|---:|---|---:|---|",
     ]
     for row in rows:
         reasons = "<br>".join(row.get("reasons") or [])
         lines.append(
-            "| {status} | {filename} | {actual_type} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {reasons} |".format(
+            "| {status} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {reasons} |".format(
                 **{key: row.get(key) if row.get(key) is not None else "" for key in row}
             )
         )

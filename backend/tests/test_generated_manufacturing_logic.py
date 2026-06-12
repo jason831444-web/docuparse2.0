@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.models.document import Document, DocumentType
 from app.services.item_master_matcher import ItemMasterMatcher, parse_item_master_csv
 from app.services.parser import DocumentParser
+from app.services.document_taxonomy import DocumentTaxonomyService
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 
 
@@ -84,6 +85,35 @@ def test_tax_invoice_classification_customer_and_workflow_labels_are_invoice_spe
     assert "견적번호" not in (workflow.workflow_summary or "")
     assert any(date_label.startswith("지급기한") for date_label in workflow.key_dates)
     assert workflow.workflow_metadata["workflow_mode"] == "invoice"
+    assert workflow.workflow_metadata["document_subtype"] == "tax_invoice"
+    assert workflow.workflow_metadata["document_profile"] == "tax_document"
+    assert "tax_document" in workflow.workflow_metadata["document_profiles"]
+
+
+def test_regular_us_invoice_is_not_overclassified_as_tax_invoice():
+    text = "\n".join([
+        "COMMERCIAL INVOICE",
+        "Invoice No",
+        "INV-US-2026-1001-001",
+        "Vendor",
+        "Global Motion Parts LLC",
+        "Customer",
+        "NeoFactory Korea",
+        "Currency",
+        "USD",
+        "Total Amount",
+        "650.00",
+        "Item Description Vendor SKU Qty Unit Price Total",
+        "Linear Guide Rail HGW20 HGW20-1000 10 45.00 450.00",
+    ])
+    parsed = DocumentParser().parse(text, "commercial_invoice.txt")
+    document = _document(parsed, "commercial_invoice.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+
+    assert parsed.document_type == DocumentType.invoice
+    assert workflow.workflow_metadata["document_subtype"] == "commercial_invoice"
+    assert workflow.workflow_metadata["document_profile"] == "foreign_currency_document"
+    assert workflow.workflow_metadata["document_subtype"] != "tax_invoice"
 
 
 def test_slash_separated_delivery_note_items_without_prices_are_valid():
@@ -100,6 +130,58 @@ def test_slash_separated_delivery_note_items_without_prices_are_valid():
     assert parsed.line_items[0]["unit"] == "EA"
     assert "missing_price_or_total" not in issue_codes
     assert "missing_line_items" not in issue_codes
+
+
+def test_return_credit_signals_are_preserved_as_subtype_without_delivery_note_overwrite():
+    text = "\n".join([
+        "반품 / 차감 요청서",
+        "문서번호",
+        "RTN-2026-0919-O11",
+        "관련 납품서",
+        "DN-2026-0914-2F",
+        "공급업체",
+        "대영부품",
+        "고객사",
+        "오성테크",
+        "반품품목 규격 수량 단가 공급가액 세액 합계",
+        "베어링 하우징 100mm 2 5000 10000 1000 11000",
+    ])
+    parsed = DocumentParser().parse(text, "return_note.txt")
+    document = _document(parsed, "return_note.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+
+    assert parsed.document_type == DocumentType.general_document
+    assert parsed.document_number == "RTN-2026-0919-011"
+    assert workflow.workflow_metadata["document_subtype"] in {"return_note", "credit_note"}
+    assert workflow.workflow_metadata["document_profile"] == "return_document"
+
+
+def test_internal_transfer_taxonomy_suppresses_party_and_price_blockers():
+    document = Document(
+        original_filename="transfer.txt",
+        stored_file_path="/tmp/transfer.txt",
+        mime_type="text/plain",
+        document_type=DocumentType.general_document,
+        document_number="TRF-2026-0922-002",
+        category="internal_transfer",
+        tags=["internal_transfer"],
+        line_items=[
+            {"item_name": "SUS304 2T PLATE", "item_code": "M-PLT-SUS304-2T-1000X2000", "quantity": 3, "unit": "EA"},
+            {"item_name": "M8 육각 볼트", "item_code": "P-BOLT-M8-20-ZN", "quantity": 100, "unit": "EA"},
+        ],
+    )
+    text = "사업장간 자재 이동 요청서\nTRF-2026-0922-002\n내부품목코드\n요청수량"
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    codes = [issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]]
+
+    assert workflow.workflow_metadata["document_subtype"] == "internal_transfer"
+    assert workflow.workflow_metadata["document_profile"] == "inventory_movement_document"
+    assert "no_price_document" in workflow.workflow_metadata["document_profiles"]
+    assert "missing_vendor_name" not in codes
+    assert "missing_customer_name" not in codes
+    assert "missing_price_or_total" not in codes
+    assert document.extracted_amount is None
+    assert document.currency is None
 
 
 def test_malformed_amounts_create_review_issue_without_corrupting_numeric_fields():

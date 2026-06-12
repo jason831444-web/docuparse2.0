@@ -13,6 +13,7 @@ from app.services.category_interpretation import CategoryInterpretation, Categor
 from app.services.category_taxonomy import clean_tags_for_context, normalize_category
 from app.services.document_router import LightweightDocumentRouter
 from app.services.document_interpretation_service import DocumentInterpretationService
+from app.services.document_taxonomy import DocumentTaxonomyService
 from app.services.file_ingestion import FileIngestionService, NormalizedDocument
 from app.services.item_master_matcher import ItemMasterMatcher
 from app.services.ocr import OCRService
@@ -35,6 +36,7 @@ class DocumentProcessor:
         self.lightweight_ai = LocalDocumentAIService()
         self.heuristic_interpreter = CategoryInterpretationService()
         self.category_interpreter = DocumentInterpretationService()
+        self.taxonomy = DocumentTaxonomyService()
         self.workflow_enrichment = DocumentWorkflowEnrichmentService()
         self.item_master_matcher = ItemMasterMatcher()
         self.ai_merger = AIResultMerger()
@@ -173,6 +175,14 @@ class DocumentProcessor:
             document.tags = self._merge_tags(document.tags, interpretation, document.document_type)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.tags = [parsed.document_type.value]
+            taxonomy = self.taxonomy.classify(
+                document,
+                ai_result.cleaned_raw_text or raw_text,
+                extraction_method=normalized.extraction_method,
+                file_metadata=normalized.file_metadata,
+            )
+            document.category = self._apply_taxonomy_category(document.category, taxonomy.to_metadata())
+            document.tags = sanitize_for_postgres(self._merge_taxonomy_tags(document.tags, taxonomy.to_metadata()))
             document.ai_extraction_notes = sanitize_for_postgres(self._notes(
                 (ingestion_notes + quality_notes + ai_fallback_notes + ai_result.extraction_notes)
                 + self._interpretation_notes(interpretation)
@@ -185,6 +195,7 @@ class DocumentProcessor:
                 interpretation,
                 ai_escalation,
                 ai_provider_diagnostics,
+                taxonomy.to_metadata(),
             ))
             document.review_required = document.review_required or self._manufacturing_review_required(document)
             workflow = self.workflow_enrichment.enrich(document, ai_result.cleaned_raw_text or raw_text, interpretation)
@@ -312,6 +323,7 @@ class DocumentProcessor:
         interpretation: CategoryInterpretation | None = None,
         ai_escalation=None,
         ai_provider_diagnostics: dict | None = None,
+        taxonomy: dict | None = None,
     ) -> dict:
         metadata = {
             "source_file_type": normalized.source_file_type,
@@ -372,6 +384,8 @@ class DocumentProcessor:
             }
         if ai_provider_diagnostics:
             metadata["ai_provider_diagnostics"] = ai_provider_diagnostics
+        if taxonomy:
+            metadata["taxonomy"] = taxonomy
         return metadata
 
     def _provider_chain(
@@ -447,6 +461,26 @@ class DocumentProcessor:
         interpretation.subtype = doc_type
         return interpretation
 
+    def _apply_taxonomy_category(self, category: str | None, taxonomy: dict) -> str | None:
+        subtype = taxonomy.get("document_subtype")
+        doc_type = taxonomy.get("document_type")
+        if subtype in {"return_note", "credit_note", "internal_transfer"}:
+            return str(subtype)
+        if subtype == "tax_invoice":
+            return category or doc_type or "invoice"
+        return category
+
+    def _merge_taxonomy_tags(self, tags: list[str] | None, taxonomy: dict) -> list[str]:
+        merged = list(tags or [])
+        for value in [
+            taxonomy.get("document_subtype"),
+            taxonomy.get("document_profile"),
+            *(taxonomy.get("document_profiles") or []),
+        ]:
+            if value and value not in merged:
+                merged.append(str(value))
+        return merged
+
     def _is_return_or_credit_parsed_document(self, parsed: object, raw_text: str) -> bool:
         doc_number = str(getattr(parsed, "document_number", "") or "")
         text = "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:10])
@@ -492,8 +526,9 @@ class DocumentProcessor:
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
         if doc_type not in manufacturing_types:
             return False
-        no_price_quantity_doc = self._is_no_price_quantity_document(document)
-        party_optional_doc = no_price_quantity_doc or self._is_internal_transfer_document(document)
+        taxonomy = self.taxonomy.classify(document, document.raw_text or "")
+        no_price_quantity_doc = self._is_no_price_quantity_document(document) or taxonomy.amount_required is False
+        party_optional_doc = no_price_quantity_doc or taxonomy.party_required is False
         low_confidence = list(document.low_confidence_fields or [])
         if not document.line_items:
             low_confidence.append("missing_line_items")

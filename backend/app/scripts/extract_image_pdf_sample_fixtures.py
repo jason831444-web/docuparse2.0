@@ -275,6 +275,7 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
     line_items_total = _line_items_total(line_items)
     workflow_metadata = parsed.get("workflow_metadata") or {}
     review_issues = workflow_metadata.get("normalized_review_issues") or parsed.get("normalized_review_issues") or []
+    taxonomy = workflow_metadata.get("taxonomy") or (parsed.get("ingestion_metadata") or {}).get("taxonomy") or {}
     category_interpretation = parsed.get("category_interpretation") or {}
     profile = (
         category_interpretation.get("profile")
@@ -293,6 +294,10 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
         "document_type": _value(parsed.get("document_type")),
         "ai_document_type": parsed.get("ai_document_type"),
         "profile": _value(profile),
+        "document_subtype": taxonomy.get("document_subtype") or workflow_metadata.get("document_subtype"),
+        "document_profile": taxonomy.get("document_profile") or workflow_metadata.get("document_profile"),
+        "document_profiles": taxonomy.get("document_profiles") or workflow_metadata.get("document_profiles") or [],
+        "layout_profile": taxonomy.get("layout_profile") or workflow_metadata.get("layout_profile"),
         "document_number": parsed.get("document_number"),
         "vendor_name": parsed.get("vendor_name"),
         "customer_name": parsed.get("customer_name"),

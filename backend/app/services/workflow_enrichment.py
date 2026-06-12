@@ -6,6 +6,7 @@ from typing import Any
 
 from app.models.document import Document, DocumentType
 from app.services.category_interpretation import CategoryInterpretation
+from app.services.document_taxonomy import DocumentTaxonomy, DocumentTaxonomyService
 
 
 @dataclass
@@ -27,6 +28,9 @@ class DocumentWorkflowEnrichmentService:
     This turns extracted document data into conservative, type-aware assistance.
     It does not replace extraction or editing; it adds workflow context on top.
     """
+
+    def __init__(self) -> None:
+        self.taxonomy = DocumentTaxonomyService()
 
     def enrich(
         self,
@@ -131,6 +135,7 @@ class DocumentWorkflowEnrichmentService:
         interpretation: CategoryInterpretation | None,
     ) -> WorkflowEnrichment:
         doc_type = getattr(document.document_type, "value", str(document.document_type or "general_document"))
+        taxonomy = self.taxonomy.classify(document, text)
         label = self._manufacturing_label(doc_type)
         vendor = document.vendor_name or document.merchant_name or "공급업체 미확인"
         customer = document.customer_name or "고객사 미확인"
@@ -139,7 +144,7 @@ class DocumentWorkflowEnrichmentService:
         business_fields = self._manufacturing_business_fields(document, text, doc_type)
         line_item_count = len(document.line_items or [])
         total = self._korean_money(document.extracted_amount, document.currency or "KRW")
-        review_reasons = self._manufacturing_review_reasons(document, business_fields)
+        review_reasons = self._manufacturing_review_reasons(document, business_fields, taxonomy)
         review_issues = self._normalized_review_issues(document, review_reasons)
         warnings = self._dedupe([issue["message_ko"] for issue in review_issues if self._is_blocking_review_issue(issue)])
         review_required = any(self._is_blocking_review_issue(issue) for issue in review_issues)
@@ -172,6 +177,11 @@ class DocumentWorkflowEnrichmentService:
             "low_confidence_fields": list(document.low_confidence_fields or []),
             "workflow_mode": doc_type,
             "content_profile": doc_type,
+            "taxonomy": taxonomy.to_metadata(),
+            "document_subtype": taxonomy.document_subtype,
+            "document_profile": taxonomy.document_profile,
+            "document_profiles": taxonomy.document_profiles,
+            "layout_profile": taxonomy.layout_profile,
             "source": "deterministic_manufacturing_business_data",
             "summaries": {
                 "short": summary,
@@ -232,11 +242,12 @@ class DocumentWorkflowEnrichmentService:
             fields["business_registration_numbers"] = re.findall(r"\b\d{3}-\d{2}-\d{5}\b", text)
         return {key: value for key, value in fields.items() if value not in (None, "", [])}
 
-    def _manufacturing_review_reasons(self, document: Document, business_fields: dict[str, str | list[str]]) -> list[dict[str, Any]]:
+    def _manufacturing_review_reasons(self, document: Document, business_fields: dict[str, str | list[str]], taxonomy: DocumentTaxonomy | None = None) -> list[dict[str, Any]]:
         reasons: list[dict[str, Any]] = []
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
-        no_price_quantity_doc = self._is_no_price_quantity_document(document)
-        party_optional_doc = no_price_quantity_doc or self._is_internal_transfer_document(document)
+        taxonomy = taxonomy or self.taxonomy.classify(document, "")
+        no_price_quantity_doc = self._is_no_price_quantity_document(document) or taxonomy.amount_required is False
+        party_optional_doc = no_price_quantity_doc or taxonomy.party_required is False
         if not party_optional_doc and not (document.vendor_name or document.merchant_name):
             reasons.append(self._review_reason("missing_vendor_name", "공급업체가 추출되지 않았습니다.", "vendor_name"))
         if not party_optional_doc and not document.customer_name:
