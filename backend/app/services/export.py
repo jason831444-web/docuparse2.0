@@ -10,6 +10,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 
 from app.models.document import Document
+from app.services.document_taxonomy import DocumentTaxonomyService
+
+
+_taxonomy_service = DocumentTaxonomyService()
 
 
 def serialize_document(document: Document) -> dict:
@@ -23,6 +27,34 @@ def serialize_document(document: Document) -> dict:
             data[key] = str(value)
         elif hasattr(value, "value"):
             data[key] = value.value
+    taxonomy = _export_taxonomy(document)
+    policy = _export_policy(document, taxonomy)
+    data["document_taxonomy"] = taxonomy
+    data["export_policy"] = policy
+    data["canonical_export"] = {
+        "document": {
+            "document_id": str(document.id) if document.id else None,
+            "filename": document.original_filename,
+            "document_type": _doc_type(document),
+            "document_subtype": taxonomy.get("document_subtype"),
+            "document_profile": taxonomy.get("document_profile"),
+            "document_profiles": taxonomy.get("document_profiles", []),
+            "layout_profile": taxonomy.get("layout_profile"),
+            "processing_status": getattr(document.processing_status, "value", str(document.processing_status)) if document.processing_status else None,
+            "review_required": document.review_required,
+            "document_number": document.document_number,
+            "issue_date": str(document.issue_date or document.extracted_date or "") or None,
+            "due_date": str(document.due_date or "") or None,
+            "vendor_name": document.vendor_name or document.merchant_name,
+            "customer_name": document.customer_name,
+            "currency": document.currency,
+            "subtotal": _decimal_text(document.subtotal),
+            "tax": _decimal_text(document.tax),
+            "total": _decimal_text(document.extracted_amount),
+        },
+        "policy": policy,
+        "line_items": _canonical_line_items(document),
+    }
     return data
 
 
@@ -52,7 +84,7 @@ def documents_to_excel(documents: list[Document], sheet_mode: str = "combined") 
 
 
 def document_to_json(document: Document) -> str:
-    return json.dumps(serialize_document(document), indent=2)
+    return json.dumps(_json_safe(serialize_document(document)), indent=2)
 
 
 def tax_invoice_to_draft_xml(document: Document) -> bytes:
@@ -120,8 +152,11 @@ def validate_tax_invoice_export(document: Document) -> list[str]:
 def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
     rows: list[dict] = []
     for document in documents:
+        taxonomy = _export_taxonomy(document)
+        policy = _export_policy(document, taxonomy)
+        review_reasons = _review_reason_text(document)
         line_items = document.line_items or [{}]
-        for item in line_items:
+        for index, item in enumerate(line_items, start=1):
             rows.append({
                 "문서유형": getattr(document.document_type, "value", str(document.document_type)),
                 "공급업체": document.vendor_name or document.merchant_name,
@@ -141,8 +176,200 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "합계금액": item.get("line_total") or document.extracted_amount,
                 "통화": document.currency,
                 "검토상태": "검토 필요" if document.review_required else "확정 가능",
+                "document_id": str(document.id) if document.id else None,
+                "filename": document.original_filename,
+                "document_subtype": taxonomy.get("document_subtype"),
+                "document_profile": taxonomy.get("document_profile"),
+                "document_profiles": ", ".join(taxonomy.get("document_profiles") or []),
+                "layout_profile": taxonomy.get("layout_profile"),
+                "processing_status": getattr(document.processing_status, "value", str(document.processing_status)) if document.processing_status else None,
+                "review_required": document.review_required,
+                "review_reasons": review_reasons,
+                "line_index": index,
+                "document_item_code": item.get("document_item_code") or item.get("item_code") or item.get("source_item_code"),
+                "internal_item_code": item.get("internal_item_code"),
+                "match_status": item.get("item_master_match_status"),
+                "match_confidence": item.get("item_master_match_confidence"),
+                "line_review_flags": _line_review_flags(document, index - 1),
+                "amount_required": policy["amount_required"],
+                "party_required": policy["party_required"],
+                "export_policy": policy["export_policy"],
+                "export_blocked": policy["export_blocked"],
+                "export_warning": policy["export_warning"],
+                "taxonomy_evidence": ", ".join(taxonomy.get("evidence") or []),
             })
     return rows
+
+
+def _doc_type(document: Document) -> str:
+    return getattr(document.document_type, "value", str(document.document_type))
+
+
+def _metadata_taxonomy(document: Document) -> dict:
+    workflow = document.workflow_metadata or {}
+    ingestion = document.ingestion_metadata or {}
+    workflow_taxonomy = workflow.get("taxonomy") if isinstance(workflow.get("taxonomy"), dict) else {}
+    ingestion_taxonomy = ingestion.get("taxonomy") if isinstance(ingestion.get("taxonomy"), dict) else {}
+    profiles: list[str] = []
+    for value in (workflow_taxonomy.get("document_profiles"), workflow.get("document_profiles"), ingestion_taxonomy.get("document_profiles")):
+        if isinstance(value, list):
+            profiles.extend(str(item) for item in value if item)
+    profile = workflow_taxonomy.get("document_profile") or workflow.get("document_profile") or ingestion_taxonomy.get("document_profile")
+    if profile and str(profile) not in profiles:
+        profiles.insert(0, str(profile))
+    return {
+        "document_subtype": workflow_taxonomy.get("document_subtype") or workflow.get("document_subtype") or ingestion_taxonomy.get("document_subtype"),
+        "document_profile": profile,
+        "document_profiles": list(dict.fromkeys(profiles)),
+        "layout_profile": workflow_taxonomy.get("layout_profile") or workflow.get("layout_profile") or ingestion_taxonomy.get("layout_profile"),
+        "amount_required": _first_bool(workflow_taxonomy.get("amount_required"), workflow.get("amount_required"), ingestion_taxonomy.get("amount_required")),
+        "party_required": _first_bool(workflow_taxonomy.get("party_required"), workflow.get("party_required"), ingestion_taxonomy.get("party_required")),
+        "evidence": workflow_taxonomy.get("evidence") or ingestion_taxonomy.get("evidence") or [],
+    }
+
+
+def _export_taxonomy(document: Document) -> dict:
+    metadata_taxonomy = _metadata_taxonomy(document)
+    if metadata_taxonomy.get("document_subtype") or metadata_taxonomy.get("document_profile") or metadata_taxonomy.get("document_profiles"):
+        return metadata_taxonomy
+    classified = _taxonomy_service.classify(document, document.raw_text or "", extraction_method=document.extraction_method, file_metadata=(document.ingestion_metadata or {}).get("file_metadata"))
+    return classified.to_metadata()
+
+
+def _export_policy(document: Document, taxonomy: dict) -> dict:
+    profiles = set(taxonomy.get("document_profiles") or [])
+    amount_required = taxonomy.get("amount_required")
+    party_required = taxonomy.get("party_required")
+    if amount_required is None:
+        amount_required = "no_price_document" not in profiles and "inventory_movement_document" not in profiles and _doc_type(document) not in {"delivery_note", "inspection_report"}
+    if party_required is None:
+        party_required = "inventory_movement_document" not in profiles
+    warnings: list[str] = []
+    if "no_price_document" in profiles:
+        warnings.append("amount_not_required")
+    if "tax_document" in profiles:
+        warnings.extend(_tax_consistency_warnings(document))
+    if "return_document" in profiles:
+        warnings.append("amount_direction_requires_review")
+        if not _related_document_number(document):
+            warnings.append("related_document_missing")
+    if document.review_required:
+        warnings.append("review_required")
+    return {
+        "amount_required": bool(amount_required),
+        "party_required": bool(party_required),
+        "export_policy": _policy_name(taxonomy, amount_required=bool(amount_required)),
+        "export_blocked": False,
+        "export_warning": ", ".join(dict.fromkeys(warnings)),
+        "related_document_number": _related_document_number(document),
+    }
+
+
+def _policy_name(taxonomy: dict, *, amount_required: bool) -> str:
+    profiles = set(taxonomy.get("document_profiles") or [])
+    if "inventory_movement_document" in profiles:
+        return "inventory_movement_no_price"
+    if "return_document" in profiles:
+        return "return_or_credit_review"
+    if "tax_document" in profiles:
+        return "tax_document_consistency"
+    if "foreign_currency_document" in profiles:
+        return "foreign_currency_document"
+    if not amount_required:
+        return "no_price_document"
+    return "priced_document"
+
+
+def _tax_consistency_warnings(document: Document) -> list[str]:
+    warnings: list[str] = []
+    subtotal = _to_decimal(document.subtotal)
+    tax = _to_decimal(document.tax)
+    total = _to_decimal(document.extracted_amount)
+    if subtotal is None or tax is None or total is None:
+        warnings.append("tax_amount_fields_missing")
+    elif abs((subtotal + tax) - total) > Decimal("0.01"):
+        warnings.append("subtotal_tax_total_mismatch")
+    line_total = _line_total_sum(document.line_items or [])
+    if total is not None and line_total is not None and abs(line_total - total) > Decimal("0.01"):
+        warnings.append("line_items_total_mismatch")
+    return warnings
+
+
+def _review_reason_text(document: Document) -> str:
+    metadata = document.workflow_metadata or {}
+    reasons = metadata.get("normalized_review_issues") or metadata.get("review_reasons") or []
+    values: list[str] = []
+    if isinstance(reasons, list):
+        for reason in reasons:
+            if isinstance(reason, dict):
+                values.append(str(reason.get("code") or reason.get("message_ko") or "review_required"))
+            elif reason:
+                values.append(str(reason))
+    for warning in document.warnings or []:
+        values.append(str(warning))
+    return ", ".join(dict.fromkeys(values))
+
+
+def _line_review_flags(document: Document, item_index: int) -> str:
+    metadata = document.workflow_metadata or {}
+    reasons = metadata.get("normalized_review_issues") or []
+    flags: list[str] = []
+    if isinstance(reasons, list):
+        for reason in reasons:
+            if isinstance(reason, dict) and reason.get("item_index") == item_index:
+                flags.append(str(reason.get("code") or reason.get("message_ko") or "review_required"))
+    return ", ".join(dict.fromkeys(flags))
+
+
+def _canonical_line_items(document: Document) -> list[dict]:
+    return [
+        {
+            "line_index": index,
+            "item_name": item.get("item_name"),
+            "document_item_code": item.get("document_item_code") or item.get("item_code") or item.get("source_item_code"),
+            "internal_item_code": item.get("internal_item_code"),
+            "specification": item.get("specification"),
+            "quantity": _json_safe(item.get("quantity")),
+            "unit": item.get("unit"),
+            "unit_price": _json_safe(item.get("unit_price")),
+            "supply_amount": _json_safe(item.get("supply_amount")),
+            "tax_amount": _json_safe(item.get("tax_amount")),
+            "line_total": _json_safe(item.get("line_total")),
+            "match_status": item.get("item_master_match_status"),
+            "match_confidence": _json_safe(item.get("item_master_match_confidence")),
+            "line_review_flags": _line_review_flags(document, index - 1),
+        }
+        for index, item in enumerate(document.line_items or [], start=1)
+    ]
+
+
+def _related_document_number(document: Document) -> str | None:
+    metadata = document.workflow_metadata or {}
+    business = metadata.get("business_fields") if isinstance(metadata.get("business_fields"), dict) else {}
+    for key in ("related_document_number", "related_doc", "original_document_number", "source_document_number"):
+        value = business.get(key) or metadata.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _first_bool(*values: object) -> bool | None:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _json_safe(value: object) -> object:
+    if isinstance(value, (datetime, date, UUID, Decimal)):
+        return str(value)
+    if hasattr(value, "value"):
+        return value.value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(inner) for inner in value]
+    return value
 
 
 def _excel_sheet_name(value: str) -> str:
