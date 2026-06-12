@@ -116,13 +116,13 @@ class DocumentParser:
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
-        line_items = self._extract_line_items(lines)
+        line_items = self._extract_line_items(lines, doc_type)
         document_scope_text = self._document_scope_text(lines)
         no_amount_quantity_document = self._is_no_amount_quantity_document(lines, doc_type)
         option_selection_quote = self._is_option_selection_quotation(lines, doc_type)
         if no_amount_quantity_document:
             special_quantity_items = self._extract_special_quantity_table_items(lines)
-            if special_quantity_items:
+            if special_quantity_items and self._should_use_no_amount_special_items(line_items, special_quantity_items):
                 line_items = special_quantity_items
         if no_amount_quantity_document or option_selection_quote:
             subtotal = None
@@ -130,9 +130,9 @@ class DocumentParser:
             amount = None
             currency = None
         else:
-            subtotal = self._extract_labeled_amount(document_scope_text, ["공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "금월공급가액", "subtotal total", "subtotal", "supply amount", "supply total"])
-            tax = self._extract_labeled_amount(document_scope_text, ["세액 합계", "세액", "세 액", "부가세", "금월세액", "vat total", "vat", "tax", "w세액"])
-            amount = self._extract_labeled_amount(document_scope_text, ["총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            subtotal = self._extract_labeled_amount(document_scope_text, ["차감 공급가액", "차감공급가액", "공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "금월공급가액", "subtotal total", "subtotal", "supply amount", "supply total"])
+            tax = self._extract_labeled_amount(document_scope_text, ["차감 세액", "차감세액", "세액 합계", "세액", "세 액", "부가세", "금월세액", "vat total", "vat", "tax", "w세액"])
+            amount = self._extract_labeled_amount(document_scope_text, ["차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
             line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
             line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
             currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
@@ -460,7 +460,7 @@ class DocumentParser:
                     best_labeled = value
         if strong and (
             best_labeled is None
-            or self._document_number_score(strong) >= self._document_number_score(best_labeled)
+            or self._document_number_score(strong) > self._document_number_score(best_labeled)
             or len(strong) > len(best_labeled) + 3
         ):
             return strong
@@ -549,6 +549,8 @@ class DocumentParser:
         return score
 
     def _looks_like_document_number_continuation(self, value: str) -> bool:
+        if re.fullmatch(r"\d{2,5}", value):
+            return True
         if re.fullmatch(r"\d{4}-\d{2,4}(?:-\d{2,5})?", value):
             return True
         if re.fullmatch(r"[A-Z]{1,4}-?\d{2,5}", value, flags=re.IGNORECASE):
@@ -598,6 +600,9 @@ class DocumentParser:
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
+        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        if related_document_number:
+            fields["related_document_number"] = self._normalize_document_number(related_document_number) or related_document_number
         if doc_type == DocumentType.quotation:
             fields["quotation_date"] = self._date_string(self._extract_labeled_date(text, ["견적일", "quotation date", "quote date"]))
             fields["valid_until"] = self._date_string(self._extract_labeled_date(text, ["유효기간", "견적유효기간", "valid until", "expires"]))
@@ -638,7 +643,10 @@ class DocumentParser:
     def _date_string(self, value: date | None) -> str | None:
         return value.isoformat() if value else None
 
-    def _extract_line_items(self, lines: list[str]) -> list[dict]:
+    def _extract_line_items(self, lines: list[str], doc_type: DocumentType | None = None) -> list[dict]:
+        numbered_items = self._extract_numbered_vertical_table_items(lines, doc_type)
+        if self._should_prefer_numbered_vertical_items(numbered_items, lines, doc_type):
+            return self._dedupe_line_items(numbered_items)[:80]
         item_block_lines = self._explicit_item_block_lines(lines)
         items = self._extract_key_value_line_items(item_block_lines or lines)
         items.extend(self._extract_table_line_items(lines))
@@ -664,6 +672,176 @@ class DocumentParser:
             if item and item.get("item_name"):
                 items.append(self._normalize_line_item(item))
         return self._dedupe_line_items(items)[:80]
+
+    def _should_prefer_numbered_vertical_items(
+        self,
+        items: list[dict],
+        lines: list[str],
+        doc_type: DocumentType | None = None,
+    ) -> bool:
+        if len(items) < 2:
+            return False
+        text = "\n".join(lines)
+        has_no_header = any(re.fullmatch(r"No\.?", line.strip(), flags=re.IGNORECASE) for line in lines[:80])
+        if not has_no_header:
+            return False
+        has_structured_amounts = any(item.get("line_total") or item.get("supply_amount") for item in items)
+        has_quantity_table = any(item.get("quantity") for item in items) and re.search(r"(요청수량|납품수량|입고수량|합격수량)", text)
+        option_quote = doc_type == DocumentType.quotation and re.search(r"(옵션|option|선택)", text, flags=re.IGNORECASE)
+        return bool(has_structured_amounts or has_quantity_table or option_quote)
+
+    def _has_quantity_bearing_items(self, items: list[dict]) -> bool:
+        return any(item.get("quantity") is not None for item in items)
+
+    def _should_use_no_amount_special_items(self, items: list[dict], special_items: list[dict]) -> bool:
+        if not items:
+            return True
+        if not self._has_quantity_bearing_items(items):
+            return True
+        current_code_count = sum(1 for item in items if item.get("item_code") or item.get("document_item_code"))
+        special_code_count = sum(1 for item in special_items if item.get("item_code") or item.get("document_item_code"))
+        if special_code_count > current_code_count:
+            return True
+        if len(special_items) > len(items) and special_code_count >= current_code_count:
+            return True
+        return False
+
+    def _extract_numbered_vertical_table_items(
+        self,
+        lines: list[str],
+        doc_type: DocumentType | None = None,
+    ) -> list[dict]:
+        items: list[dict] = []
+        for index, line in enumerate(lines):
+            if not re.fullmatch(r"No\.?", line.strip(), flags=re.IGNORECASE):
+                continue
+            fields: list[str | None] = ["row_no"]
+            cursor = index + 1
+            while cursor < len(lines) and len(fields) < 14:
+                field = self._numbered_table_field_for_label(lines[cursor])
+                if not field:
+                    break
+                fields.append(field)
+                cursor += 1
+            meaningful_fields = {field for field in fields if field and field not in {"row_no", "note"}}
+            if "item_name" not in meaningful_fields or not ({"quantity", "supply_amount", "line_total"} & meaningful_fields):
+                continue
+            row_start = cursor
+            parsed_rows: list[dict] = []
+            while row_start < len(lines):
+                marker = lines[row_start].strip()
+                if self._looks_like_numbered_table_footer(marker):
+                    break
+                if not self._looks_like_numbered_table_row_marker(marker):
+                    row_start += 1
+                    continue
+                cells = [marker]
+                cursor = row_start + 1
+                while cursor < len(lines) and len(cells) < len(fields):
+                    value = lines[cursor].strip()
+                    if self._looks_like_numbered_table_row_marker(value) and len(cells) <= 1:
+                        break
+                    if self._looks_like_numbered_table_footer(value):
+                        break
+                    cells.append(value)
+                    cursor += 1
+                if len(cells) < len(fields):
+                    break
+                item = self._line_item_from_numbered_vertical_cells(fields, cells)
+                if item and item.get("item_name"):
+                    parsed_rows.append(self._normalize_line_item(item))
+                row_start = cursor
+            if len(parsed_rows) >= 2:
+                items.extend(parsed_rows)
+                break
+        return self._dedupe_line_items(items)
+
+    def _numbered_table_field_for_label(self, label: str) -> str | None:
+        key = re.sub(r"[\s_/-]+", "", str(label or "").strip().lower())
+        mapping = {
+            "품목명": "item_name",
+            "품명": "item_name",
+            "반품품목": "item_name",
+            "description": "item_name",
+            "itemdescription": "item_name",
+            "itemname": "item_name",
+            "품목코드": "item_code",
+            "문서품목코드": "item_code",
+            "내부품목코드": "item_code",
+            "vendorsku": "item_code",
+            "sku": "item_code",
+            "규격": "specification",
+            "spec": "specification",
+            "specification": "specification",
+            "수량": "quantity",
+            "요청수량": "quantity",
+            "요청수림": "quantity",
+            "발주수량": "quantity",
+            "납품수량": "quantity",
+            "입고수량": "quantity",
+            "단위": "unit",
+            "unit": "unit",
+            "단가": "unit_price",
+            "unitprice": "unit_price",
+            "공급가액": "supply_amount",
+            "공급액": "supply_amount",
+            "subtotal": "supply_amount",
+            "amount": "supply_amount",
+            "세액": "tax_amount",
+            "부가세": "tax_amount",
+            "tax": "tax_amount",
+            "vat": "tax_amount",
+            "합계": "line_total",
+            "합계금액": "line_total",
+            "total": "line_total",
+            "linetotal": "line_total",
+            "비고": "note",
+            "note": "note",
+            "remark": "note",
+        }
+        return mapping.get(key)
+
+    def _looks_like_numbered_table_row_marker(self, value: str) -> bool:
+        text = str(value or "").strip()
+        return bool(re.fullmatch(r"\d{1,3}", text) or re.fullmatch(r"[A-Z]{1,2}\d{1,2}", text, flags=re.IGNORECASE))
+
+    def _looks_like_numbered_table_footer(self, value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return True
+        return bool(re.search(
+            r"(공급가액\s*합계|차감\s*공급가액|차감\s*세액|차감\s*합계|합계금액|총액|VAT|부가세|"
+            r"선택시\s*합계|옵션라인|모두\s*합산|담당|검토|승인|DocuParse|synthetic data|"
+            r"페이지\s*하단|전월이월|총\s*미수금)",
+            text,
+            flags=re.IGNORECASE,
+        ))
+
+    def _line_item_from_numbered_vertical_cells(self, fields: list[str | None], cells: list[str]) -> dict | None:
+        item: dict = {}
+        for field, value in zip(fields, cells):
+            if not field or field in {"row_no", "note"}:
+                continue
+            if field == "quantity":
+                quantity, unit = self._parse_quantity_and_unit(self._normalize_table_numeric_text(value))
+                item[field] = quantity
+                if unit and not item.get("unit"):
+                    item["unit"] = unit
+            elif field in {"unit_price", "supply_amount", "tax_amount", "line_total"}:
+                item[field] = self._normalize_number(self._normalize_table_numeric_text(value))
+            elif field == "item_code":
+                item[field] = self._clean_code_value(value)
+            else:
+                item[field] = self._clean_value(value)
+        if not item.get("item_name"):
+            return None
+        return item
+
+    def _normalize_table_numeric_text(self, value: object) -> str:
+        text = str(value or "").strip()
+        if re.fullmatch(r"[-+]?[\d,.\sOo]+", text):
+            text = text.replace("O", "0").replace("o", "0")
+        return text
 
     def _should_use_sparse_special_items(self, items: list[dict]) -> bool:
         if not items:

@@ -220,6 +220,9 @@ class DocumentWorkflowEnrichmentService:
 
     def _manufacturing_business_fields(self, document: Document, text: str, doc_type: str) -> dict[str, str | list[str]]:
         fields: dict[str, str | list[str]] = {}
+        related_document_number = self._extract_labeled_text_multiline(text, ["관련납품서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        if related_document_number:
+            fields["related_document_number"] = related_document_number
         if doc_type == "purchase_order":
             fields["due_date"] = self._date_iso(document.due_date)
         elif doc_type == "quotation":
@@ -689,6 +692,21 @@ class DocumentWorkflowEnrichmentService:
         if not match:
             return None
         return re.sub(r"\s+", " ", match.group(1)).strip(" -:：")[:120] or None
+
+    def _extract_labeled_text_multiline(self, text: str, labels: list[str]) -> str | None:
+        same_line = self._extract_labeled_text(text, labels)
+        if same_line:
+            return same_line
+        lines = [line.strip() for line in text.splitlines()]
+        normalized_labels = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
+        for index, line in enumerate(lines[:-1]):
+            if re.sub(r"[\s:：]+", "", line.lower()) not in normalized_labels:
+                continue
+            for candidate in lines[index + 1:index + 4]:
+                value = re.sub(r"\s+", " ", candidate).strip(" -:：")
+                if value and not re.fullmatch(r"[가-힣A-Za-z ]{1,20}", value):
+                    return value[:120]
+        return None
 
     def _extract_labeled_date(self, text: str, labels: list[str]) -> date | None:
         label_pattern = "|".join(re.escape(label) for label in labels)

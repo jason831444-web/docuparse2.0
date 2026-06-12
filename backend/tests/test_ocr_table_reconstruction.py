@@ -194,7 +194,7 @@ def test_vertical_paddleocr_purchase_order_table_reconstructs_items_and_totals()
     parsed = DocumentParser().parse(text, "01_image_po_clean_korean.pdf")
 
     assert parsed.document_type == DocumentType.purchase_order
-    assert parsed.document_number == "PO-2026-0801"
+    assert parsed.document_number == "PO-2026-0801-101"
     assert parsed.vendor_name == "대한정밀부품"
     assert parsed.customer_name == "한빛제조"
     assert parsed.issue_date.isoformat() == "2026-08-01"
@@ -1185,3 +1185,287 @@ def test_document_number_keeps_multiple_suffix_segments():
 
     assert parsed.document_type == DocumentType.purchase_order
     assert parsed.document_number == "PO-2026-0809-MIX-888"
+
+
+def test_split_numeric_suffix_document_numbers_from_visual_pdf_ocr():
+    po = DocumentParser().parse(
+        "\n".join([
+            "발주서",
+            "발주번호",
+            "PO-2026-0801",
+            "-101",
+        ]),
+        "01_image_po_clean_korean.pdf",
+    )
+    quote = DocumentParser().parse(
+        "\n".join([
+            "견적서",
+            "견적번호",
+            "OT-2026-0802",
+            "208",
+        ]),
+        "02_image_quotation_ambiguous_stainless.pdf",
+    )
+
+    assert po.document_number == "PO-2026-0801-101"
+    assert quote.document_number == "QT-2026-0802-208"
+
+
+def test_visual_numbered_option_quote_keeps_options_as_three_rows_without_totaling_all():
+    text = "\n".join([
+        "견 적 서",
+        "공급업체",
+        "한성산업",
+        "견적번호",
+        "QT-2026-0912-ALT",
+        "고객사",
+        "미래정밀",
+        "No",
+        "품목명",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "합계",
+        "A1",
+        "스텐판 2T 옵션 A",
+        "SUS304 2T",
+        "10",
+        "EA",
+        "24,500",
+        "245,000",
+        "269,500",
+        "A2",
+        "스텐판 2T 옵션 B",
+        "SUS316 2T",
+        "10",
+        "EA",
+        "31,000",
+        "310,000",
+        "341,000",
+        "B1",
+        "SUS304 브라켓",
+        "50x80x3T",
+        "60",
+        "EA",
+        "2,800",
+        "168,000",
+        "184,800",
+        "VAT",
+        "별도 10%",
+        "선택시 합계",
+        "옵션별 상이",
+        "* 옵션 A/B 중 하나 선택 필요. 옵션 라인을 모두 합산하면 안 됨.",
+    ])
+
+    parsed = DocumentParser().parse(text, "12_real_quote_options_multiple_valid_until.pdf")
+
+    assert parsed.document_type == DocumentType.quotation
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 3
+    assert [item["line_total"] for item in parsed.line_items] == [269500, 341000, 184800]
+    assert parsed.line_items[0]["unit_price"] == 24500
+    assert all("선택시" not in item.get("item_name", "") for item in parsed.line_items)
+
+
+def test_visual_return_credit_numbered_table_prioritizes_deduction_total():
+    text = "\n".join([
+        "반품 / 차감 요청서",
+        "문서번호",
+        "RTN-2026-0919-011",
+        "관련납품서",
+        "DN-2026-0914-2F",
+        "No",
+        "반품품목",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "세액",
+        "합계",
+        "1",
+        "베어링 하우징",
+        "100mm",
+        "1",
+        "EA",
+        "8,000",
+        "8,000",
+        "800",
+        "8,800",
+        "2",
+        "S45C PIN 8X60",
+        "8x60",
+        "5",
+        "EA",
+        "600",
+        "3,000",
+        "300",
+        "3,300",
+        "차감 공급가액",
+        "11,000",
+        "차감 세액",
+        "1,100",
+        "차감 합계",
+        "12,100",
+    ])
+
+    parsed = DocumentParser().parse(text, "19_real_return_credit_note.pdf")
+
+    assert parsed.document_number == "RTN-2026-0919-011"
+    assert parsed.business_fields["related_document_number"] == "DN-2026-0914-2F"
+    assert parsed.extracted_amount == 12100
+    assert len(parsed.line_items) == 2
+    assert [item["line_total"] for item in parsed.line_items] == [8800, 3300]
+
+
+def test_visual_numbered_long_invoice_text_layer_recovers_all_rows():
+    rows = []
+    for number, name, spec, quantity, unit_price, supply, total in [
+        (1, "M8 육각볼트", "M8x20", 110, 105, "11,550", "12,705"),
+        (2, "SUS WASHER M8", "M8", 120, 110, "13,200", "14,520"),
+        (3, "M8 육각볼트", "M8x20", 130, 115, "14,950", "16,445"),
+        (4, "SUS WASHER M8", "M8", 140, 120, "16,800", "18,480"),
+        (5, "M8 육각볼트", "M8x20", 150, 125, "18,750", "20,625"),
+        (6, "SUS WASHER M8", "M8", 160, 130, "20,800", "22,880"),
+        (7, "M8 육각볼트", "M8x20", 170, 135, "22,950", "25,245"),
+        (8, "SUS WASHER M8", "M8", 180, 140, "25,200", "27,720"),
+        (9, "M8 육각볼트", "M8x20", 190, 145, "27,550", "30,305"),
+        (10, "SUS WASHER M8", "M8", 200, 150, "30,000", "33,000"),
+        (11, "M8 육각볼트", "M8x20", 210, 155, "32,550", "35,805"),
+        (12, "SUS WASHER M8", "M8", 220, 160, "35,200", "38,720"),
+        (13, "M8 육각볼트", "M8x20", 230, 165, "37,950", "41,745"),
+        (14, "SUS WASHER M8", "M8", 240, 170, "40,800", "44,880"),
+        (15, "M8 육각볼트", "M8x20", 250, 175, "43,750", "48,125"),
+    ]:
+        rows.extend([str(number), name, spec, str(quantity), "EA", str(unit_price), supply, total])
+    text = "\n".join([
+        "거래처 월합계 인보이스",
+        "계산서번호",
+        "INV-2026-0920-LONG",
+        "No",
+        "품목명",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "합계",
+        *rows,
+        "합계금액",
+        "431,200",
+    ])
+
+    parsed = DocumentParser().parse(text, "20_real_invoice_multipage_many_lines.pdf")
+
+    assert parsed.document_number == "INV-2026-0920-LONG"
+    assert parsed.extracted_amount == 431200
+    assert len(parsed.line_items) == 15
+    assert parsed.line_items[0]["line_total"] == 12705
+    assert parsed.line_items[-1]["quantity"] == 250
+    assert parsed.line_items[-1]["line_total"] == 48125
+
+
+def test_visual_fax_numbered_table_avoids_over_split_and_normalizes_ocr_zero_amounts():
+    text = "\n".join([
+        "팩스 발주서",
+        "발주번호",
+        "FAX-PO-2026-0921",
+        "No",
+        "품목명",
+        "규격",
+        "수량",
+        "단위",
+        "단가",
+        "공급가액",
+        "세액",
+        "합계",
+        "1",
+        "베어링 하우징",
+        "100mm",
+        "20",
+        "EA",
+        "8,000",
+        "160,000",
+        "16,000",
+        "176,000",
+        "2",
+        "S45C PIN 8X60",
+        "8x60",
+        "100",
+        "EA",
+        "600",
+        "60,000",
+        "6,000",
+        "66,000",
+        "3",
+        "M8 볼트 / 와셔 SET",
+        "M8",
+        "1,000",
+        "SET",
+        "160",
+        "160,000",
+        "16,00O",
+        "176,0OO",
+        "공급가액",
+        "380,000",
+        "세액",
+        "38,000",
+        "합계금액",
+        "418,000",
+    ])
+
+    parsed = DocumentParser().parse(text, "21_real_fax_po_misaligned_amounts.pdf")
+
+    assert parsed.document_number == "FAX-PO-2026-0921"
+    assert parsed.extracted_amount == 418000
+    assert len(parsed.line_items) == 3
+    assert [item["line_total"] for item in parsed.line_items] == [176000, 66000, 176000]
+    assert parsed.line_items[2]["quantity"] == 1000
+    assert parsed.line_items[2]["unit"] == "SET"
+
+
+def test_visual_internal_transfer_numbered_table_preserves_quantities_without_amounts():
+    text = "\n".join([
+        "사업장간 자재 이동 요청서",
+        "문서번호",
+        "TRF-2026-0922-002",
+        "No",
+        "품목명",
+        "내부품목코드",
+        "규격",
+        "요청수량",
+        "단위",
+        "비고",
+        "1",
+        "SUS304 2T PLATE",
+        "M-PLT-SUS304-2T-1000X2000",
+        "1000x2000",
+        "2",
+        "EA",
+        "라인 긴급",
+        "2",
+        "M8 육각 볼트",
+        "P-BOLT-M8-20-ZN",
+        "M8x20",
+        "500",
+        "EA",
+        "재고 이동",
+        "3",
+        "SUS304 평와셔 M8",
+        "P-WASH-SUS304-M8",
+        "M8",
+        "500",
+        "EA",
+        "재고 이동",
+    ])
+
+    parsed = DocumentParser().parse(text, "22_real_internal_branch_transfer_delivery.pdf")
+
+    assert parsed.document_number == "TRF-2026-0922-002"
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) == 3
+    assert [item["quantity"] for item in parsed.line_items] == [2, 500, 500]
+    assert all("line_total" not in item for item in parsed.line_items)
