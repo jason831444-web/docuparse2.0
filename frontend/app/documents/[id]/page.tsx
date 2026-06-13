@@ -34,10 +34,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
-import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, groupedReviewIssues, informationalReviewIssues, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
-const detailTabs = ["original", "extracted", "ai"] as const;
+const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
 
 function itemMasterStatusLabel(status: string | null | undefined) {
@@ -149,6 +149,103 @@ function TaxonomyPolicyCard({ document }: { document: DocumentRecord }) {
   );
 }
 
+function ErpReadinessBanner({
+  document,
+  openIssueCount,
+}: {
+  document: DocumentRecord;
+  openIssueCount: number;
+}) {
+  const readiness = getErpReadinessStatus(document);
+  const summary = getErpReadinessSummary(document);
+  const schedule = getDocumentScheduleDate(document);
+  const layoutDebug = layoutDebugMetadata(document);
+  const toneClass = {
+    success: "border-emerald-300 bg-emerald-50 text-emerald-950",
+    warning: "border-amber-300 bg-amber-50 text-amber-950",
+    danger: "border-red-300 bg-red-50 text-red-950",
+    processing: "border-blue-300 bg-blue-50 text-blue-950",
+  }[readiness.tone];
+  return (
+    <Card className={`${toneClass} mb-6`}>
+      <CardContent className="grid gap-4 p-5 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div>
+          <p className="text-sm font-medium">ERP/엑셀 입력 준비 상태</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-normal">{readiness.title}</h2>
+          <p className="mt-2 text-sm">{summary}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Badge variant="outline">{document.processing_status}</Badge>
+            {document.review_required ? <Badge className="border-amber-400 bg-white text-amber-800">검토 필요 {openIssueCount}건</Badge> : <Badge className="border-emerald-400 bg-white text-emerald-800">검토 항목 없음</Badge>}
+            {schedule ? <Badge variant="outline">{schedule.label}: {schedule.date}</Badge> : <Badge variant="outline">일정 날짜 없음</Badge>}
+            {layoutDebug?.bbox_candidate_summary?.uncertain_count ? <Badge className="border-amber-400 bg-white text-amber-800">OCR 위치 기반 후보 {layoutDebug.bbox_candidate_summary.uncertain_count}건</Badge> : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 lg:justify-end">
+          <Button asChild variant="outline">
+            <a href={api.exportExcelUrl(new URLSearchParams({ document_ids: document.id }))}>
+              <Download className="size-4" />
+              Excel 내보내기
+            </a>
+          </Button>
+          <Button asChild variant="outline">
+            <a href={api.exportCsvUrl(new URLSearchParams({ document_ids: document.id }))}>
+              <Download className="size-4" />
+              CSV 내보내기
+            </a>
+          </Button>
+          <Button asChild variant="outline">
+            <a href={api.exportJsonUrl(document.id)}>
+              <Download className="size-4" />
+              JSON 보기
+            </a>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
+  const isPdf = document.mime_type === "application/pdf";
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle>원본 문서</CardTitle>
+        <Button asChild variant="outline" size="sm">
+          <a href={document.file_url} target="_blank" rel="noreferrer">원본 열기</a>
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isImage ? (
+          <div className="relative h-[48rem] max-h-[78vh] w-full rounded-lg border bg-white">
+            <Image src={document.file_url} alt={document.original_filename} fill unoptimized className="object-contain" />
+          </div>
+        ) : isPdf ? (
+          <iframe
+            src={document.file_url}
+            title={document.original_filename}
+            className="h-[48rem] max-h-[78vh] w-full rounded-lg border bg-white"
+          />
+        ) : (
+          <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center">
+            <FileText className="mb-3 size-10 text-primary" />
+            <p className="font-semibold">{document.original_filename}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{document.mime_type}</p>
+          </div>
+        )}
+        <InfoGrid
+          items={[
+            ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
+            ["추출 방식", extractionMethodLabel(document)],
+            ["업로드 날짜", formatDateTime(document.created_at)],
+            ["최근 수정", formatDateTime(document.updated_at)],
+          ]}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 function InfoIssueDetails({ items }: { items: string[] }) {
   if (!items.length) return null;
   return (
@@ -223,7 +320,7 @@ export default function DocumentDetailPage() {
   const [document, setDocument] = useState<DocumentRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<DetailTab>("original");
+  const [activeTab, setActiveTab] = useState<DetailTab>("extracted");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const [approvalNote, setApprovalNote] = useState("");
@@ -545,6 +642,8 @@ export default function DocumentDetailPage() {
         </div>
       </div>
 
+      <ErpReadinessBanner document={document} openIssueCount={openIssueCount} />
+
       <div className="mb-6 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardContent className="p-4">
@@ -572,54 +671,24 @@ export default function DocumentDetailPage() {
         </Card>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {detailTabs.map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            className={`rounded-full border px-4 py-2 text-sm transition ${
-              activeTab === tab ? "border-primary bg-primary text-primary-foreground" : "bg-white text-muted-foreground hover:border-primary/40"
-            }`}
-          >
-            {tab === "ai" ? "AI 추출 결과" : tab === "extracted" ? "원문 텍스트" : "원본 문서"}
-          </button>
-        ))}
-      </div>
-
-      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <section className="space-y-6">
-          {activeTab === "original" ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>원본 문서</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {isImage ? (
-                  <div className="relative h-[42rem] max-h-[72vh] w-full rounded-lg border bg-white">
-                    <Image src={document.file_url} alt={document.original_filename} fill unoptimized className="object-contain" />
-                  </div>
-                ) : (
-                  <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center">
-                    <FileText className="mb-3 size-10 text-primary" />
-                    <p className="font-semibold">{document.original_filename}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">{document.mime_type}</p>
-                    <Button asChild variant="outline" className="mt-4">
-                      <a href={document.file_url}>원본 열기</a>
-                    </Button>
-                  </div>
-                )}
-                <InfoGrid
-                  items={[
-                    ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
-                    ["추출 방식", extractionMethodLabel(document)],
-                    ["업로드 날짜", formatDateTime(document.created_at)],
-                    ["최근 수정", formatDateTime(document.updated_at)],
-                  ]}
-                />
-              </CardContent>
-            </Card>
-          ) : null}
+          <OriginalPreviewCard document={document} isImage={isImage} />
+
+          <div className="flex flex-wrap gap-2">
+            {detailTabs.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`rounded-full border px-4 py-2 text-sm transition ${
+                  activeTab === tab ? "border-primary bg-primary text-primary-foreground" : "bg-white text-muted-foreground hover:border-primary/40"
+                }`}
+              >
+                {tab === "ai" ? "AI 추출 결과" : "원문 텍스트"}
+              </button>
+            ))}
+          </div>
 
           {activeTab === "extracted" ? (
             <Card>

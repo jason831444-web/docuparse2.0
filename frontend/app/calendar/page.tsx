@@ -7,7 +7,7 @@ import { CalendarDays, Clock3, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { documentDisplayTitle, formatDate, primaryCategoryLabel } from "@/lib/utils";
+import { formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, preferredCalendarItems, primaryCategoryLabel } from "@/lib/utils";
 import type { DocumentCalendarItem } from "@/types/document";
 
 function toneFor(item: DocumentCalendarItem) {
@@ -26,15 +26,16 @@ export default function CalendarPage() {
   }, []);
 
   const grouped = useMemo(() => {
-    return items.reduce<Record<string, DocumentCalendarItem[]>>((groups, item) => {
+    return preferredCalendarItems(items).reduce<Record<string, DocumentCalendarItem[]>>((groups, item) => {
       const key = item.date.slice(0, 7);
       groups[key] = [...(groups[key] || []), item];
       return groups;
     }, {});
   }, [items]);
 
-  const upcoming = items.filter((item) => item.days_from_today >= 0).slice(0, 5);
-  const overdue = items.filter((item) => item.days_from_today < 0).slice(0, 5);
+  const preferredItems = preferredCalendarItems(items);
+  const upcoming = preferredItems.filter((item) => item.days_from_today >= 0).slice(0, 5);
+  const overdue = preferredItems.filter((item) => item.days_from_today < 0).slice(0, 5);
 
   return (
     <main className="shell py-8">
@@ -42,7 +43,7 @@ export default function CalendarPage() {
         <div>
           <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">문서 일정</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-normal">Calendar</h1>
-          <p className="mt-2 text-muted-foreground">발행일, 납기일, 납품일, 지급기한, 유효기간을 한 곳에서 확인합니다.</p>
+          <p className="mt-2 text-muted-foreground">납기요청일, 납품일, 지급기한, 유효기간을 우선 표시하고 날짜가 없을 때만 발행일을 참고합니다.</p>
         </div>
         <Badge variant="outline">{items.length}개 일정</Badge>
       </div>
@@ -93,19 +94,21 @@ export default function CalendarPage() {
 }
 
 function CalendarRow({ item }: { item: DocumentCalendarItem }) {
+  const schedule = getCalendarItemScheduleDate(item);
   return (
     <Link href={item.action_url} className="grid gap-3 rounded-lg border bg-white p-4 transition hover:border-primary/30 hover:shadow-sm md:grid-cols-[140px_1fr_auto] md:items-center">
       <div className="flex items-center gap-2 text-sm font-medium">
         <CalendarDays className="size-4 text-primary" />
-        {formatDate(item.date)}
+        {formatDate(schedule.date)}
       </div>
       <div className="min-w-0">
-        <p className="truncate font-medium">{documentDisplayTitle({ document_number: item.document_number, title: item.document_title, original_filename: item.original_filename })}</p>
+        <p className="truncate font-medium">{formatCalendarItemTitle(item)}</p>
         <p className="mt-1 truncate text-sm text-muted-foreground">{item.vendor_name || "거래처 미확인"} · {item.customer_name || "고객사 미확인"} · {primaryCategoryLabel({ category: item.document_type })}</p>
       </div>
       <div className="flex flex-wrap gap-2 md:justify-end">
         <Badge className={toneFor(item)}>{item.status}</Badge>
-        <Badge variant="outline">{item.date_label}</Badge>
+        <Badge variant="outline">{schedule.label}</Badge>
+        {schedule.fallback ? <Badge variant="outline">fallback</Badge> : null}
         {item.review_required ? <Badge className="bg-amber-100 text-amber-800">검토 필요</Badge> : null}
       </div>
     </Link>

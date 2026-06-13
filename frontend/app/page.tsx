@@ -6,11 +6,11 @@ import { CalendarDays, CheckCircle2, Clock3, FileText, RefreshCcw, ShieldCheck, 
 
 import { DocumentCard } from "@/components/document-card";
 import { FolderCard } from "@/components/folder-card";
-import { UploadDropzone } from "@/components/upload-dropzone";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { documentDisplayTitle, documentSummaryShort, formatDate } from "@/lib/utils";
+import { formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, preferredCalendarItems, documentSummaryShort } from "@/lib/utils";
 import type { ActivitySummary, DocumentCalendarItem, DocumentStats } from "@/types/document";
 
 export default function DashboardPage() {
@@ -21,8 +21,14 @@ export default function DashboardPage() {
   useEffect(() => {
     api.stats().then(setStats).catch(() => setStats(null));
     api.activity().then(setActivity).catch(() => setActivity(null));
-    api.calendar(new URLSearchParams({ limit: "6" })).then(setCalendar).catch(() => setCalendar([]));
+    api.calendar(new URLSearchParams({ limit: "80" })).then(setCalendar).catch(() => setCalendar([]));
   }, []);
+
+  const preferredItems = preferredCalendarItems(calendar);
+  const scheduleItems = preferredItems.filter((item) => item.date_role !== "issue_date");
+  const visibleScheduleItems = preferredItems.slice(0, 10);
+  const upcomingWeek = (scheduleItems.length ? scheduleItems : preferredItems).filter((item) => item.days_from_today >= 0 && item.days_from_today <= 7).slice(0, 5);
+  const monthCells = buildDashboardCalendarCells(visibleScheduleItems);
 
   const metrics = [
     { label: "총 문서 수", value: stats?.total ?? 0, icon: FileText },
@@ -65,10 +71,53 @@ export default function DashboardPage() {
             ))}
           </div>
         </div>
-        <UploadDropzone />
+        <Card className="border-primary/20 bg-white">
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <div>
+              <CardTitle>이번 주 납기 문서</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">발행일보다 납기요청일/납기일을 우선해 표시합니다.</p>
+            </div>
+            <Button asChild variant="ghost" size="sm"><Link href="/calendar">전체 일정</Link></Button>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {upcomingWeek.length ? upcomingWeek.map((item) => <DashboardScheduleRow key={item.id} item={item} />) : (
+              <p className="rounded-lg border bg-slate-50 p-4 text-sm text-muted-foreground">이번 주 납기 문서가 없습니다.</p>
+            )}
+          </CardContent>
+        </Card>
       </section>
 
       <section className="mt-8 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <div>
+              <CardTitle>납기 캘린더</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">납기요청일/납품일/지급기한이 있는 문서를 월 단위로 확인합니다.</p>
+            </div>
+            <Button asChild variant="ghost" size="sm"><Link href="/calendar">캘린더 열기</Link></Button>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-7 gap-2 text-center text-xs font-medium text-muted-foreground">
+              {["월", "화", "수", "목", "금", "토", "일"].map((day) => <span key={day}>{day}</span>)}
+            </div>
+            <div className="mt-2 grid grid-cols-7 gap-2">
+              {monthCells.map((cell) => (
+                <div key={cell.key} className="min-h-24 rounded-lg border bg-white p-2">
+                  <p className="text-xs font-medium text-muted-foreground">{cell.day}</p>
+                  <div className="mt-2 space-y-1">
+                    {cell.items.slice(0, 2).map((item) => (
+                      <Link key={item.id} href={item.action_url} className="block rounded-md bg-secondary px-2 py-1 text-left text-[11px] leading-snug hover:bg-primary/10">
+                        <span className="line-clamp-2">{formatCalendarItemTitle(item)}</span>
+                      </Link>
+                    ))}
+                    {cell.items.length > 2 ? <span className="text-[11px] text-muted-foreground">+{cell.items.length - 2}건</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {!visibleScheduleItems.length ? <p className="mt-4 text-sm text-muted-foreground">등록된 납기 일정이 없습니다.</p> : null}
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>최근 업로드 문서</CardTitle>
@@ -76,24 +125,6 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent className="grid min-w-0 gap-4 lg:grid-cols-2">
             {(stats?.recent ?? []).slice(0, 4).map((document) => <DocumentCard key={document.id} document={document} />)}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>다가오는 일정</CardTitle>
-            <Button asChild variant="ghost" size="sm"><Link href="/calendar">캘린더 열기</Link></Button>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {calendar.slice(0, 5).map((item) => (
-              <Link key={item.id} href={item.action_url} className="flex min-w-0 items-center justify-between gap-3 overflow-hidden rounded-lg border bg-white p-4 shadow-sm shadow-slate-200/50 transition hover:border-primary/30 hover:shadow-md">
-                <div className="min-w-0">
-                  <p className="line-clamp-1 break-words font-medium leading-snug">{documentDisplayTitle({ document_number: item.document_number, title: item.document_title, original_filename: item.original_filename })}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{item.date_label} · {formatDate(item.date)} · {item.status}</p>
-                </div>
-                <CalendarDays className="size-5 shrink-0 text-primary" />
-              </Link>
-            ))}
-            {!calendar.length ? <p className="text-sm text-muted-foreground">등록된 문서 일정이 없습니다.</p> : null}
           </CardContent>
         </Card>
         <Card>
@@ -188,4 +219,43 @@ export default function DashboardPage() {
       </section>
     </main>
   );
+}
+
+function DashboardScheduleRow({ item }: { item: DocumentCalendarItem }) {
+  const schedule = getCalendarItemScheduleDate(item);
+  return (
+    <Link href={item.action_url} className="block rounded-lg border bg-white p-4 transition hover:border-primary/30 hover:shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="line-clamp-2 text-sm font-semibold leading-snug">{formatCalendarItemTitle(item)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{schedule.label} · {formatDate(schedule.date)}</p>
+        </div>
+        <CalendarDays className="size-5 shrink-0 text-primary" />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Badge variant="outline">{item.status}</Badge>
+        {item.review_required ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">검토 필요</Badge> : <Badge className="border-emerald-300 bg-emerald-50 text-emerald-800">입력 준비</Badge>}
+        {schedule.fallback ? <Badge variant="outline">발행일 기준</Badge> : null}
+      </div>
+    </Link>
+  );
+}
+
+function buildDashboardCalendarCells(items: DocumentCalendarItem[]) {
+  const firstDate = items[0]?.date ? new Date(`${items[0].date}T00:00:00`) : new Date();
+  const year = firstDate.getFullYear();
+  const month = firstDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const startOffset = (firstDay.getDay() + 6) % 7;
+  const start = new Date(year, month, 1 - startOffset);
+  return Array.from({ length: 35 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    const iso = date.toISOString().slice(0, 10);
+    return {
+      key: iso,
+      day: date.getDate(),
+      items: items.filter((item) => item.date === iso),
+    };
+  });
 }

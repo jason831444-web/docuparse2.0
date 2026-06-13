@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { BBoxTableCandidate, DocumentTaxonomy, LayoutDebugMetadata } from "@/types/document";
+import type { BBoxTableCandidate, DocumentCalendarItem, DocumentRecord, DocumentTaxonomy, LayoutDebugMetadata } from "@/types/document";
 import type { DocumentReviewMetadata } from "@/types/document";
 
 export function cn(...inputs: ClassValue[]) {
@@ -266,6 +266,24 @@ export function documentDisplayTitle(document: { document_number?: string | null
   return document.document_number || document.title || document.original_filename || "문서";
 }
 
+export function getPrimaryCompanyName(document: {
+  customer_name?: string | null;
+  vendor_name?: string | null;
+  merchant_name?: string | null;
+}) {
+  return document.customer_name || document.vendor_name || document.merchant_name || null;
+}
+
+export function getDocumentTypeLabel(document: {
+  document_type?: string | null;
+  category?: string | null;
+  workflow_metadata?: Record<string, unknown> | null;
+  ingestion_metadata?: Record<string, unknown> | null;
+}) {
+  const taxonomy = documentTaxonomy(document);
+  return documentSubtypeLabel(taxonomy.document_subtype) || titleCaseLabel(document.category || document.document_type || null);
+}
+
 export function primaryCategoryLabel(document: { category?: string | null; workflow_metadata?: Record<string, unknown> | null }) {
   const interpretation = (document.workflow_metadata?.category_interpretation ?? {}) as Record<string, unknown>;
   const profile = typeof interpretation.profile === "string" ? interpretation.profile : null;
@@ -342,6 +360,152 @@ export function businessFieldDate(document: { document_type?: string | null; due
           ? businessFields.payment_due_date
           : document.due_date;
   return typeof valueForType === "string" && valueForType ? valueForType : document.due_date || "";
+}
+
+export interface DocumentScheduleDate {
+  date: string;
+  role: string;
+  label: string;
+  fallback: boolean;
+}
+
+function firstDateLike(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const direct = value.match(/^\d{4}-\d{2}-\d{2}$/)?.[0];
+    if (direct) return direct;
+    const embedded = value.match(/(\d{4}-\d{2}-\d{2})/)?.[1];
+    if (embedded) return embedded;
+  }
+  return null;
+}
+
+export function getDocumentScheduleDate(document: {
+  due_date?: string | null;
+  issue_date?: string | null;
+  extracted_date?: string | null;
+  key_dates?: string[];
+  workflow_metadata?: Record<string, unknown> | null;
+}): DocumentScheduleDate | null {
+  const metadata = asRecord(document.workflow_metadata);
+  const businessFields = asRecord(metadata.business_fields);
+  const taxonomy = asRecord(metadata.taxonomy);
+  const requested = firstDateLike(
+    businessFields.requested_delivery_date,
+    businessFields.delivery_requested_date,
+    businessFields.delivery_due_date,
+    businessFields.due_date,
+    businessFields.delivery_date,
+    businessFields.expected_delivery_date,
+    businessFields.requested_date,
+    taxonomy.requested_delivery_date,
+  );
+  if (requested) return { date: requested, role: "requested_delivery_date", label: "납기요청일", fallback: false };
+
+  const due = firstDateLike(document.due_date, businessFieldDate(document));
+  if (due) return { date: due, role: "due_date", label: "납기일", fallback: false };
+
+  const keyDate = firstDateLike(...(document.key_dates || []));
+  if (keyDate) return { date: keyDate, role: "key_date", label: "문서 일정", fallback: false };
+
+  const issue = firstDateLike(document.issue_date, document.extracted_date);
+  if (issue) return { date: issue, role: "issue_date", label: "발행일 기준", fallback: true };
+  return null;
+}
+
+export function getCalendarItemScheduleDate(item: DocumentCalendarItem): DocumentScheduleDate {
+  const fallback = item.date_role === "issue_date";
+  return {
+    date: item.date,
+    role: item.date_role,
+    label: fallback ? "발행일 기준" : item.date_label,
+    fallback,
+  };
+}
+
+export function formatDateCompact(value?: string | null) {
+  if (!value) return "날짜 없음";
+  return value;
+}
+
+export function formatCalendarEventTitle(document: {
+  document_number?: string | null;
+  title?: string | null;
+  original_filename?: string | null;
+  document_type?: string | null;
+  category?: string | null;
+  workflow_metadata?: Record<string, unknown> | null;
+  ingestion_metadata?: Record<string, unknown> | null;
+  customer_name?: string | null;
+  vendor_name?: string | null;
+  merchant_name?: string | null;
+  due_date?: string | null;
+  issue_date?: string | null;
+  extracted_date?: string | null;
+  key_dates?: string[];
+}) {
+  const schedule = getDocumentScheduleDate(document);
+  const company = getPrimaryCompanyName(document) || "회사 미확인";
+  const typeLabel = getDocumentTypeLabel(document) || "문서";
+  const date = schedule?.date || "날짜 없음";
+  const docNo = document.document_number || "번호 없음";
+  return `${company}, ${typeLabel}, ${formatDateCompact(date)} (${docNo})`;
+}
+
+export function formatCalendarItemTitle(item: DocumentCalendarItem) {
+  const company = getPrimaryCompanyName(item) || "회사 미확인";
+  const typeLabel = titleCaseLabel(item.document_type);
+  const schedule = getCalendarItemScheduleDate(item);
+  const docNo = item.document_number || item.document_title || "번호 없음";
+  return `${company}, ${typeLabel}, ${formatDateCompact(schedule.date)} (${docNo})`;
+}
+
+export function preferredCalendarItems(items: DocumentCalendarItem[]) {
+  const hasScheduleByDocument = new Set(items.filter((item) => item.date_role !== "issue_date").map((item) => item.document_id));
+  return items.filter((item) => item.date_role !== "issue_date" || !hasScheduleByDocument.has(item.document_id));
+}
+
+export function getErpReadinessStatus(document: DocumentRecord) {
+  const review = documentReviewMetadata(document);
+  const layoutDebug = layoutDebugMetadata(document);
+  if (document.processing_status === "failed") {
+    return { tone: "danger" as const, title: "처리 실패", label: "실패", exportReady: false };
+  }
+  if (["uploaded", "queued", "processing"].includes(document.processing_status)) {
+    return { tone: "processing" as const, title: "처리 중", label: "처리 중", exportReady: false };
+  }
+  if (document.review_required && !review.approved) {
+    return { tone: "warning" as const, title: "검토 필요", label: "검토 필요", exportReady: true };
+  }
+  if (layoutDebug?.bbox_candidate_summary?.uncertain_count) {
+    return { tone: "warning" as const, title: "내보내기 주의", label: "검토 후보 있음", exportReady: true };
+  }
+  if (document.processing_status === "confirmed" || review.approved) {
+    return { tone: "success" as const, title: "확정 완료", label: "승인됨", exportReady: true };
+  }
+  return { tone: "success" as const, title: "입력 준비 완료", label: "Ready", exportReady: true };
+}
+
+export function getErpReadinessSummary(document: DocumentRecord) {
+  const taxonomy = documentTaxonomy(document);
+  const blocking = blockingReviewIssues(document);
+  const layoutDebug = layoutDebugMetadata(document);
+  const parts: string[] = [];
+  parts.push(`품목 ${document.line_items?.length || 0}개 추출`);
+  if (document.document_number) parts.push("문서번호 확인됨");
+  else parts.push("문서번호 확인 필요");
+  if ((taxonomy.document_profiles || []).includes("no_price_document") || taxonomy.amount_required === false) {
+    parts.push("금액 없는 문서");
+  } else if (document.extracted_amount) {
+    parts.push(`총액 ${formatMoney(document.extracted_amount, document.currency || "KRW")}`);
+  } else {
+    parts.push("금액 확인 필요");
+  }
+  if (blocking.length) parts.push(`${blocking.length}개 검토 항목`);
+  else parts.push("검토 항목 없음");
+  const uncertain = layoutDebug?.bbox_candidate_summary?.uncertain_count ?? layoutDebug?.uncertain_count ?? 0;
+  if (uncertain) parts.push(`OCR 위치 기반 후보 ${uncertain}건`);
+  return parts.join(" · ");
 }
 
 export function businessIssueDate(document: { document_type?: string | null; issue_date?: string | null; extracted_date?: string | null; workflow_metadata?: Record<string, unknown> | null }) {
