@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { DocumentTaxonomy } from "@/types/document";
+import type { BBoxTableCandidate, DocumentTaxonomy, LayoutDebugMetadata } from "@/types/document";
 import type { DocumentReviewMetadata } from "@/types/document";
 
 export function cn(...inputs: ClassValue[]) {
@@ -100,6 +100,14 @@ function optionalBoolean(...values: unknown[]) {
   return null;
 }
 
+function optionalNumber(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  }
+  return undefined;
+}
+
 function optionalStringList(...values: unknown[]) {
   const merged: string[] = [];
   values.forEach((value) => {
@@ -110,6 +118,78 @@ function optionalStringList(...values: unknown[]) {
     }
   });
   return merged;
+}
+
+function normalizedBBoxCandidate(value: unknown): BBoxTableCandidate | null {
+  const record = asRecord(value);
+  if (!Object.keys(record).length) return null;
+  return {
+    row_index: optionalNumber(record.row_index) ?? null,
+    item_name: optionalString(record.item_name),
+    source_text: optionalString(record.source_text),
+    document_item_code: optionalString(record.document_item_code),
+    internal_item_code: optionalString(record.internal_item_code),
+    specification: optionalString(record.specification),
+    quantity: typeof record.quantity === "number" || typeof record.quantity === "string" ? record.quantity : null,
+    unit: optionalString(record.unit),
+    unit_price: typeof record.unit_price === "number" || typeof record.unit_price === "string" ? record.unit_price : null,
+    supply_amount: typeof record.supply_amount === "number" || typeof record.supply_amount === "string" ? record.supply_amount : null,
+    tax_amount: typeof record.tax_amount === "number" || typeof record.tax_amount === "string" ? record.tax_amount : null,
+    line_total: typeof record.line_total === "number" || typeof record.line_total === "string" ? record.line_total : null,
+    confidence: typeof record.confidence === "number" || typeof record.confidence === "string" ? record.confidence : null,
+    review_flags: optionalStringList(record.review_flags),
+    missing_fields: optionalStringList(record.missing_fields),
+    untrusted_fields: optionalStringList(record.untrusted_fields),
+    source: optionalString(record.source),
+    bbox_span: Object.keys(asRecord(record.bbox_span)).length ? asRecord(record.bbox_span) as Record<string, number> : null,
+  };
+}
+
+export function layoutDebugMetadata(document: { workflow_metadata?: Record<string, unknown> | null }): LayoutDebugMetadata | null {
+  const workflow = asRecord(document.workflow_metadata);
+  const layoutDebug = asRecord(workflow.layout_debug);
+  if (!Object.keys(layoutDebug).length) return null;
+
+  const nestedSummary = asRecord(layoutDebug.bbox_candidate_summary);
+  const candidates = Array.isArray(layoutDebug.bbox_table_candidates)
+    ? layoutDebug.bbox_table_candidates.map(normalizedBBoxCandidate).filter((candidate): candidate is BBoxTableCandidate => Boolean(candidate))
+    : [];
+  const reviewFlags = optionalStringList(nestedSummary.review_flags, layoutDebug.bbox_review_flags);
+  const summary = {
+    candidate_count: optionalNumber(nestedSummary.candidate_count, layoutDebug.candidate_count),
+    uncertain_count: optionalNumber(nestedSummary.uncertain_count, layoutDebug.uncertain_count),
+    review_flags: reviewFlags,
+    parser_integrated: optionalBoolean(nestedSummary.parser_integrated, layoutDebug.parser_integrated) ?? undefined,
+  };
+  const hasSummary = summary.candidate_count !== undefined || summary.uncertain_count !== undefined || summary.review_flags.length > 0;
+  if (!candidates.length && !hasSummary) return null;
+  return {
+    parser_integrated: optionalBoolean(layoutDebug.parser_integrated, nestedSummary.parser_integrated) ?? undefined,
+    bbox_table_candidates: candidates,
+    bbox_candidate_summary: summary,
+    bbox_line_candidate_count: optionalNumber(layoutDebug.bbox_line_candidate_count),
+    grouped_row_count: optionalNumber(layoutDebug.grouped_row_count),
+    column_count: optionalNumber(layoutDebug.column_count),
+    candidate_count: optionalNumber(layoutDebug.candidate_count, nestedSummary.candidate_count),
+    confirmed_line_item_count: optionalNumber(layoutDebug.confirmed_line_item_count),
+    uncertain_count: optionalNumber(layoutDebug.uncertain_count, nestedSummary.uncertain_count),
+    bbox_review_flags: optionalStringList(layoutDebug.bbox_review_flags, nestedSummary.review_flags),
+    source: optionalString(layoutDebug.source),
+  };
+}
+
+export function bboxReviewFlagLabel(value?: string | null) {
+  if (!value) return null;
+  const labels: Record<string, string> = {
+    missing_item_name_from_ocr: "품목명 OCR 없음",
+    row_boundary_uncertain: "행 경계 불확실",
+    fax_row_boundary_uncertain: "팩스 행 경계 불확실",
+    untrusted_ocr_amount: "금액 OCR 불확실",
+    low_ocr_confidence: "OCR 신뢰도 낮음",
+    missing_quantity_from_ocr: "수량 OCR 없음",
+    missing_amount_from_ocr: "금액 OCR 없음",
+  };
+  return labels[value] || titleCaseLabel(value);
 }
 
 export function documentTaxonomy(document: {

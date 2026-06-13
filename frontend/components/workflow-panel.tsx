@@ -2,8 +2,8 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, primaryCategoryLabel, reviewIssueSummary } from "@/lib/utils";
-import type { DocumentRecord } from "@/types/document";
+import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummary } from "@/lib/utils";
+import type { BBoxTableCandidate, DocumentRecord, LayoutDebugMetadata } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
   if (!items.length) return null;
@@ -44,6 +44,81 @@ function ValueGrid({ values }: { values: Array<[string, string | null | undefine
   );
 }
 
+function candidateValue(value: string | number | null | undefined) {
+  return value === undefined || value === null || value === "" ? null : String(value);
+}
+
+function BBoxCandidateCard({ candidate }: { candidate: BBoxTableCandidate }) {
+  const values = [
+    ["수량", candidateValue(candidate.quantity)],
+    ["단위", candidateValue(candidate.unit)],
+    ["단가", candidateValue(candidate.unit_price)],
+    ["공급가액", candidateValue(candidate.supply_amount)],
+    ["세액", candidateValue(candidate.tax_amount)],
+    ["합계", candidateValue(candidate.line_total)],
+  ].filter(([, value]) => value);
+  const flags = Array.from(new Set([...(candidate.review_flags || []), ...(candidate.missing_fields || []), ...(candidate.untrusted_fields || [])]));
+  return (
+    <div className="rounded-md border border-sky-200 bg-white p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className="border-sky-300 bg-sky-50 text-sky-800">확정 품목 아님</Badge>
+        {candidate.row_index !== undefined && candidate.row_index !== null ? <span className="text-xs text-muted-foreground">후보 행 {candidate.row_index}</span> : null}
+        {candidate.confidence !== undefined && candidate.confidence !== null ? <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(candidate.confidence) * 100)}%</span> : null}
+      </div>
+      <p className="mt-2 text-sm font-medium">{candidate.item_name || "품목명 OCR 없음"}</p>
+      {candidate.source_text ? <p className="mt-1 text-xs text-muted-foreground">OCR 원문: {candidate.source_text}</p> : null}
+      {values.length ? (
+        <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+          {values.map(([label, value]) => (
+            <div key={label} className="rounded border bg-slate-50 px-2 py-1">
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="font-medium">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {flags.length ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {flags.map((flag) => <Badge key={flag} variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{bboxReviewFlagLabel(flag)}</Badge>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LayoutDebugBlock({ layoutDebug }: { layoutDebug: LayoutDebugMetadata | null }) {
+  if (!layoutDebug) return null;
+  const candidates = layoutDebug.bbox_table_candidates || [];
+  const summary = layoutDebug.bbox_candidate_summary;
+  const candidateCount = summary?.candidate_count ?? layoutDebug.candidate_count ?? candidates.length;
+  const uncertainCount = summary?.uncertain_count ?? layoutDebug.uncertain_count ?? candidates.filter((candidate) => (candidate.review_flags || []).length > 0 || !candidate.item_name).length;
+  const reviewFlags = Array.from(new Set([...(summary?.review_flags || []), ...(layoutDebug.bbox_review_flags || [])]));
+  if (!candidateCount && !uncertainCount && !candidates.length && !reviewFlags.length) return null;
+  return (
+    <div className="rounded-md border border-sky-200 bg-sky-50 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-medium uppercase tracking-normal text-sky-900">OCR 위치 기반 검토 후보</p>
+        <Badge className="border-sky-300 bg-white text-sky-800">확정 품목과 분리됨</Badge>
+        {layoutDebug.parser_integrated === false ? <Badge variant="outline" className="border-slate-300 bg-white text-slate-700">parser 미통합</Badge> : null}
+      </div>
+      <p className="mt-2 text-sm text-sky-950">
+        OCR 좌표로 추가 후보 {candidateCount ?? 0}건을 찾았고, 이 중 {uncertainCount ?? 0}건은 원본 확인이 필요합니다.
+        품목 테이블에는 자동 반영하지 않았습니다.
+      </p>
+      {reviewFlags.length ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {reviewFlags.map((flag) => <Badge key={flag} variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{bboxReviewFlagLabel(flag)}</Badge>)}
+        </div>
+      ) : null}
+      {candidates.length ? (
+        <div className="mt-3 space-y-2">
+          {candidates.slice(0, 3).map((candidate, index) => <BBoxCandidateCard key={`${candidate.row_index ?? index}-${candidate.source_text ?? index}`} candidate={candidate} />)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkflowPanel({ document }: { document: DocumentRecord }) {
   const labels = documentFieldLabels(document.document_type);
   const blockingIssues = blockingReviewIssues(document);
@@ -53,6 +128,7 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
   const roleDate = businessFieldDate(document);
   const issueDate = businessIssueDate(document);
   const exportReady = !document.review_required && document.processing_status === "confirmed";
+  const layoutDebug = layoutDebugMetadata(document);
 
   return (
     <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
@@ -84,6 +160,7 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
         {document.workflow_summary ? <p className="rounded-md border bg-white p-3 text-sm">{document.workflow_summary}</p> : null}
         <ListBlock title="검토 필요 항목" items={reviewItems} warning />
         <ListBlock title="처리 경고" items={warningItems} warning />
+        <LayoutDebugBlock layoutDebug={layoutDebug} />
         <InfoDetails items={infoItems} />
         <ListBlock title="주요 날짜" items={document.key_dates} />
       </CardContent>

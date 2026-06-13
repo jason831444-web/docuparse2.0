@@ -55,6 +55,48 @@ export interface DocumentReviewMetadata {
   } | null;
 }
 
+export interface BBoxTableCandidate {
+  row_index?: number | null;
+  item_name?: string | null;
+  source_text?: string | null;
+  document_item_code?: string | null;
+  internal_item_code?: string | null;
+  specification?: string | null;
+  quantity?: number | string | null;
+  unit?: string | null;
+  unit_price?: number | string | null;
+  supply_amount?: number | string | null;
+  tax_amount?: number | string | null;
+  line_total?: number | string | null;
+  confidence?: number | string | null;
+  review_flags?: string[];
+  missing_fields?: string[];
+  untrusted_fields?: string[];
+  source?: string | null;
+  bbox_span?: Record<string, number> | null;
+}
+
+export interface BBoxCandidateSummary {
+  candidate_count?: number;
+  uncertain_count?: number;
+  review_flags?: string[];
+  parser_integrated?: boolean;
+}
+
+export interface LayoutDebugMetadata {
+  parser_integrated?: boolean;
+  bbox_table_candidates?: BBoxTableCandidate[];
+  bbox_candidate_summary?: BBoxCandidateSummary;
+  bbox_line_candidate_count?: number;
+  grouped_row_count?: number;
+  column_count?: number;
+  candidate_count?: number;
+  confirmed_line_item_count?: number;
+  uncertain_count?: number;
+  bbox_review_flags?: string[];
+  source?: string | null;
+}
+
 export interface FolderSummary {
   label: string;
   value: string;
