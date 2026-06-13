@@ -23,28 +23,42 @@ export function DocumentList({
   onChanged,
   returnTo,
   duplicateHintsOverride,
+  selected: controlledSelected,
+  onSelectedChange,
+  selectionScopeDocuments,
 }: {
   documents: DocumentRecord[];
   view?: "list" | "grid";
   onChanged?: () => void;
   returnTo?: string;
   duplicateHintsOverride?: Map<string, DuplicateHint>;
+  selected?: Set<string>;
+  onSelectedChange?: (selected: Set<string>) => void;
+  selectionScopeDocuments?: DocumentRecord[];
 }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [uncontrolledSelected, setUncontrolledSelected] = useState<Set<string>>(new Set());
+  const selected = controlledSelected ?? uncontrolledSelected;
+  const setSelected = onSelectedChange ?? setUncontrolledSelected;
   const [excelMode, setExcelMode] = useState<"combined" | "party_tabs">("combined");
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
-  const allSelected = documents.length > 0 && selected.size === documents.length;
+  const allSelected = documents.length > 0 && documents.every((document) => selected.has(document.id));
+  const scopedDocuments = selectionScopeDocuments ?? documents;
   const localDuplicateHints = useMemo(() => duplicateUploadHints(documents), [documents]);
   const duplicateHints = duplicateHintsOverride ?? localDuplicateHints;
   const duplicateCount = documents.filter((document) => duplicateHints.has(document.id)).length;
 
   useEffect(() => {
+    if (controlledSelected) return;
     const visibleIds = new Set(documents.map((document) => document.id));
-    setSelected((current) => new Set(Array.from(current).filter((id) => visibleIds.has(id))));
-  }, [documents]);
+    setUncontrolledSelected((current) => new Set(Array.from(current).filter((id) => visibleIds.has(id))));
+  }, [controlledSelected, documents]);
+
+  function updateSelected(updater: (current: Set<string>) => Set<string>) {
+    setSelected(updater(selected));
+  }
 
   function toggle(id: string, checked: boolean) {
-    setSelected((current) => {
+    updateSelected((current) => {
       const next = new Set(current);
       if (checked) next.add(id);
       else next.delete(id);
@@ -53,7 +67,14 @@ export function DocumentList({
   }
 
   function toggleAll(checked: boolean) {
-    setSelected(checked ? new Set(documents.map((document) => document.id)) : new Set());
+    updateSelected((current) => {
+      const next = new Set(current);
+      documents.forEach((document) => {
+        if (checked) next.add(document.id);
+        else next.delete(document.id);
+      });
+      return next;
+    });
   }
 
   async function downloadSelected() {
@@ -78,7 +99,7 @@ export function DocumentList({
       toast.error("선택된 문서가 없습니다. 내보낼 문서를 먼저 선택하세요.");
       return;
     }
-    const selectedDocuments = documents.filter((document) => selected.has(document.id));
+    const selectedDocuments = scopedDocuments.filter((document) => selected.has(document.id));
     if (selectedDocuments.some(requiresReviewExportConfirmation)) {
       const confirmed = window.confirm("선택한 문서 중 검토 필요 문서가 있습니다. 내보내기 파일에는 review_required와 경고 정보가 포함됩니다. 계속할까요?");
       if (!confirmed) return;
@@ -107,7 +128,7 @@ export function DocumentList({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3">
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" className="size-4" checked={allSelected} onChange={(event) => toggleAll(event.target.checked)} />
-          전체 선택
+          이 그룹 선택
         </label>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{selected.size}건 선택됨</span>

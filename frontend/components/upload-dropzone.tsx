@@ -13,10 +13,10 @@ import {
   clearUploadQueue,
   createUploadQueueItems,
   explainUploadError,
-  markUploadCompleted,
   markUploadFailed,
   markUploadProcessing,
   markUploadStarted,
+  mergeDocumentStatusesIntoQueue,
   nextQueuedUploadIds,
   removeQueuedUploadItem,
   restoreUploadQueue,
@@ -28,7 +28,6 @@ import {
   type UploadQueueFileLike,
 } from "@/lib/upload-queue";
 import { cn } from "@/lib/utils";
-import type { DocumentRecord } from "@/types/document";
 
 const acceptedTypes = [
   "image/jpeg",
@@ -87,18 +86,7 @@ export function UploadDropzone() {
   const [queue, setQueue] = useState<UploadQueueItem<UploadQueueFileLike>[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const activeCount = useMemo(() => runningUploadCount(queue), [queue]);
-  const hasPendingWork = queue.some((item) => item.status === "queued" || item.status === "uploading" || item.status === "processing");
-
-  const waitForCompletion = useCallback(async (document: DocumentRecord) => {
-    if (!["uploaded", "queued", "processing"].includes(document.processing_status)) return document;
-    let latest = document;
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      latest = await api.get(document.id);
-      if (!["uploaded", "queued", "processing"].includes(latest.processing_status)) return latest;
-    }
-    return latest;
-  }, []);
+  const hasPendingWork = queue.some((item) => ["selected", "waiting_upload", "accepting", "accepted", "queued", "processing"].includes(item.status));
 
   const uploadQueueItem = useCallback(async (item: UploadQueueItem<File>) => {
     activeIds.current.add(item.id);
@@ -106,14 +94,12 @@ export function UploadDropzone() {
     try {
       const uploaded = await api.upload(item.file);
       setQueue((current) => markUploadProcessing(current, item.id, uploaded));
-      const document = await waitForCompletion(uploaded);
-      setQueue((current) => markUploadCompleted(current, item.id, document));
     } catch (error) {
       setQueue((current) => markUploadFailed(current, item.id, explainUploadError(error)));
     } finally {
       activeIds.current.delete(item.id);
     }
-  }, [waitForCompletion]);
+  }, []);
 
   function handleFiles(files: FileList | null) {
     if (!files?.length) return;
@@ -141,23 +127,29 @@ export function UploadDropzone() {
 
   useEffect(() => {
     if (!hydrated) return;
-    queue
-      .filter((item) => item.status === "processing" && item.documentId && !activeIds.current.has(item.id))
-      .forEach((item) => {
-        activeIds.current.add(item.id);
-        void (async () => {
-          try {
-            const latest = await api.get(item.documentId as string);
-            const document = await waitForCompletion(latest);
-            setQueue((current) => markUploadCompleted(current, item.id, document));
-          } catch (error) {
-            setQueue((current) => markUploadFailed(current, item.id, error instanceof Error ? error.message : "처리 상태 확인에 실패했습니다"));
-          } finally {
-            activeIds.current.delete(item.id);
-          }
-        })();
-      });
-  }, [hydrated, queue, waitForCompletion]);
+    const trackedIds = queue
+      .filter((item) => ["accepted", "queued", "processing"].includes(item.status) && item.documentId)
+      .map((item) => item.documentId as string);
+    if (!trackedIds.length) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const params = new URLSearchParams({ page_size: "100", sort_by: "updated_at", order: "desc" });
+        const response = await api.list(params);
+        if (cancelled) return;
+        const tracked = response.items.filter((document) => trackedIds.includes(document.id));
+        setQueue((current) => mergeDocumentStatusesIntoQueue(current, tracked));
+      } catch {
+        // Keep the queue visible; the next interval will retry.
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [hydrated, queue]);
 
   useEffect(() => {
     const available = DEFAULT_UPLOAD_CONCURRENCY - activeIds.current.size;
@@ -182,10 +174,13 @@ export function UploadDropzone() {
   }, [hasPendingWork]);
 
   const statusLabels: Record<UploadQueueItem["status"], string> = {
-    queued: "대기 중",
-    uploading: "업로드 중",
+    selected: "선택됨",
+    waiting_upload: "업로드 대기",
+    accepting: "접수 중",
+    accepted: "접수됨",
+    queued: "처리 대기",
     processing: "처리 중",
-    done: "완료",
+    done: "준비 완료",
     needs_review: "검토 필요",
     failed: "실패",
     needs_reselect: "파일 재선택 필요",
@@ -239,7 +234,7 @@ export function UploadDropzone() {
           <div className="flex items-center justify-between border-b px-4 py-3">
             <div>
               <p className="text-sm font-semibold">업로드 대기열</p>
-              <p className="text-xs text-muted-foreground">일부 파일이 실패해도 나머지 파일은 계속 처리됩니다. 새로고침 전 서버에 올라간 문서는 자동으로 상태 확인을 재개합니다.</p>
+              <p className="text-xs text-muted-foreground">선택한 파일은 즉시 표시됩니다. 서버 접수 후에는 문서 ID 기준으로 상태를 갱신하고, 새로고침 후에도 최근 문서 목록에서 확인할 수 있습니다.</p>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-xs text-muted-foreground">처리 중 {activeCount} / {DEFAULT_UPLOAD_CONCURRENCY}</span>
@@ -253,7 +248,7 @@ export function UploadDropzone() {
               <div key={item.id} className="grid gap-3 px-4 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
-                    {item.status === "failed" ? <AlertCircle className="size-4 text-red-600" /> : item.status === "done" || item.status === "needs_review" ? <CheckCircle2 className="size-4 text-emerald-600" /> : item.status === "queued" ? <Clock3 className="size-4 text-slate-500" /> : <Loader2 className="size-4 animate-spin text-primary" />}
+                    {item.status === "failed" ? <AlertCircle className="size-4 text-red-600" /> : item.status === "done" || item.status === "needs_review" ? <CheckCircle2 className="size-4 text-emerald-600" /> : ["selected", "waiting_upload", "accepted", "queued"].includes(item.status) ? <Clock3 className="size-4 text-slate-500" /> : <Loader2 className="size-4 animate-spin text-primary" />}
                     <p className="truncate text-sm font-medium">{item.file.name}</p>
                     <span className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground">{statusLabels[item.status]}</span>
                   </div>
@@ -278,7 +273,7 @@ export function UploadDropzone() {
                       파일 다시 선택
                     </Button>
                   ) : null}
-                  {["queued", "needs_reselect", "interrupted"].includes(item.status) ? (
+                  {["selected", "waiting_upload", "needs_reselect", "interrupted"].includes(item.status) ? (
                     <Button size="sm" variant="ghost" onClick={() => setQueue((current) => removeQueuedUploadItem(current, item.id))}>
                       <X className="size-4" />
                       제거

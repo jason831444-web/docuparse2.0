@@ -6,9 +6,11 @@ import {
   clearUploadQueue,
   createUploadQueueItems,
   explainUploadError,
+  markUploadProcessing,
   markUploadCompleted,
   markUploadFailed,
   markUploadStarted,
+  mergeDocumentStatusesIntoQueue,
   nextQueuedUploadIds,
   restoreUploadQueue,
   retryUploadItem,
@@ -25,6 +27,7 @@ const files = Array.from({ length: 5 }, (_, index) => ({
 
 const queue = createUploadQueueItems(files, 12345, () => "fixed");
 assert.equal(queue.length, 5);
+assert.deepEqual(queue.map((item) => item.status), ["selected", "selected", "selected", "selected", "selected"]);
 assert.equal(new Set(queue.map((item) => item.id)).size, 5, "duplicate filenames must still get unique queue ids");
 assert.deepEqual(nextQueuedUploadIds(queue, DEFAULT_UPLOAD_CONCURRENCY), queue.slice(0, 3).map((item) => item.id));
 
@@ -40,8 +43,26 @@ assert.equal(running.find((item) => item.id === queue[1].id)?.status, "failed");
 assert.deepEqual(nextQueuedUploadIds(running, DEFAULT_UPLOAD_CONCURRENCY), [queue[3].id]);
 
 running = retryUploadItem(running, queue[1].id);
-assert.equal(running.find((item) => item.id === queue[1].id)?.status, "queued");
+assert.equal(running.find((item) => item.id === queue[1].id)?.status, "waiting_upload");
 assert.deepEqual(nextQueuedUploadIds(running, DEFAULT_UPLOAD_CONCURRENCY), [queue[1].id]);
+
+running = markUploadProcessing(running, queue[1].id, {
+  id: "doc-queued",
+  title: "접수 문서",
+  original_filename: "same-name.txt",
+  processing_status: "uploaded",
+});
+assert.equal(running.find((item) => item.id === queue[1].id)?.status, "accepted");
+assert.equal(running.find((item) => item.id === queue[1].id)?.documentId, "doc-queued");
+assert.deepEqual(nextQueuedUploadIds(running, DEFAULT_UPLOAD_CONCURRENCY), [queue[3].id], "accepted documents must be tracked by document id and must not occupy upload slots");
+
+running = mergeDocumentStatusesIntoQueue(running, [{
+  id: "doc-queued",
+  title: "접수 문서",
+  original_filename: "same-name.txt",
+  processing_status: "processing",
+}]);
+assert.equal(running.find((item) => item.id === queue[1].id)?.status, "processing");
 
 running = markUploadCompleted(running, queue[0].id, {
   id: "doc-1",
@@ -67,8 +88,8 @@ const many = createUploadQueueItems(
 assert.equal(many.length, RECOMMENDED_MAX_UPLOAD_FILES);
 
 const persisted = serializeUploadQueue([
-  { ...queue[0], status: "queued", updatedAt: 2000 },
-  { ...queue[1], status: "uploading", updatedAt: 2000 },
+  { ...queue[0], status: "selected", updatedAt: 2000 },
+  { ...queue[1], status: "accepting", updatedAt: 2000 },
   { ...queue[2], status: "processing", documentId: "doc-processing", documentTitle: "처리 문서", updatedAt: 2000 },
   { ...queue[3], status: "done", documentId: "doc-done", documentTitle: "완료 문서", updatedAt: 2000 },
   { ...queue[4], status: "failed", error: "boom", updatedAt: 2000 },
@@ -95,8 +116,8 @@ const clearable = clearUploadQueue([
   { ...queue[1], status: "needs_reselect" },
   { ...queue[2], status: "interrupted" },
   { ...queue[3], status: "processing" },
-  { ...queue[4], status: "uploading" },
+  { ...queue[4], status: "accepting" },
 ]);
-assert.deepEqual(clearable.map((item) => item.status), ["processing", "uploading"]);
+assert.deepEqual(clearable.map((item) => item.status), ["processing", "accepting"]);
 
 console.log("upload queue tests passed");

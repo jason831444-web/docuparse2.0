@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 from decimal import Decimal
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 
 
 logger = logging.getLogger(__name__)
+_PROCESSING_SEMAPHORE = threading.BoundedSemaphore(3)
 
 
 class DocumentProcessor:
@@ -44,6 +46,10 @@ class DocumentProcessor:
         self.bbox_table_reconstructor = BBoxTableReconstructor()
 
     def process(self, db: Session, document: Document) -> Document:
+        with _PROCESSING_SEMAPHORE:
+            return self._process_locked(db, document)
+
+    def _process_locked(self, db: Session, document: Document) -> Document:
         document.processing_status = ProcessingStatus.processing
         document.processing_error = None
         db.add(document)

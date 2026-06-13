@@ -52,6 +52,7 @@ function DocumentsContent() {
   const [view, setView] = useState<"grid" | "list">("list");
   const [grouping, setGrouping] = useState<DocumentGroupingMode>("document_type");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState({
     search: searchParams.get("search") ?? "",
     category: "",
@@ -121,6 +122,21 @@ function DocumentsContent() {
   }, [data?.items, groupLabel]);
   const duplicateHints = useMemo(() => duplicateUploadHints(data?.items || []), [data?.items]);
   const duplicateHintCount = useMemo(() => duplicateFilenameCount(data?.items || []), [data?.items]);
+  const visibleDocuments = useMemo(() => data?.items || [], [data?.items]);
+  const visibleDocumentIds = useMemo(() => new Set(visibleDocuments.map((document) => document.id)), [visibleDocuments]);
+  const allVisibleSelected = visibleDocuments.length > 0 && visibleDocuments.every((document) => selectedDocuments.has(document.id));
+
+  useEffect(() => {
+    setSelectedDocuments((current) => new Set(Array.from(current).filter((id) => visibleDocumentIds.has(id))));
+  }, [visibleDocumentIds]);
+
+  function selectAllVisibleDocuments() {
+    setSelectedDocuments(new Set(visibleDocuments.map((document) => document.id)));
+  }
+
+  function clearSelectedDocuments() {
+    setSelectedDocuments(new Set());
+  }
 
   return (
     <main className="shell py-8">
@@ -181,6 +197,24 @@ function DocumentsContent() {
         </div>
       ) : null}
 
+      {data?.items.length ? (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold">문서 선택</p>
+            <p className="text-xs text-muted-foreground">현재 필터와 검색 결과에 보이는 문서 기준으로 선택합니다.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-muted-foreground">선택됨: {selectedDocuments.size} / 보이는 문서 {visibleDocuments.length}개</span>
+            <Button type="button" variant="outline" size="sm" disabled={!visibleDocuments.length || allVisibleSelected} onClick={selectAllVisibleDocuments}>
+              보이는 문서 전체 선택
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={!selectedDocuments.size} onClick={clearSelectedDocuments}>
+              전체 선택 해제
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {loading ? (
         <div className={view === "grid" ? "grid gap-4 lg:grid-cols-2" : "space-y-3"}>
           {Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-28 animate-pulse rounded-lg bg-muted" />)}
@@ -193,7 +227,16 @@ function DocumentsContent() {
                 <h2 className="font-semibold">{group.label}</h2>
                 <span className="text-sm text-muted-foreground">{group.items.length}건</span>
               </div>
-              <DocumentList documents={group.items} view={view} duplicateHintsOverride={duplicateHints} onChanged={() => api.list(params).then(setData)} returnTo="/documents" />
+              <DocumentList
+                documents={group.items}
+                view={view}
+                duplicateHintsOverride={duplicateHints}
+                selected={selectedDocuments}
+                onSelectedChange={setSelectedDocuments}
+                selectionScopeDocuments={visibleDocuments}
+                onChanged={() => api.list(params).then(setData)}
+                returnTo="/documents"
+              />
             </section>
           ))}
         </div>

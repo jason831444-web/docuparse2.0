@@ -6,7 +6,18 @@ export const UPLOAD_QUEUE_STORAGE_KEY = "docuparse.uploadQueue.v1";
 export const UPLOAD_QUEUE_SCHEMA_VERSION = 1;
 export const UPLOAD_QUEUE_TTL_MS = 1000 * 60 * 60 * 24 * 3;
 
-export type UploadQueueStatus = "queued" | "uploading" | "processing" | "done" | "needs_review" | "failed" | "needs_reselect" | "interrupted";
+export type UploadQueueStatus =
+  | "selected"
+  | "waiting_upload"
+  | "accepting"
+  | "accepted"
+  | "queued"
+  | "processing"
+  | "done"
+  | "needs_review"
+  | "failed"
+  | "needs_reselect"
+  | "interrupted";
 
 export interface UploadQueueFileLike {
   name: string;
@@ -53,7 +64,7 @@ export function createUploadQueueItems<TFile extends UploadQueueFileLike>(
   return Array.from(files).slice(0, RECOMMENDED_MAX_UPLOAD_FILES).map((file, index) => ({
     id: `${now}-${index}-${file.name}-${file.size}-${randomToken()}`,
     file,
-    status: "queued",
+    status: "selected",
     attempts: 0,
     error: null,
     documentId: null,
@@ -64,22 +75,23 @@ export function createUploadQueueItems<TFile extends UploadQueueFileLike>(
 }
 
 export function runningUploadCount(items: UploadQueueItem<UploadQueueFileLike>[]) {
-  return items.filter((item) => item.status === "uploading" || item.status === "processing").length;
+  return items.filter((item) => item.status === "accepting").length;
 }
 
 export function nextQueuedUploadIds(items: UploadQueueItem<UploadQueueFileLike>[], concurrency = DEFAULT_UPLOAD_CONCURRENCY) {
   const capacity = Math.max(0, concurrency - runningUploadCount(items));
-  return items.filter((item) => item.status === "queued" && item.fileAvailable !== false).slice(0, capacity).map((item) => item.id);
+  return items.filter((item) => ["selected", "waiting_upload"].includes(item.status) && item.fileAvailable !== false).slice(0, capacity).map((item) => item.id);
 }
 
 export function markUploadStarted(items: UploadQueueItem<UploadQueueFileLike>[], id: string) {
-  return items.map((item) => item.id === id ? { ...item, status: "uploading" as const, attempts: item.attempts + 1, error: null, updatedAt: Date.now() } : item);
+  return items.map((item) => item.id === id ? { ...item, status: "accepting" as const, attempts: item.attempts + 1, error: null, updatedAt: Date.now() } : item);
 }
 
 export function markUploadProcessing(items: UploadQueueItem<UploadQueueFileLike>[], id: string, document: DocumentRecord) {
+  const status = uploadQueueStatusFromDocument(document);
   return items.map((item) => item.id === id ? {
     ...item,
-    status: "processing" as const,
+    status,
     documentId: document.id,
     documentTitle: document.title || document.original_filename,
     updatedAt: Date.now(),
@@ -87,13 +99,7 @@ export function markUploadProcessing(items: UploadQueueItem<UploadQueueFileLike>
 }
 
 export function markUploadCompleted(items: UploadQueueItem<UploadQueueFileLike>[], id: string, document: DocumentRecord) {
-  const status: UploadQueueStatus = ["uploaded", "queued", "processing"].includes(document.processing_status)
-    ? "processing"
-    : document.processing_status === "needs_review"
-      ? "needs_review"
-      : document.processing_status === "failed"
-        ? "failed"
-        : "done";
+  const status = uploadQueueStatusFromDocument(document);
   return items.map((item) => item.id === id ? {
     ...item,
     status,
@@ -102,6 +108,35 @@ export function markUploadCompleted(items: UploadQueueItem<UploadQueueFileLike>[
     documentTitle: document.title || document.original_filename,
     updatedAt: Date.now(),
   } : item);
+}
+
+export function mergeDocumentStatusesIntoQueue(
+  items: UploadQueueItem<UploadQueueFileLike>[],
+  documents: DocumentRecord[],
+) {
+  if (!documents.length) return items;
+  const byId = new Map(documents.map((document) => [document.id, document]));
+  return items.map((item) => {
+    if (!item.documentId) return item;
+    const document = byId.get(item.documentId);
+    if (!document) return item;
+    return {
+      ...item,
+      status: uploadQueueStatusFromDocument(document),
+      error: document.processing_status === "failed" ? document.processing_error || "서버 처리가 실패했습니다." : null,
+      documentTitle: document.title || document.original_filename,
+      updatedAt: Date.now(),
+    };
+  });
+}
+
+export function uploadQueueStatusFromDocument(document: Pick<DocumentRecord, "processing_status">): UploadQueueStatus {
+  if (document.processing_status === "uploaded") return "accepted";
+  if (document.processing_status === "queued") return "queued";
+  if (document.processing_status === "processing") return "processing";
+  if (document.processing_status === "needs_review") return "needs_review";
+  if (document.processing_status === "failed") return "failed";
+  return "done";
 }
 
 export function markUploadFailed(items: UploadQueueItem<UploadQueueFileLike>[], id: string, error: string) {
@@ -123,15 +158,15 @@ export function explainUploadError(error: unknown): string {
 }
 
 export function retryUploadItem(items: UploadQueueItem<UploadQueueFileLike>[], id: string) {
-  return items.map((item) => item.id === id && item.status === "failed" && item.fileAvailable !== false ? { ...item, status: "queued" as const, error: null, updatedAt: Date.now() } : item);
+  return items.map((item) => item.id === id && item.status === "failed" && item.fileAvailable !== false ? { ...item, status: "waiting_upload" as const, error: null, updatedAt: Date.now() } : item);
 }
 
 export function removeQueuedUploadItem(items: UploadQueueItem<UploadQueueFileLike>[], id: string) {
-  return items.filter((item) => !(item.id === id && ["queued", "needs_reselect", "interrupted"].includes(item.status)));
+  return items.filter((item) => !(item.id === id && ["selected", "waiting_upload", "needs_reselect", "interrupted"].includes(item.status)));
 }
 
 export function clearUploadQueue(items: UploadQueueItem<UploadQueueFileLike>[]) {
-  return items.filter((item) => item.status === "uploading" || item.status === "processing");
+  return items.filter((item) => ["accepting", "accepted", "queued", "processing"].includes(item.status));
 }
 
 export function serializeUploadQueue(items: UploadQueueItem<UploadQueueFileLike>[], now = Date.now()): SerializedUploadQueue {
@@ -166,10 +201,10 @@ export function restoreUploadQueue(serialized: unknown, now = Date.now()): Uploa
     .map((item) => {
       let status = item.status;
       let error = item.error ?? null;
-      if (status === "queued") {
+      if (status === "selected" || status === "waiting_upload") {
         status = "needs_reselect";
         error = "새로고침 후에는 파일을 다시 선택해야 합니다.";
-      } else if (status === "uploading" && !item.documentId) {
+      } else if (status === "accepting" && !item.documentId) {
         status = "interrupted";
         error = "업로드가 중단되었습니다. 파일을 다시 선택하세요.";
       }
