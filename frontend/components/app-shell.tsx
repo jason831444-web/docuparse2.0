@@ -17,20 +17,37 @@ import {
   Upload,
 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { DocumentStats } from "@/types/document";
 
-const navItems = [
-  { href: "/", label: "대시보드", icon: LayoutDashboard },
-  { href: "/upload", label: "문서 업로드", icon: Upload },
-  { href: "/documents", label: "문서 목록", icon: Files },
-  { href: "/calendar", label: "문서 일정", icon: CalendarDays },
-  { href: "/categories", label: "문서 유형", icon: FolderKanban },
-  { href: "/review", label: "검토 필요", icon: BellRing },
-  { href: "/favorites", label: "즐겨찾기", icon: FileHeart },
-  { href: "/masters/items", label: "내부 장부", icon: Database },
-  { href: "/settings", label: "설정", icon: Settings }
+const navGroups = [
+  {
+    label: "운영",
+    items: [
+      { href: "/", label: "대시보드", icon: LayoutDashboard },
+      { href: "/upload", label: "문서 업로드", icon: Upload },
+      { href: "/documents", label: "문서 목록", icon: Files },
+      { href: "/calendar", label: "문서 일정", icon: CalendarDays },
+      { href: "/categories", label: "문서 유형", icon: FolderKanban },
+    ],
+  },
+  {
+    label: "작업",
+    items: [
+      { href: "/review", label: "검토 필요", icon: BellRing },
+      { href: "/favorites", label: "즐겨찾기", icon: FileHeart },
+    ],
+  },
+  {
+    label: "시스템",
+    items: [
+      { href: "/masters/items", label: "내부 장부", icon: Database },
+      { href: "/settings", label: "설정", icon: Settings },
+    ],
+  },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -39,6 +56,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [query, setQuery] = useState("");
   const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/signup");
   const [notificationCount, setNotificationCount] = useState(0);
+  const [stats, setStats] = useState<DocumentStats | null>(null);
 
   useEffect(() => {
     if (isAuthPage) return;
@@ -46,6 +64,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .notifications()
       .then((items) => setNotificationCount(items.filter((item) => item.action_required).length || items.length))
       .catch(() => setNotificationCount(0));
+    api.stats().then(setStats).catch(() => setStats(null));
   }, [isAuthPage, pathname]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
@@ -74,51 +93,80 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[hsl(var(--background))]">
-      <div className="grid min-h-screen lg:grid-cols-[260px_minmax(0,1fr)]">
-        <aside className="border-r bg-white/80 px-5 py-6 backdrop-blur">
+      <div className="grid min-h-screen lg:grid-cols-[250px_minmax(0,1fr)]">
+        <aside className="sticky top-0 hidden h-screen flex-col border-r bg-white px-5 py-5 lg:flex">
           <Link href="/" className="mb-8 flex items-center gap-3 font-semibold tracking-normal">
-            <span className="grid size-10 place-items-center rounded-md bg-primary text-primary-foreground">
+            <span className="grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm">
               <FileSearch className="size-5" />
             </span>
             <div>
-              <p>DocuParse</p>
+              <p className="leading-tight">DocuParse</p>
               <p className="text-xs font-normal text-muted-foreground">제조업 문서 자동화</p>
             </div>
           </Link>
-          <nav className="space-y-1">
-            {navItems.map((item) => {
-              const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition",
-                    active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  <item.icon className="size-4" />
-                  {item.label}
-                </Link>
-              );
-            })}
+          <nav className="space-y-5">
+            {navGroups.map((group) => (
+              <div key={group.label}>
+                <p className="mb-2 px-3 text-[11px] font-semibold text-muted-foreground">{group.label}</p>
+                <div className="space-y-1">
+                  {group.items.map((item) => {
+                    const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          "flex items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
+                          active ? "bg-blue-50 text-primary" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                        )}
+                      >
+                        <span className="flex items-center gap-3">
+                          <item.icon className="size-4" />
+                          {item.label}
+                        </span>
+                        {item.href === "/review" && notificationCount ? (
+                          <span className="grid min-w-5 place-items-center rounded-full bg-amber-600 px-1.5 text-[11px] leading-5 text-white">
+                            {notificationCount > 9 ? "9+" : notificationCount}
+                          </span>
+                        ) : null}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </nav>
-          <div className="mt-8 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-            발주서, 견적서, 거래명세서, 납품서를 ERP/엑셀 입력용 데이터로 변환합니다.
+          <div className="mt-auto rounded-lg border bg-slate-50 p-3 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between">
+              <span>입력 준비 완료</span>
+              <span className="font-semibold text-emerald-700">{stats?.completed ?? 0}건</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between">
+              <span>검토 필요</span>
+              <span className="font-semibold text-amber-700">{stats?.needs_review ?? 0}건</span>
+            </div>
           </div>
         </aside>
         <div className="min-w-0">
-          <header className="sticky top-0 z-20 border-b bg-[hsl(var(--background))/0.86] backdrop-blur">
-            <div className="shell flex h-16 items-center gap-4">
+          <header className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
+            <div className="shell flex h-14 items-center gap-4">
               <form onSubmit={submitSearch} className="relative max-w-xl flex-1">
-                <Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
-                <Input className="pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={query} onChange={(event) => setQuery(event.target.value)} />
+                <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                <Input className="h-9 border-slate-200 bg-slate-50 pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={query} onChange={(event) => setQuery(event.target.value)} />
               </form>
+              <Badge className="hidden border-emerald-200 bg-emerald-50 text-emerald-700 shadow-none md:inline-flex">OCR/Provider 정상</Badge>
+              <div className="hidden items-center gap-2 md:flex">
+                <span className="grid size-9 place-items-center rounded-full bg-blue-100 text-sm font-semibold text-primary">대성</span>
+                <div className="text-right text-xs">
+                  <p className="font-semibold text-slate-900">(주)대성정공</p>
+                  <p className="text-muted-foreground">회계팀 · 김선영</p>
+                </div>
+              </div>
               <Link
                 href="/notifications"
                 aria-label="알림"
                 className={cn(
-                  "relative grid size-10 place-items-center rounded-md border bg-white text-muted-foreground transition hover:border-primary/40 hover:text-foreground",
+                  "relative grid size-9 place-items-center rounded-lg border bg-white text-muted-foreground transition hover:border-primary/40 hover:text-foreground",
                   pathname.startsWith("/notifications") && "border-primary/50 text-primary"
                 )}
               >

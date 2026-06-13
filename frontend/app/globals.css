@@ -3,13 +3,13 @@
 @tailwind utilities;
 
 :root {
-  --background: 220 20% 98%;
+  --background: 220 24% 98%;
   --foreground: 222 20% 12%;
   --card: 0 0% 100%;
   --card-foreground: 222 20% 12%;
   --popover: 0 0% 100%;
   --popover-foreground: 222 20% 12%;
-  --primary: 215 28% 22%;
+  --primary: 208 92% 39%;
   --primary-foreground: 0 0% 100%;
   --secondary: 220 18% 95%;
   --secondary-foreground: 222 20% 16%;
@@ -29,16 +29,14 @@
 }
 
 body {
-  background:
-    radial-gradient(circle at top left, rgba(219, 234, 254, 0.42), transparent 28rem),
-    linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 1));
+  background: hsl(var(--background));
   color: hsl(var(--foreground));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 .shell {
-  width: min(1720px, calc(100% - 24px));
+  width: min(1320px, calc(100% - 32px));
   margin: 0 auto;
 }
 
