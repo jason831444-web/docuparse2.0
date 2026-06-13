@@ -262,8 +262,50 @@ export function taxonomyBadgeLabels(document: {
   return labels;
 }
 
-export function documentDisplayTitle(document: { document_number?: string | null; title?: string | null; original_filename?: string | null }) {
-  return document.document_number || document.title || document.original_filename || "문서";
+export function documentDisplayTitle(document: {
+  document_number?: string | null;
+  title?: string | null;
+  original_filename?: string | null;
+  document_type?: string | null;
+  category?: string | null;
+  workflow_metadata?: Record<string, unknown> | null;
+  ingestion_metadata?: Record<string, unknown> | null;
+  customer_name?: string | null;
+  vendor_name?: string | null;
+  merchant_name?: string | null;
+  due_date?: string | null;
+  issue_date?: string | null;
+  extracted_date?: string | null;
+  key_dates?: string[];
+  line_items?: Array<{
+    item_code?: string | null;
+    document_item_code?: string | null;
+    source_item_code?: string | null;
+    internal_item_code?: string | null;
+  }>;
+}) {
+  const company = getPrimaryCompanyName(document);
+  const typeLabel = getDocumentTypeLabel(document);
+  const schedule = getDocumentScheduleDate(document);
+  const itemCode = firstLineItemCode(document);
+  const parts = [company, typeLabel, schedule?.date ? formatDateCompact(schedule.date) : null, itemCode].filter((part): part is string => Boolean(part));
+  if (parts.length >= 2) return parts.join(", ");
+  return document.title || document.document_number || document.original_filename || "문서";
+}
+
+function firstLineItemCode(document: {
+  line_items?: Array<{
+    item_code?: string | null;
+    document_item_code?: string | null;
+    source_item_code?: string | null;
+    internal_item_code?: string | null;
+  }>;
+}) {
+  for (const item of document.line_items || []) {
+    const code = optionalString(item.document_item_code, item.item_code, item.source_item_code, item.internal_item_code);
+    if (code) return code;
+  }
+  return null;
 }
 
 export function getPrimaryCompanyName(document: {

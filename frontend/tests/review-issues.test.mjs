@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   bboxReviewFlagLabel,
+  documentDisplayTitle,
   displayWarningsWithoutReviewDuplicates,
   isBlockingReviewIssue,
   layoutDebugMetadata,
@@ -132,6 +133,17 @@ assert.equal(requiresReviewExportConfirmation({ review_required: false, processi
 assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "processing" }), false);
 assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "queued" }), false);
 assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "uploaded" }), false);
+assert.equal(documentDisplayTitle({
+  document_type: "delivery_note",
+  customer_name: "오성테크",
+  due_date: "2026-09-14",
+  document_number: "DN-2026-0914-2F",
+  line_items: [{ document_item_code: "BRG-H-100" }],
+}), "오성테크, 납품서, 2026-09-14, BRG-H-100");
+assert.equal(documentDisplayTitle({
+  document_number: "PO-2026-0801-101",
+  original_filename: "po.pdf",
+}), "PO-2026-0801-101");
 
 const noPriceIssues = normalizedReviewIssues({
   workflow_metadata: {
