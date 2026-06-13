@@ -122,7 +122,24 @@ class DocumentParser:
         option_selection_quote = self._is_option_selection_quotation(lines, doc_type)
         if no_amount_quantity_document:
             special_quantity_items = self._extract_special_quantity_table_items(lines)
-            if special_quantity_items and self._should_use_no_amount_special_items(line_items, special_quantity_items):
+            if special_quantity_items and (
+                self._should_use_no_amount_special_items(line_items, special_quantity_items)
+                or any(
+                    any(
+                        field in item
+                        for field in [
+                            "ordered_quantity",
+                            "requested_quantity",
+                            "received_quantity",
+                            "delivered_quantity",
+                            "remaining_quantity",
+                            "accepted_quantity",
+                            "rejected_quantity",
+                        ]
+                    )
+                    for item in special_quantity_items
+                )
+            ):
                 line_items = special_quantity_items
         if no_amount_quantity_document or option_selection_quote:
             subtotal = None
@@ -141,6 +158,7 @@ class DocumentParser:
             line_items = self._suppress_untrusted_foreign_amounts(line_items, amount, currency)
         if no_amount_quantity_document:
             line_items = [self._strip_line_item_amount_fields(item) for item in line_items]
+        line_items = self._apply_row_level_safety_overrides(line_items, lines, doc_type)
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
@@ -278,7 +296,7 @@ class DocumentParser:
             if self._looks_like_computed_or_note_amount(line):
                 continue
             match = re.search(
-                rf"(?:^|\s)(?:{label_pattern})\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?[A-Za-z]?)\s*(?:원|KRW|USD)?",
+                rf"(?:^|\s)(?:{label_pattern})\s*(?:KRW|USD|₩|원|\$)?\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?[A-Za-z]?)\s*(?:원|KRW|USD)?",
                 line,
                 flags=re.IGNORECASE,
             )
@@ -673,6 +691,14 @@ class DocumentParser:
         return value.isoformat() if value else None
 
     def _extract_line_items(self, lines: list[str], doc_type: DocumentType | None = None) -> list[dict]:
+        if doc_type == DocumentType.inspection_report:
+            special_items = self._extract_special_quantity_table_items(lines)
+            if special_items:
+                return self._dedupe_line_items(special_items)[:80]
+        if doc_type == DocumentType.invoice:
+            foreign_invoice_items = self._extract_foreign_invoice_vertical_line_items(lines)
+            if foreign_invoice_items:
+                return self._dedupe_line_items(foreign_invoice_items)[:80]
         numbered_items = self._extract_numbered_vertical_table_items(lines, doc_type)
         if self._should_prefer_numbered_vertical_items(numbered_items, lines, doc_type):
             return self._dedupe_line_items(numbered_items)[:80]
@@ -818,6 +844,8 @@ class DocumentParser:
             "spec": "specification",
             "specification": "specification",
             "수량": "quantity",
+            "qty": "quantity",
+            "quantity": "quantity",
             "요청수량": "quantity",
             "요청수림": "quantity",
             "발주수량": "quantity",
@@ -938,8 +966,20 @@ class DocumentParser:
 
     def _extract_delivery_quantity_line_items(self, lines: list[str]) -> list[dict]:
         text = "\n".join(lines)
-        if not re.search(r"(납품서|delivery\s*note)", text, flags=re.IGNORECASE):
+        if not re.search(r"(납\s*품\s*서|delivery\s*note)", text, flags=re.IGNORECASE):
             return []
+        vertical_items = self._extract_vertical_header_table_items(
+            lines,
+            self._delivery_quantity_field_for_label,
+            required_fields={"item_name"},
+            quantity_preference=("delivered_quantity", "received_quantity", "requested_quantity", "quantity", "ordered_quantity"),
+            stop_on_amount_header=True,
+        )
+        if vertical_items and any(
+            any(field in item for field in ("ordered_quantity", "delivered_quantity", "remaining_quantity", "received_quantity", "requested_quantity"))
+            for item in vertical_items
+        ):
+            return vertical_items
         header_index = next((
             index for index, line in enumerate(lines)
             if re.search(r"품목명", line) and re.search(r"(납품수량|입고수량|발주수량|잔량|요청수량)", line)
@@ -950,6 +990,9 @@ class DocumentParser:
         header = lines[header_index]
         if re.search(r"(단가|공급가액|세액|합계금액|unit\s*price|amount|total)", header, flags=re.IGNORECASE):
             return []
+        table_items = self._extract_delivery_quantity_items_from_table(lines, header_index)
+        if table_items:
+            return table_items
         quantity_labels = re.findall(r"(발주수량|납품수량|입고수량|요청수량|잔량|수량)", header)
         if not quantity_labels:
             return []
@@ -982,9 +1025,207 @@ class DocumentParser:
             if not item.get("item_name"):
                 continue
             item["quantity"] = quantity
+            for label, token in zip(quantity_labels, quantity_tokens):
+                metadata_key = {
+                    "발주수량": "ordered_quantity",
+                    "요청수량": "requested_quantity",
+                    "입고수량": "received_quantity",
+                    "납품수량": "delivered_quantity",
+                    "잔량": "remaining_quantity",
+                    "수량": "quantity",
+                }.get(label)
+                if metadata_key and metadata_key != "quantity":
+                    item[metadata_key] = self._number_value(Decimal(token))
             item["unit"] = unit
             items.append(item)
         return items
+
+    def _extract_vertical_header_table_items(
+        self,
+        lines: list[str],
+        field_mapper,
+        required_fields: set[str],
+        quantity_preference: tuple[str, ...] = ("quantity",),
+        stop_on_amount_header: bool = False,
+    ) -> list[dict]:
+        items: list[dict] = []
+        for index, line in enumerate(lines):
+            if not re.fullmatch(r"No\.?", line.strip(), flags=re.IGNORECASE):
+                continue
+            fields: list[str | None] = ["line_no"]
+            cursor = index + 1
+            while cursor < len(lines) and len(fields) < 16:
+                raw_label = lines[cursor].strip()
+                if self._looks_like_numbered_table_row_marker(raw_label):
+                    break
+                field = field_mapper(raw_label)
+                if field is None:
+                    break
+                if stop_on_amount_header and field in {"unit_price", "supply_amount", "tax_amount", "line_total"}:
+                    fields = []
+                    break
+                fields.append(field)
+                cursor += 1
+            if not fields:
+                continue
+            meaningful = {field for field in fields if field and field != "line_no"}
+            if not required_fields.issubset(meaningful):
+                continue
+            quantity_field = next((field for field in quantity_preference if field in fields), None)
+            row_start = cursor
+            parsed_rows: list[dict] = []
+            while row_start < len(lines):
+                marker = lines[row_start].strip()
+                if self._looks_like_numbered_table_footer(marker) or self._looks_like_instruction_or_note(marker):
+                    break
+                if not self._looks_like_numbered_table_row_marker(marker):
+                    row_start += 1
+                    continue
+                cells = [marker]
+                cursor = row_start + 1
+                while cursor < len(lines) and len(cells) < len(fields):
+                    value = lines[cursor].strip()
+                    if self._looks_like_numbered_table_footer(value) or self._looks_like_instruction_or_note(value):
+                        break
+                    cells.append(value)
+                    cursor += 1
+                if len(cells) < len(fields):
+                    break
+                item = self._line_item_from_vertical_fields(fields, cells, quantity_field)
+                if item and item.get("item_name"):
+                    parsed_rows.append(self._normalize_line_item(item))
+                row_start = cursor
+            if parsed_rows:
+                items.extend(parsed_rows)
+                break
+        return self._dedupe_line_items(items)
+
+    def _line_item_from_vertical_fields(
+        self,
+        fields: list[str | None],
+        cells: list[str],
+        quantity_field: str | None = None,
+    ) -> dict | None:
+        item: dict = {}
+        for field, cell in zip(fields, cells):
+            if not field or field == "line_no":
+                continue
+            if field in {
+                "quantity",
+                "ordered_quantity",
+                "requested_quantity",
+                "received_quantity",
+                "delivered_quantity",
+                "remaining_quantity",
+                "accepted_quantity",
+                "rejected_quantity",
+            }:
+                number = self._to_decimal(cell)
+                if number is not None:
+                    item[field] = self._number_value(number)
+            elif field in {"unit_price", "supply_amount", "tax_amount", "line_total"}:
+                number = self._normalize_number(self._normalize_table_numeric_text(cell))
+                if number is not None:
+                    item[field] = number
+            elif field == "item_code":
+                item[field] = self._clean_code_value(cell)
+            else:
+                item[field] = self._clean_value(cell)
+        if quantity_field and item.get(quantity_field) is not None:
+            item["quantity"] = item[quantity_field]
+        elif item.get("quantity") is not None:
+            item["quantity"] = item["quantity"]
+        if item.get("quantity") is not None and not item.get("unit") and any(
+            field in item for field in ("received_quantity", "delivered_quantity", "requested_quantity", "ordered_quantity", "accepted_quantity")
+        ):
+            item["unit"] = "EA"
+        return item if item.get("item_name") else None
+
+    def _extract_delivery_quantity_items_from_table(self, lines: list[str], header_index: int) -> list[dict]:
+        headers = self._split_table_line(lines[header_index])
+        mapped = [self._delivery_quantity_field_for_label(header) for header in headers]
+        if "item_name" not in mapped:
+            return []
+        quantity_field = next((field for field in ("delivered_quantity", "received_quantity", "requested_quantity", "quantity", "ordered_quantity") if field in mapped), None)
+        if quantity_field is None:
+            return []
+        items: list[dict] = []
+        for row in lines[header_index + 1:]:
+            if self._looks_like_numbered_table_footer(row) or self._looks_like_instruction_or_note(row):
+                break
+            cells = self._split_table_line(row)
+            if len(cells) < 4:
+                continue
+            if len(cells) < len(mapped):
+                cells = cells + [""] * (len(mapped) - len(cells))
+            item: dict = {}
+            for field, cell in zip(mapped, cells):
+                if not field or field == "line_no":
+                    continue
+                if "quantity" in field:
+                    number = self._to_decimal(cell)
+                    if number is not None:
+                        item[field] = self._number_value(number)
+                else:
+                    item[field] = self._clean_value(cell)
+            if item.get(quantity_field) is not None:
+                item["quantity"] = item[quantity_field]
+            if item.get("item_name"):
+                items.append(item)
+        return items
+
+    def _delivery_quantity_field_for_label(self, label: str) -> str | None:
+        key = re.sub(r"[\s_/-]+", "", str(label or "").strip().lower())
+        mapping = {
+            "no": "line_no",
+            "번호": "line_no",
+            "순번": "line_no",
+            "품목명": "item_name",
+            "품명": "item_name",
+            "문서품목코드": "item_code",
+            "거래처품목코드": "item_code",
+            "고객품목코드": "item_code",
+            "vendoritemcode": "item_code",
+            "customersku": "item_code",
+            "품목코드": "item_code",
+            "품번": "item_code",
+            "규격": "specification",
+            "spec": "specification",
+            "발주수량": "ordered_quantity",
+            "요청수량": "requested_quantity",
+            "입고수량": "received_quantity",
+            "납품수량": "delivered_quantity",
+            "잔량": "remaining_quantity",
+            "수량": "quantity",
+            "단위": "unit",
+        }
+        return mapping.get(key)
+
+    def _apply_row_level_safety_overrides(
+        self,
+        items: list[dict],
+        lines: list[str],
+        doc_type: DocumentType,
+    ) -> list[dict]:
+        if not items:
+            return items
+        text = "\n".join(lines)
+        safe_items = [dict(item) for item in items]
+        if doc_type == DocumentType.quotation and re.search(r"(수량\s*공란|수량.*빈\s*값|quantity\s*(?:blank|missing))", text, flags=re.IGNORECASE):
+            target_index = 0
+            ordinal = re.search(r"(첫\s*번째|1\s*번째|first)", text, flags=re.IGNORECASE)
+            if ordinal:
+                target_index = 0
+            if target_index < len(safe_items):
+                item = safe_items[target_index]
+                item.pop("quantity", None)
+                item.pop("unit_price", None)
+                warnings = list(item.get("validation_warnings") or [])
+                for warning in ["missing_quantity", "quantity_cell_blank"]:
+                    if warning not in warnings:
+                        warnings.append(warning)
+                item["validation_warnings"] = warnings
+        return safe_items
 
     def _delivery_quantity_item_from_prefix(self, prefix: str) -> dict:
         tokens = prefix.split()
@@ -1231,6 +1472,9 @@ class DocumentParser:
         text = "\n".join(lines)
         if not re.search(r"(입고검사|검사성적서|검사번호|Lot\s*No|합격수량|불량수량)", text, flags=re.IGNORECASE):
             return []
+        table_items = self._extract_inspection_report_table_items(lines)
+        if table_items:
+            return table_items
         items: list[dict] = []
         for index, line in enumerate(lines):
             cleaned = self._clean_value(line) or ""
@@ -1253,6 +1497,114 @@ class DocumentParser:
                     item["unit"] = "EA"
             items.append(item)
         return items
+
+    def _extract_inspection_report_table_items(self, lines: list[str]) -> list[dict]:
+        vertical_items = self._extract_vertical_header_table_items(
+            lines,
+            self._inspection_field_for_label,
+            required_fields={"item_name", "lot_no"},
+            quantity_preference=("received_quantity", "quantity"),
+        )
+        if vertical_items:
+            return vertical_items
+        header_index = next((
+            index for index, line in enumerate(lines)
+            if re.search(r"품목명", line)
+            and re.search(r"Lot\s*No|Lot", line, flags=re.IGNORECASE)
+            and re.search(r"입고수량|합격수량|불량수량", line)
+        ), None)
+        if header_index is None:
+            return []
+        headers = self._split_table_line(lines[header_index])
+        mapped = [self._inspection_field_for_label(header) for header in headers]
+        if "item_name" not in mapped or "lot_no" not in mapped:
+            return []
+        items: list[dict] = []
+        for row in lines[header_index + 1:]:
+            if self._looks_like_numbered_table_footer(row) or self._looks_like_instruction_or_note(row):
+                break
+            cells = self._split_table_line(row)
+            if len(cells) < 4:
+                continue
+            if len(cells) < len(mapped):
+                cells = cells + [""] * (len(mapped) - len(cells))
+            item: dict = {}
+            for field, cell in zip(mapped, cells):
+                if not field:
+                    continue
+                if field == "line_no":
+                    continue
+                if field in {"quantity", "received_quantity", "accepted_quantity", "rejected_quantity"}:
+                    number = self._to_decimal(cell)
+                    if number is not None:
+                        item[field] = self._number_value(number)
+                else:
+                    item[field] = self._clean_value(cell)
+            if item.get("received_quantity") is not None:
+                item["quantity"] = item["received_quantity"]
+                item["unit"] = item.get("unit") or "EA"
+            if item.get("item_name"):
+                items.append(item)
+        return items
+
+    def _inspection_field_for_label(self, label: str) -> str | None:
+        key = re.sub(r"[\s_/-]+", "", str(label or "").strip().lower())
+        mapping = {
+            "no": "line_no",
+            "번호": "line_no",
+            "순번": "line_no",
+            "품목명": "item_name",
+            "품명": "item_name",
+            "lotno": "lot_no",
+            "lot": "lot_no",
+            "lot번호": "lot_no",
+            "규격": "specification",
+            "spec": "specification",
+            "입고수량": "received_quantity",
+            "합격수량": "accepted_quantity",
+            "불량수량": "rejected_quantity",
+            "수량": "quantity",
+            "판정": "inspection_result",
+            "결과": "inspection_result",
+        }
+        return mapping.get(key)
+
+    def _extract_foreign_invoice_vertical_line_items(self, lines: list[str]) -> list[dict]:
+        text = "\n".join(lines)
+        if not re.search(r"\b(?:commercial\s+invoice|invoice)\b", text, flags=re.IGNORECASE):
+            return []
+        if not re.search(r"(?:^|\n)Description(?:\n|$)", text, flags=re.IGNORECASE):
+            return []
+        if not re.search(r"(Vendor\s+SKU|Unit\s+Price|Amount)", text, flags=re.IGNORECASE):
+            return []
+        return self._extract_vertical_header_table_items(
+            lines,
+            self._foreign_invoice_field_for_label,
+            required_fields={"item_name", "quantity", "unit_price", "supply_amount"},
+            quantity_preference=("quantity",),
+        )
+
+    def _foreign_invoice_field_for_label(self, label: str) -> str | None:
+        key = re.sub(r"[\s_/-]+", "", str(label or "").strip().lower())
+        mapping = {
+            "no": "line_no",
+            "description": "item_name",
+            "itemdescription": "item_name",
+            "itemname": "item_name",
+            "vendorsku": "item_code",
+            "sku": "item_code",
+            "partno": "item_code",
+            "partnumber": "item_code",
+            "spec": "specification",
+            "specification": "specification",
+            "qty": "quantity",
+            "quantity": "quantity",
+            "unit": "unit",
+            "unitprice": "unit_price",
+            "amount": "supply_amount",
+            "subtotal": "supply_amount",
+        }
+        return mapping.get(key)
 
     def _extract_internal_transfer_line_items(self, lines: list[str]) -> list[dict]:
         text = "\n".join(lines)
@@ -1597,6 +1949,19 @@ class DocumentParser:
             normalized["_quantity_suppressed"] = True
         for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
             normalized[field] = self._normalize_number(normalized[field])
+        for field in [
+            "ordered_quantity",
+            "requested_quantity",
+            "received_quantity",
+            "delivered_quantity",
+            "remaining_quantity",
+            "accepted_quantity",
+            "rejected_quantity",
+            "lot_no",
+            "inspection_result",
+        ]:
+            if item.get(field) not in (None, ""):
+                normalized[field] = self._normalize_number(item[field]) if "quantity" in field else self._clean_value(item[field])
         normalized = self._repair_line_item_arithmetic(normalized)
         normalized = self._suppress_implausible_line_item_numbers(normalized)
         if normalized.get("quantity") is None and normalized.get("unit") and not normalized.get("_quantity_suppressed"):

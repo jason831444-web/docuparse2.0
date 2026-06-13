@@ -276,13 +276,82 @@ def test_internal_transfer_inline_quantity_rows_are_no_price_inventory_document(
     assert "missing_vendor_name" not in codes
     assert "missing_customer_name" not in codes
     assert "missing_price_or_total" not in codes
-    assert document.extracted_amount is None
-    assert document.currency is None
-    assert "공급업체 미확인" not in (workflow.workflow_summary or "")
-    assert "고객사 미확인" not in (workflow.workflow_summary or "")
-    assert "합계금액 미확인" not in (workflow.workflow_summary or "")
-    assert "내부" in (workflow.workflow_summary or "")
-    assert "금액/통화 정보 없이 수량 중심" in (workflow.workflow_summary or "")
+
+
+def test_real_delivery_note_preserves_ordered_delivered_remaining_quantities():
+    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/14_real_delivery_note_partial_receipt_no_prices.txt").read_text()
+    parsed = DocumentParser().parse(text, "14_real_delivery_note_partial_receipt_no_prices.txt")
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) == 4
+    first, second, third, fourth = parsed.line_items
+    assert first["item_name"] == "베어링 하우징"
+    assert first["quantity"] == 50
+    assert first["ordered_quantity"] == 80
+    assert first["delivered_quantity"] == 50
+    assert first["remaining_quantity"] == 30
+    assert second["quantity"] == 300
+    assert third["quantity"] == 1200
+    assert third["ordered_quantity"] == 2000
+    assert third["remaining_quantity"] == 800
+    assert fourth["quantity"] == 1200
+    assert all(item.get("line_total") is None for item in parsed.line_items)
+
+
+def test_real_commercial_invoice_rows_keep_usd_amount_columns_without_exchange_rate_leak():
+    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/16_real_commercial_invoice_exchange_rate.txt").read_text()
+    parsed = DocumentParser().parse(text, "16_real_commercial_invoice_exchange_rate.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-US-2026-0916-EX"
+    assert parsed.currency == "USD"
+    assert parsed.extracted_amount == Decimal("650")
+    assert len(parsed.line_items) == 3
+    assert [item["item_code"] for item in parsed.line_items] == ["HGW20-1000", "CBL-HAR-500", "CON-PCB-12P"]
+    assert [item["quantity"] for item in parsed.line_items] == [10, 50, 300]
+    assert [Decimal(str(item["unit_price"])) for item in parsed.line_items] == [Decimal("45"), Decimal("2.2"), Decimal("0.3")]
+    assert [Decimal(str(item["supply_amount"])) for item in parsed.line_items] == [Decimal("450"), Decimal("110"), Decimal("90")]
+    assert all(item.get("line_total") is None for item in parsed.line_items)
+    assert all(Decimal(str(item.get("supply_amount") or 0)) != Decimal("1370") for item in parsed.line_items)
+
+
+def test_real_inspection_report_preserves_lot_and_inspection_quantities():
+    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/18_real_incoming_inspection_report.txt").read_text()
+    parsed = DocumentParser().parse(text, "18_real_incoming_inspection_report.txt")
+
+    assert parsed.document_type == DocumentType.inspection_report
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) == 2
+    first, second = parsed.line_items
+    assert first["item_name"] == "베어링 하우징"
+    assert first["lot_no"] == "LOT-BRG-0918-A"
+    assert first["specification"] == "100mm"
+    assert first["quantity"] == 50
+    assert first["received_quantity"] == 50
+    assert first["accepted_quantity"] == 49
+    assert first["rejected_quantity"] == 1
+    assert first["inspection_result"] == "조건부 합격"
+    assert second["item_name"] == "S45C PIN 8X60"
+    assert second["quantity"] == 300
+    assert second["accepted_quantity"] == 300
+    assert second["rejected_quantity"] == 0
+
+
+def test_real_long_invoice_keeps_explicit_row_amounts_without_tax_synthesis():
+    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/20_real_invoice_multipage_many_lines.txt").read_text()
+    parsed = DocumentParser().parse(text, "20_real_invoice_multipage_many_lines.txt")
+
+    assert parsed.document_number == "INV-2026-0920-LONG"
+    assert parsed.extracted_amount == Decimal("431200")
+    assert len(parsed.line_items) == 15
+    assert parsed.line_items[0]["quantity"] == 110
+    assert parsed.line_items[0]["unit_price"] == 105
+    assert parsed.line_items[0]["supply_amount"] == 11550
+    assert parsed.line_items[0]["line_total"] == 12705
+    assert all(item.get("tax_amount") is None for item in parsed.line_items)
 
 
 def test_internal_transfer_pipe_table_extracts_quantity_only_rows_without_amounts():

@@ -239,6 +239,17 @@ def test_real_ocr_noise_cases_preserve_item_candidates_without_header_or_amount_
             assert _amount(parsed.line_items[1].get("line_total")) == Decimal("132000")
             assert _amount(parsed.line_items[2].get("quantity")) == Decimal("300")
             assert _amount(parsed.line_items[2].get("line_total")) == Decimal("165000")
+        if prefix == "08":
+            first = parsed.line_items[0]
+            assert parsed.document_number == "QT-2026-0808-009"
+            assert _amount(parsed.extracted_amount) == Decimal("473000")
+            assert first.get("quantity") is None
+            assert first.get("unit_price") is None
+            assert _amount(first.get("supply_amount")) == Decimal("280000")
+            assert _amount(first.get("tax_amount")) == Decimal("28000")
+            assert _amount(first.get("line_total")) == Decimal("308000")
+            warnings = set(first.get("validation_warnings") or [])
+            assert {"missing_quantity", "quantity_cell_blank"} <= warnings
         if prefix == "10":
             first_name = str(parsed.line_items[0].get("item_name") or "")
             assert not re.match(r"^\s*(?:\d{1,3}\s+)?\d{4,}\s+\d{4,}\s+", first_name)
