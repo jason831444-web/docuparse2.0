@@ -761,7 +761,7 @@ export default function DocumentDetailPage() {
           ) : null}
         </section>
 
-        <section className="space-y-6">
+        <section className="flex flex-col gap-6">
           <TaxonomyPolicyCard document={document} />
           <WorkflowPanel document={document} />
           <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
@@ -843,7 +843,7 @@ export default function DocumentDetailPage() {
               ) : null}
             </CardContent>
           </Card>
-          <Card className="overflow-hidden">
+          <Card className="order-first overflow-hidden">
             <CardHeader className="border-b bg-slate-50/70">
               <div className="flex items-start justify-between gap-3">
                 <div>
