@@ -61,15 +61,15 @@ CATEGORY_KEYWORDS = {
 }
 
 LINE_ITEM_LABELS = {
-    "item_name": ["품목명", "품명", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
-    "item_code": ["품목코드", "품번", "제품코드", "상품코드", "자재코드", "거래처코드", "거래처품목코드", "vendor sku", "customer item code", "sku", "part no", "part number", "item code"],
+    "item_name": ["품목명", "품명", "반품품목", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
+    "item_code": ["품목코드", "문서품목코드", "품번", "제품코드", "상품코드", "자재코드", "내부품목코드", "거래처코드", "거래처품목코드", "vendor sku", "customer item code", "sku", "part no", "part number", "item code"],
     "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification", "dimension"],
-    "quantity": ["수량", "주문수량", "납품수량", "delivery qty", "delivery quantity", "delivered qty", "qty", "quantity"],
+    "quantity": ["수량", "주문수량", "발주수량", "요청수량", "요청수림", "납품수량", "delivery qty", "delivery quantity", "delivered qty", "qty", "quantity"],
     "unit": ["단위", "unit"],
     "unit_price": ["단가", "단 가", "개당가격", "unit price"],
     "supply_amount": ["공급가액", "공급액", "공급 금액", "supply amount", "subtotal", "amount"],
     "tax_amount": ["세액", "세 액", "부가세", "vat", "tax", "w세액"],
-    "line_total": ["합계금액", "총액", "금액", "합계", "total", "line total"],
+    "line_total": ["합계금액", "차감합계", "차감 합계", "총액", "금액", "합계", "total", "line total"],
 }
 
 LINE_ITEM_LABEL_LOOKUP = {
@@ -172,7 +172,7 @@ class DocumentParser:
     def _guess_document_type(self, text: str, filename: str) -> DocumentType:
         content = text.lower()
         first_lines_for_return = "\n".join(line.strip() for line in text.splitlines()[:8])
-        if re.search(r"\bRTN[-_ ]?\d{4}|credit\s+note|return\s+note", text, flags=re.IGNORECASE) or re.search(r"(반품\s*/?\s*차감|차감\s*요청|반품\s*요청)", first_lines_for_return, flags=re.IGNORECASE):
+        if re.search(r"\bRTN[-_ ]?\d{4}|credit\s+(?:note|memo)|return\s+note", text, flags=re.IGNORECASE) or re.search(r"(반품\s*/?\s*차감|차감\s*요청|반품\s*요청)", first_lines_for_return, flags=re.IGNORECASE):
             return DocumentType.general_document
         first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])
         scored_types: list[tuple[int, DocumentType]] = []
@@ -443,6 +443,14 @@ class DocumentParser:
         return None
 
     def _extract_document_number(self, text: str) -> str | None:
+        if self._has_return_or_credit_signal(text):
+            return_number = self._first_document_number_for_prefix(text, "RTN")
+            if return_number:
+                return return_number
+        if self._has_internal_transfer_signal(text):
+            transfer_number = self._first_document_number_for_prefix(text, "TRF")
+            if transfer_number:
+                return transfer_number
         labels = [
             "발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호",
             "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
@@ -472,6 +480,27 @@ class DocumentParser:
         if value and self._document_number_score(value) >= 20:
             return value
         return None
+
+    def _has_return_or_credit_signal(self, text: str) -> bool:
+        return bool(re.search(
+            r"\bRTN[-_ ]?\d{4}|반품\s*/?\s*차감|반품\s*요청|차감\s*요청|credit\s+memo|credit\s+note|return\s+note",
+            text,
+            flags=re.IGNORECASE,
+        ))
+
+    def _has_internal_transfer_signal(self, text: str) -> bool:
+        normalized = re.sub(r"\s+", "", text.lower())
+        if re.search(r"\bTRF[-_ ]?\d{4}", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"내부\s*(?:자재\s*)?이동|자재\s*이동|사업장\s*간|창고\s*이동|지점\s*이동", text, flags=re.IGNORECASE):
+            return True
+        has_from_to_warehouse = "출고창고" in normalized and "입고창고" in normalized
+        has_inventory_rows = bool(re.search(r"내부품목코드|요청수량|요청수림", text, flags=re.IGNORECASE))
+        return has_from_to_warehouse and has_inventory_rows
+
+    def _first_document_number_for_prefix(self, text: str, prefix: str) -> str | None:
+        match = re.search(rf"\b{re.escape(prefix)}[-_ ]?\d{{4}}[-_ ]?\d{{3,4}}(?:[-_ ][A-Z0-9]{{1,8}}){{0,2}}\b", text, flags=re.IGNORECASE)
+        return self._normalize_document_number(match.group(0)) if match else None
 
     def _best_document_number_from_text(self, text: str) -> str | None:
         patterns = [
@@ -600,7 +629,7 @@ class DocumentParser:
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
-        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
         if related_document_number:
             fields["related_document_number"] = self._normalize_document_number(related_document_number) or related_document_number
         if doc_type == DocumentType.quotation:
@@ -707,6 +736,18 @@ class DocumentParser:
             return True
         if len(special_items) > len(items) and special_code_count >= current_code_count:
             return True
+        current_has_quantity_leak = any(
+            (
+                (self._to_decimal(str(item.get("quantity"))) if item.get("quantity") not in (None, "") else None) == Decimal("0")
+                or (
+                    bool(item.get("item_code") or item.get("document_item_code"))
+                    and bool(re.search(r"\s\d+(?:\.\d+)?$", str(item.get("item_name") or "")))
+                )
+            )
+            for item in items
+        )
+        if current_has_quantity_leak and len(special_items) >= len(items) and special_code_count >= current_code_count:
+            return True
         return False
 
     def _extract_numbered_vertical_table_items(
@@ -798,6 +839,9 @@ class DocumentParser:
             "합계금액": "line_total",
             "total": "line_total",
             "linetotal": "line_total",
+            "거래일": "note",
+            "거래일자": "note",
+            "date": "note",
             "비고": "note",
             "note": "note",
             "remark": "note",
@@ -885,11 +929,80 @@ class DocumentParser:
 
     def _extract_special_quantity_table_items(self, lines: list[str]) -> list[dict]:
         items: list[dict] = []
+        items.extend(self._extract_delivery_quantity_line_items(lines))
         items.extend(self._extract_inspection_report_line_items(lines))
         items.extend(self._extract_internal_transfer_line_items(lines))
         items.extend(self._extract_option_quotation_line_items(lines))
         items.extend(self._extract_statement_date_line_items(lines))
         return [self._normalize_line_item(item) for item in items if item.get("item_name")]
+
+    def _extract_delivery_quantity_line_items(self, lines: list[str]) -> list[dict]:
+        text = "\n".join(lines)
+        if not re.search(r"(납품서|delivery\s*note)", text, flags=re.IGNORECASE):
+            return []
+        header_index = next((
+            index for index, line in enumerate(lines)
+            if re.search(r"품목명", line) and re.search(r"(납품수량|입고수량|발주수량|잔량|요청수량)", line)
+        ), None)
+        if header_index is None:
+            return []
+
+        header = lines[header_index]
+        if re.search(r"(단가|공급가액|세액|합계금액|unit\s*price|amount|total)", header, flags=re.IGNORECASE):
+            return []
+        quantity_labels = re.findall(r"(발주수량|납품수량|입고수량|요청수량|잔량|수량)", header)
+        if not quantity_labels:
+            return []
+        preferred_label = next((label for label in ("납품수량", "입고수량", "요청수량", "수량", "발주수량") if label in quantity_labels), quantity_labels[0])
+        quantity_position = quantity_labels.index(preferred_label)
+
+        items: list[dict] = []
+        for raw in lines[header_index + 1:]:
+            line = self._clean_value(raw) or ""
+            if not line:
+                continue
+            if self._looks_like_numbered_table_footer(line) or self._looks_like_instruction_or_note(line):
+                break
+            match = re.match(r"^\s*(\d{1,3})\s+(.+?)\s+([A-Za-z가-힣]{1,4})\s*$", line)
+            if not match:
+                continue
+            body = match.group(2).strip()
+            unit = match.group(3).upper()
+            body_tokens = body.split()
+            if len(body_tokens) <= len(quantity_labels):
+                continue
+            quantity_tokens = body_tokens[-len(quantity_labels):]
+            if not all(re.fullmatch(r"\d+(?:\.\d+)?", token) for token in quantity_tokens):
+                continue
+            quantity = self._number_value(Decimal(quantity_tokens[quantity_position]))
+            prefix = " ".join(body_tokens[:-len(quantity_labels)]).strip()
+            if not prefix:
+                continue
+            item = self._delivery_quantity_item_from_prefix(prefix)
+            if not item.get("item_name"):
+                continue
+            item["quantity"] = quantity
+            item["unit"] = unit
+            items.append(item)
+        return items
+
+    def _delivery_quantity_item_from_prefix(self, prefix: str) -> dict:
+        tokens = prefix.split()
+        code_index = next((
+            index for index, token in enumerate(tokens)
+            if "-" in token and re.search(r"[A-Za-z]", token) and re.search(r"\d", token)
+        ), None)
+        if code_index is None:
+            return {"item_name": self._clean_value(prefix)}
+        item_name = self._clean_value(" ".join(tokens[:code_index]))
+        item_code = self._clean_code_value(tokens[code_index])
+        specification = self._clean_value(" ".join(tokens[code_index + 1:])) if code_index + 1 < len(tokens) else None
+        item: dict = {"item_name": item_name}
+        if item_code:
+            item["item_code"] = item_code
+        if specification:
+            item["specification"] = specification
+        return item
 
     def _extract_sparse_repeated_amount_table_items(self, lines: list[str]) -> list[dict]:
         text = "\n".join(lines)
@@ -1150,6 +1263,10 @@ class DocumentParser:
             code = self._internal_item_code_from_line(line)
             if not code:
                 continue
+            inline_item = self._parse_inline_internal_transfer_row(line, code)
+            if inline_item:
+                items.append(inline_item)
+                continue
             previous_name = self._nearest_item_name_before(lines, index)
             next_spec = self._nearest_spec_after(lines, index)
             item = {
@@ -1160,6 +1277,44 @@ class DocumentParser:
             }
             items.append({key: value for key, value in item.items() if value})
         return items
+
+    def _parse_inline_internal_transfer_row(self, line: str, code: str) -> dict | None:
+        text = str(line or "").strip()
+        if not text or re.search(r"^(?:No|번호)\b|품목명|내부품목코드|요청수량", text, flags=re.IGNORECASE):
+            return None
+        code_match = re.search(re.escape(code), text, flags=re.IGNORECASE)
+        if not code_match:
+            return None
+        before = text[:code_match.start()].strip()
+        after = text[code_match.end():].strip()
+        item_name = re.sub(r"^\d+\s+", "", before).strip(" -:：|")
+        if not item_name or not re.search(r"[A-Za-z가-힣]", item_name):
+            return None
+        tokens = after.split()
+        spec: str | None = None
+        quantity: Decimal | None = None
+        unit: str | None = None
+        for pos, token in enumerate(tokens):
+            cleaned = token.strip(" ,|")
+            if spec is None and re.search(r"\d+\s*[xX]\s*\d+|\d+(?:\.\d+)?\s*(?:mm|T)|\bM\d+\b", cleaned, flags=re.IGNORECASE):
+                spec = cleaned
+                continue
+            if quantity is None and re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
+                next_token = tokens[pos + 1].strip(" ,|") if pos + 1 < len(tokens) else ""
+                if not next_token or self._extract_unit(next_token):
+                    quantity = Decimal(cleaned)
+                    unit = self._extract_unit(next_token) or unit
+                    continue
+            unit = unit or self._extract_unit(cleaned)
+        item = {
+            "item_name": item_name,
+            "item_code": code,
+            "document_item_code": code,
+            "specification": spec,
+            "quantity": self._number_value(quantity) if quantity is not None else None,
+            "unit": unit,
+        }
+        return {key: value for key, value in item.items() if value not in (None, "", [])}
 
     def _internal_item_code_from_line(self, line: str) -> str | None:
         text = str(line or "").strip()
@@ -2522,6 +2677,10 @@ class DocumentParser:
 
     def _guess_category(self, text: str) -> str | None:
         lowered = text.lower()
+        if re.search(r"\bRTN[-_ ]?\d{4}|반품\s*/?\s*차감|반품|차감|return\s+note|credit\s+(?:note|memo)", text, flags=re.IGNORECASE):
+            return "credit_note" if re.search(r"차감|credit\s+(?:note|memo)", text, flags=re.IGNORECASE) else "return_note"
+        if self._has_internal_transfer_signal(text):
+            return "internal_transfer"
         if "납품서" in lowered or "delivery note" in lowered:
             return "delivery_note"
         if "세금계산서" in lowered or "invoice" in lowered:

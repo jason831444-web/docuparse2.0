@@ -64,7 +64,7 @@ class DocumentTaxonomyService:
                     r"\bTRF[-_ ]?\d{4}",
                     r"사업장\s*간",
                     r"자재\s*이동",
-                    r"내부\s*이동",
+                    r"내부\s*(?:자재\s*)?이동",
                     r"내부품목코드",
                     r"요청수량|요청수림",
                     r"internal\s+transfer|branch\s+transfer|transfer\s+slip",
@@ -186,13 +186,23 @@ class DocumentTaxonomyService:
         return bool(re.search(r"credit\s+note|credit\s+memo|deduction|차감", text, flags=re.IGNORECASE))
 
     def _is_internal_transfer(self, text: str) -> bool:
-        return bool(re.search(
-            r"\bTRF[-_ ]?\d{4}|사업장\s*간|자재\s*이동|내부\s*이동|창고\s*이동|지점\s*이동|"
-            r"내부품목코드|요청수량|요청수림|internal\s+transfer|branch\s+transfer|transfer\s+slip|"
-            r"from\s+warehouse|to\s+warehouse",
+        normalized = re.sub(r"\s+", "", text.lower())
+        if re.search(r"\bTRF[-_ ]?\d{4}", text, flags=re.IGNORECASE):
+            return True
+        if re.search(
+            r"사업장\s*간|자재\s*이동|내부\s*(?:자재\s*)?이동|창고\s*이동|지점\s*이동|"
+            r"internal\s+transfer|branch\s+transfer|transfer\s+slip",
             text,
             flags=re.IGNORECASE,
-        ))
+        ):
+            return True
+        has_from_to_warehouse = (
+            ("출고창고" in normalized and "입고창고" in normalized)
+            or bool(re.search(r"from\s+warehouse", text, flags=re.IGNORECASE))
+            and bool(re.search(r"to\s+warehouse", text, flags=re.IGNORECASE))
+        )
+        has_inventory_rows = bool(re.search(r"내부품목코드|요청수량|요청수림", text, flags=re.IGNORECASE))
+        return has_from_to_warehouse and has_inventory_rows
 
     def _layout_profile(self, extraction_method: str | None, file_metadata: dict | None) -> str | None:
         method = (extraction_method or "").lower()

@@ -23,11 +23,16 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
 FOOTER_TERMS = (
     "공급가액",
     "세액",
+    "부가세",
     "합계금액",
     "총액",
+    "subtotal",
+    "vat",
     "total amount",
     "grand total",
     "담당",
+    "담등",
+    "담동",
     "검토",
     "승인",
     "docuparse",
@@ -35,6 +40,51 @@ FOOTER_TERMS = (
     "페이지하단",
     "마지막페이지",
     "금액검토필요",
+    "금월합계",
+    "금월공급가액",
+    "금월세액",
+    "총미수금",
+    "미수잔액",
+    "전월이월",
+    "품목합계에포함하지",
+    "bank:",
+    "swift:",
+    "account:",
+    "memo:",
+    "invoice number required",
+    "음수라인",
+    "임의삭제",
+    "조정금액포함",
+    "절사조정금액포함",
+    "철사조정금액포함",
+    "계좌",
+    "입금",
+    "선택시합계",
+    "옵션별상이",
+    "옵션별상",
+    "option total",
+    "option totals",
+    "수기정정",
+    "담당자수기정정",
+    "수량은담당자",
+    "에서5로변경",
+    "quantity correction",
+    "통관",
+    "회계입력",
+    "원화환산",
+    "환산기준일",
+)
+
+ALWAYS_FOOTER_TERMS = (
+    "수기정정",
+    "담당자수기정정",
+    "수량은담당자",
+    "에서5로변경",
+    "quantity correction",
+    "통관",
+    "회계입력",
+    "원화환산",
+    "환산기준일",
 )
 
 UNIT_TOKENS = {"EA", "SET", "PCS", "PC", "개", "대", "장"}
@@ -171,15 +221,26 @@ class BBoxTableReconstructor:
         for row in table_rows:
             fields = dict(row.fields)
             flags = list(row.review_flags)
+            missing_fields = list(row.missing_fields)
+            untrusted_fields = list(row.untrusted_fields)
             if not fields.get("item_name"):
                 flags.append("missing_item_name_from_ocr")
-            if amount_required and any(key in fields for key in ("supply_amount", "tax_amount", "line_total")):
+            has_amount_value = any(key in fields for key in ("supply_amount", "tax_amount", "line_total"))
+            if amount_required and has_amount_value:
                 flags.append("untrusted_ocr_amount")
+                if "quantity" not in fields:
+                    flags.append("missing_quantity_from_ocr")
+                    missing_fields.append("quantity")
+                if "line_total" not in fields:
+                    flags.append("row_boundary_uncertain")
+                for amount_field in ("supply_amount", "tax_amount", "line_total"):
+                    if amount_field in fields and amount_field not in untrusted_fields:
+                        untrusted_fields.append(amount_field)
             candidate = {
                 **fields,
                 "confidence": row.confidence,
-                "missing_fields": sorted(set(row.missing_fields)),
-                "untrusted_fields": sorted(set(row.untrusted_fields)),
+                "missing_fields": sorted(set(missing_fields)),
+                "untrusted_fields": sorted(set(untrusted_fields)),
                 "review_flags": sorted(set(flags)),
                 "source_tokens": row.source_tokens,
                 "bbox_span": row.bbox_span,
@@ -382,6 +443,8 @@ class BBoxTableReconstructor:
 
     def _is_footer_or_note_row(self, row: LayoutRow) -> bool:
         text = _compact(row.text)
+        if any(_compact(term) in text for term in ALWAYS_FOOTER_TERMS):
+            return True
         if any(_compact(term) in text for term in FOOTER_TERMS) and not self._sparse_amount_row(row):
             return True
         if re.search(r"^(공급가액|세액|합계금액|total|subtotal)\s*[0-9,]+$", row.text.strip(), re.IGNORECASE):

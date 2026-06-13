@@ -162,8 +162,23 @@ class DocumentProcessor:
             if self._is_return_or_credit_parsed_document(parsed, raw_text):
                 document.document_type = parsed.document_type
                 document.ai_document_type = parsed.document_type
+                document.document_number = sanitize_for_postgres(parsed.document_number or document.document_number)
+                if getattr(parsed, "line_items", None):
+                    document.line_items = sanitize_for_postgres(parsed.line_items)
                 document.category = "return_note"
                 document.tags = ["return_note"]
+            if self._is_internal_transfer_parsed_document(parsed, raw_text):
+                document.document_type = parsed.document_type
+                document.ai_document_type = parsed.document_type
+                document.document_number = sanitize_for_postgres(parsed.document_number or document.document_number)
+                document.extracted_amount = None
+                document.subtotal = None
+                document.tax = None
+                document.currency = None
+                if getattr(parsed, "line_items", None):
+                    document.line_items = sanitize_for_postgres(parsed.line_items)
+                document.category = "internal_transfer"
+                document.tags = ["internal_transfer"]
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.document_type = parsed.document_type
                 document.ai_document_type = parsed.document_type
@@ -270,6 +285,7 @@ class DocumentProcessor:
         stored_candidates = [
             candidate for candidate in extra_candidates
             if self._should_store_bbox_extra_candidate(candidate, profile_values, layout_attention_flags)
+            and not self._duplicates_confirmed_line_item(candidate, document.line_items or [])
         ]
         stored_candidates = self._dedupe_layout_candidates(stored_candidates)[:10]
         review_flags = sorted({
@@ -285,7 +301,8 @@ class DocumentProcessor:
                 "bbox_line_candidate_count": bbox_count,
                 "grouped_row_count": len(rows),
                 "column_count": len(columns),
-                "candidate_count": len(candidates),
+                "reconstructed_candidate_count": len(candidates),
+                "candidate_count": 0,
                 "confirmed_line_item_count": confirmed_count,
                 "uncertain_count": 0,
                 "bbox_review_flags": [],
@@ -297,7 +314,8 @@ class DocumentProcessor:
             "bbox_line_candidate_count": bbox_count,
             "grouped_row_count": len(rows),
             "column_count": len(columns),
-            "candidate_count": len(candidates),
+            "reconstructed_candidate_count": len(candidates),
+            "candidate_count": len(stored_candidates),
             "confirmed_line_item_count": confirmed_count,
             "uncertain_count": len(stored_candidates),
             "bbox_review_flags": review_flags,
@@ -387,6 +405,34 @@ class DocumentProcessor:
             deduped.append(candidate)
         return deduped
 
+    def _duplicates_confirmed_line_item(self, candidate: dict, line_items: list[dict]) -> bool:
+        candidate_name = self._normalized_layout_identity(candidate.get("item_name"))
+        if not candidate_name:
+            return False
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            confirmed_name = self._normalized_layout_identity(item.get("item_name") or item.get("name"))
+            if not confirmed_name or len(confirmed_name) < 4:
+                continue
+            if confirmed_name in candidate_name or candidate_name in confirmed_name:
+                return True
+            if self._layout_identity_common_prefix(candidate_name, confirmed_name) >= 8:
+                return True
+        return False
+
+    def _normalized_layout_identity(self, value: object) -> str:
+        text = str(value or "").casefold()
+        return "".join(ch for ch in text if ch.isalnum())
+
+    def _layout_identity_common_prefix(self, left: str, right: str) -> int:
+        count = 0
+        for left_char, right_char in zip(left, right):
+            if left_char != right_char:
+                break
+            count += 1
+        return count
+
     def _compact_layout_candidate(self, candidate: dict) -> dict:
         source_tokens = candidate.get("source_tokens") or []
         return {
@@ -413,7 +459,7 @@ class DocumentProcessor:
         if not layout_debug.get("uncertain_count"):
             return None
         flags = layout_debug.get("bbox_review_flags") or []
-        if layout_debug.get("candidate_count", 0) <= layout_debug.get("confirmed_line_item_count", 0):
+        if layout_debug.get("candidate_count", 0) <= 0:
             return None
         if "missing_item_name_from_ocr" not in flags and "fax_row_boundary_uncertain" not in flags:
             return None
@@ -607,26 +653,26 @@ class DocumentProcessor:
         return "\n".join(dict.fromkeys(note for note in notes if note))
 
     def _parsed_manufacturing_has_business_data(self, parsed: NormalizedDocument | object) -> bool:
-        doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
-        return doc_type in {
-            "purchase_order",
-            "quotation",
-            "transaction_statement",
-            "delivery_note",
-            "invoice",
-            "packing_list",
-        } and bool(getattr(parsed, "line_items", None))
+        return self._is_manufacturing_parsed_type(parsed) and bool(getattr(parsed, "line_items", None))
 
     def _is_manufacturing_parsed_type(self, parsed: object) -> bool:
         doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
-        return doc_type in {
+        if doc_type in {
             "purchase_order",
             "quotation",
             "transaction_statement",
             "delivery_note",
             "invoice",
             "packing_list",
-        }
+            "inspection_report",
+        }:
+            return True
+        semantic_values = [
+            getattr(parsed, "category", None),
+            *(getattr(parsed, "tags", None) or []),
+        ]
+        semantic_text = " ".join(str(value or "") for value in semantic_values)
+        return bool(re.search(r"\b(?:internal_transfer|return_note|credit_note)\b", semantic_text, flags=re.IGNORECASE))
 
     def _normalize_manufacturing_dates(self, parsed: object, issue_date, due_date) -> tuple:
         doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
@@ -689,7 +735,18 @@ class DocumentProcessor:
         text = "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:10])
         return bool(
             re.search(r"^RTN[-_ ]?\d{4}", doc_number, flags=re.IGNORECASE)
-            or re.search(r"(반품\s*/?\s*차감|반품\s*요청|차감\s*요청|return\s+note|credit\s+note)", text, flags=re.IGNORECASE)
+            or re.search(r"(반품\s*/?\s*차감|반품\s*요청|차감\s*요청|return\s+note|credit\s+(?:note|memo))", text, flags=re.IGNORECASE)
+        )
+
+    def _is_internal_transfer_parsed_document(self, parsed: object, raw_text: str) -> bool:
+        doc_number = str(getattr(parsed, "document_number", "") or "")
+        category = str(getattr(parsed, "category", "") or "")
+        tags = " ".join(str(tag or "") for tag in (getattr(parsed, "tags", None) or []))
+        text = "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:12])
+        return bool(
+            re.search(r"^TRF[-_ ]?\d{4}", doc_number, flags=re.IGNORECASE)
+            or re.search(r"\binternal_transfer\b", f"{category} {tags}", flags=re.IGNORECASE)
+            or re.search(r"(내부\s*(?:자재\s*)?이동|자재\s*이동|출고창고|입고창고|내부품목코드|요청수량)", text, flags=re.IGNORECASE)
         )
 
     def _sum_line_item_field(self, line_items: list[dict], field: str) -> Decimal | None:

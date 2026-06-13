@@ -160,6 +160,7 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
         policy = _export_policy(document, taxonomy)
         layout_summary = _layout_candidate_summary(document)
         review_reasons = _review_reason_text(document)
+        has_line_items = bool(document.line_items)
         line_items = document.line_items or [{}]
         for index, item in enumerate(line_items, start=1):
             rows.append({
@@ -178,11 +179,12 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "단가": item.get("unit_price"),
                 "공급가액": item.get("supply_amount"),
                 "세액": item.get("tax_amount"),
-                "합계금액": item.get("line_total") or document.extracted_amount,
+                "합계금액": item.get("line_total") if has_line_items else document.extracted_amount,
                 "통화": document.currency,
                 "검토상태": "검토 필요" if document.review_required else "확정 가능",
                 "document_id": str(document.id) if document.id else None,
                 "filename": document.original_filename,
+                "document_total": _decimal_text(document.extracted_amount),
                 "document_subtype": taxonomy.get("document_subtype"),
                 "document_profile": taxonomy.get("document_profile"),
                 "document_profiles": ", ".join(taxonomy.get("document_profiles") or []),
@@ -274,6 +276,7 @@ def _export_policy(document: Document, taxonomy: dict) -> dict:
     return {
         "amount_required": bool(amount_required),
         "party_required": bool(party_required),
+        "review_required": bool(document.review_required and not review.get("approved")),
         "export_policy": _policy_name(taxonomy, amount_required=bool(amount_required)),
         "export_blocked": bool(review.get("approval_validation", {}).get("blocking")),
         "export_warning": ", ".join(dict.fromkeys(warnings)),

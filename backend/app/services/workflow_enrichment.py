@@ -38,7 +38,7 @@ class DocumentWorkflowEnrichmentService:
         normalized_text: str | None = None,
         interpretation: CategoryInterpretation | None = None,
     ) -> WorkflowEnrichment:
-        text = normalized_text or document.raw_text or ""
+        text = self._classification_text(normalized_text, document.raw_text)
         mode = self._workflow_mode(document, interpretation)
         profile = interpretation.profile if interpretation and interpretation.profile else self._content_profile(document, text, mode)
         if self._is_manufacturing_document(document, profile):
@@ -113,6 +113,13 @@ class DocumentWorkflowEnrichmentService:
             }
         return result
 
+    def _classification_text(self, normalized_text: str | None, raw_text: str | None) -> str:
+        normalized = str(normalized_text or "").strip()
+        raw = str(raw_text or "").strip()
+        if normalized and raw and normalized != raw:
+            return f"{normalized}\n{raw}"
+        return normalized or raw
+
     def _is_manufacturing_document(self, document: Document, profile: str | None) -> bool:
         manufacturing_profiles = {
             "purchase_order",
@@ -158,6 +165,7 @@ class DocumentWorkflowEnrichmentService:
             business_fields,
             line_item_count,
             total,
+            taxonomy,
         )
         action_items = self._manufacturing_action_items(doc_type, warnings)
         if warnings:
@@ -220,7 +228,7 @@ class DocumentWorkflowEnrichmentService:
 
     def _manufacturing_business_fields(self, document: Document, text: str, doc_type: str) -> dict[str, str | list[str]]:
         fields: dict[str, str | list[str]] = {}
-        related_document_number = self._extract_labeled_text_multiline(text, ["관련납품서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        related_document_number = self._extract_labeled_text_multiline(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
         if related_document_number:
             fields["related_document_number"] = related_document_number
         if doc_type == "purchase_order":
@@ -232,6 +240,8 @@ class DocumentWorkflowEnrichmentService:
             fields["payment_terms"] = self._extract_labeled_text(text, ["결제조건", "payment terms"])
         elif doc_type == "transaction_statement":
             fields["transaction_date"] = self._date_iso(self._extract_labeled_date(text, ["거래일자", "거래일", "transaction date"]) or document.issue_date or document.extracted_date)
+            if re.search(r"(전월\s*이월|총\s*미수금|미수\s*잔액|전월잔액|금월\s*합계|입금액)", text):
+                fields["statement_balance_summary_present"] = "true"
         elif doc_type == "delivery_note":
             fields["delivery_date"] = self._date_iso(self._extract_labeled_date(text, ["납품일", "납품일자", "delivery date"]) or document.due_date)
             fields["receiving_location"] = self._extract_labeled_text(text, ["입고장소", "납품장소", "receiving location"])
@@ -251,6 +261,19 @@ class DocumentWorkflowEnrichmentService:
         taxonomy = taxonomy or self.taxonomy.classify(document, "")
         no_price_quantity_doc = self._is_no_price_quantity_document(document) or taxonomy.amount_required is False
         party_optional_doc = no_price_quantity_doc or taxonomy.party_required is False
+        if "return_document" in set(taxonomy.document_profiles or []):
+            reasons.append(self._review_reason(
+                "amount_direction_requires_review",
+                "반품/차감 문서는 금액의 차감 방향과 원문서 반영 방식을 확인해야 합니다.",
+                "total_amount",
+            ))
+            if not business_fields.get("related_document_number"):
+                reasons.append(self._review_reason(
+                    "related_document_missing",
+                    "반품/차감 문서의 관련 원문서 번호를 확인해야 합니다.",
+                    "related_document_number",
+                    severity="info",
+                ))
         if not party_optional_doc and not (document.vendor_name or document.merchant_name):
             reasons.append(self._review_reason("missing_vendor_name", "공급업체가 추출되지 않았습니다.", "vendor_name"))
         if not party_optional_doc and not document.customer_name:
@@ -263,6 +286,12 @@ class DocumentWorkflowEnrichmentService:
             reasons.append(self._review_reason("missing_due_date", "납기일 미확인", "due_date"))
         if doc_type == "invoice" and not business_fields.get("payment_due_date"):
             reasons.append(self._review_reason("missing_payment_due_date", "지급기한 미확인", "due_date"))
+        if doc_type == "transaction_statement" and business_fields.get("statement_balance_summary_present"):
+            reasons.append(self._review_reason(
+                "statement_balance_summary_requires_review",
+                "거래명세서에 전월이월/입금액/미수잔액 등 정산 요약이 포함되어 있어 품목 합계와 잔액 구분을 확인해야 합니다.",
+                "statement_summary",
+            ))
         if not document.line_items:
             reasons.append(self._review_reason("missing_line_items", "품목 정보가 추출되지 않았습니다.", "line_items"))
         for index, item in enumerate(document.line_items or [], start=1):
@@ -491,6 +520,8 @@ class DocumentWorkflowEnrichmentService:
             "amount_mismatch",
             "invalid_line_amount",
             "item_code_name_conflict",
+            "amount_direction_requires_review",
+            "statement_balance_summary_requires_review",
             "internal_item_unmatched",
             "internal_item_ambiguous",
             "item_matching_skipped",
@@ -572,9 +603,20 @@ class DocumentWorkflowEnrichmentService:
         fields: dict[str, str | list[str]],
         line_item_count: int,
         total: str | None,
+        taxonomy: DocumentTaxonomy | None = None,
     ) -> str:
+        profiles = set(taxonomy.document_profiles or []) if taxonomy else set()
+        subtype = taxonomy.document_subtype if taxonomy else None
+        amount_not_required = bool(taxonomy and taxonomy.amount_required is False) or "no_price_document" in profiles
         number_label = self._manufacturing_number_label(doc_type)
         detail = ""
+        if subtype == "internal_transfer" or "inventory_movement_document" in profiles:
+            item_summary = f"품목 {line_item_count}건이 추출되었습니다. 금액/통화 정보 없이 수량 중심 문서로 처리되었습니다."
+            return (
+                f"이 문서는 내부 사업장 또는 창고 간 자재 이동 문서입니다. "
+                f"{number_label}는 {number}이며, "
+                f"{item_summary}"
+            )
         if doc_type == "quotation":
             valid_until = self._korean_date_from_iso(fields.get("valid_until"))
             terms = []
@@ -599,7 +641,7 @@ class DocumentWorkflowEnrichmentService:
             detail = f"납기일은 {due_date or '미확인'}입니다. "
         item_summary = (
             f"품목 {line_item_count}건이 추출되었습니다. 이 납품서는 금액 정보 없이 수량 확인용 문서로 처리되었습니다."
-            if doc_type == "delivery_note" and not total
+            if amount_not_required and not total
             else f"품목 {line_item_count}건과 합계금액 {total or '미확인'}이 추출되었습니다."
         )
         return (
