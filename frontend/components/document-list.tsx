@@ -8,23 +8,35 @@ import { DocumentCard } from "@/components/document-card";
 import { DocumentRow } from "@/components/document-row";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { requiresReviewExportConfirmation } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
+
+type DuplicateHint = {
+  count: number;
+  isLatest: boolean;
+  basis: "filename_and_number" | "filename";
+};
 
 export function DocumentList({
   documents,
   view = "list",
   onChanged,
   returnTo,
+  duplicateHintsOverride,
 }: {
   documents: DocumentRecord[];
   view?: "list" | "grid";
   onChanged?: () => void;
   returnTo?: string;
+  duplicateHintsOverride?: Map<string, DuplicateHint>;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [excelMode, setExcelMode] = useState<"combined" | "party_tabs">("combined");
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const allSelected = documents.length > 0 && selected.size === documents.length;
+  const localDuplicateHints = useMemo(() => duplicateUploadHints(documents), [documents]);
+  const duplicateHints = duplicateHintsOverride ?? localDuplicateHints;
+  const duplicateCount = documents.filter((document) => duplicateHints.has(document.id)).length;
 
   useEffect(() => {
     const visibleIds = new Set(documents.map((document) => document.id));
@@ -66,6 +78,11 @@ export function DocumentList({
       toast.error("선택된 문서가 없습니다. 내보낼 문서를 먼저 선택하세요.");
       return;
     }
+    const selectedDocuments = documents.filter((document) => selected.has(document.id));
+    if (selectedDocuments.some(requiresReviewExportConfirmation)) {
+      const confirmed = window.confirm("선택한 문서 중 검토 필요 문서가 있습니다. 내보내기 파일에는 review_required와 경고 정보가 포함됩니다. 계속할까요?");
+      if (!confirmed) return;
+    }
     const url = kind === "csv"
       ? api.exportCsvUrl(selectedExportParams())
       : api.exportExcelUrl(selectedExportParams({ sheet_mode: excelMode }));
@@ -94,6 +111,7 @@ export function DocumentList({
         </label>
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">{selected.size}건 선택됨</span>
+          {duplicateCount ? <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">같은 파일 업로드 후보 {duplicateCount}건</span> : null}
           <select
             className="h-8 rounded-md border bg-white px-2 text-xs"
             value={excelMode}
@@ -125,16 +143,73 @@ export function DocumentList({
       {view === "grid" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {documents.map((document) => (
-            <DocumentCard key={document.id} document={document} selected={selected.has(document.id)} onSelect={(checked) => toggle(document.id, checked)} returnTo={returnTo} />
+            <DocumentCard key={document.id} document={document} duplicateHint={duplicateHints.get(document.id)} selected={selected.has(document.id)} onSelect={(checked) => toggle(document.id, checked)} returnTo={returnTo} />
           ))}
         </div>
       ) : (
         <div className="space-y-3">
           {documents.map((document) => (
-            <DocumentRow key={document.id} document={document} selected={selected.has(document.id)} onSelect={(checked) => toggle(document.id, checked)} returnTo={returnTo} />
+            <DocumentRow key={document.id} document={document} duplicateHint={duplicateHints.get(document.id)} selected={selected.has(document.id)} onSelect={(checked) => toggle(document.id, checked)} returnTo={returnTo} />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+export function duplicateUploadHints(documents: DocumentRecord[]): Map<string, DuplicateHint> {
+  const exactGroups = new Map<string, DocumentRecord[]>();
+  const filenameGroups = new Map<string, DocumentRecord[]>();
+  for (const document of documents) {
+    const exactKey = duplicateExactKey(document);
+    if (exactKey) {
+      const group = exactGroups.get(exactKey) || [];
+      group.push(document);
+      exactGroups.set(exactKey, group);
+    }
+    const filenameKey = duplicateFilenameKey(document);
+    if (filenameKey) {
+      const group = filenameGroups.get(filenameKey) || [];
+      group.push(document);
+      filenameGroups.set(filenameKey, group);
+    }
+  }
+  const hints = new Map<string, DuplicateHint>();
+  for (const group of exactGroups.values()) {
+    addDuplicateGroupHints(hints, group, "filename_and_number");
+  }
+  for (const group of filenameGroups.values()) {
+    addDuplicateGroupHints(hints, group, "filename");
+  }
+  return hints;
+}
+
+function addDuplicateGroupHints(
+  hints: Map<string, DuplicateHint>,
+  group: DocumentRecord[],
+  basis: DuplicateHint["basis"]
+) {
+    if (group.length < 2) return;
+    const latestTime = Math.max(...group.map((document) => Date.parse(document.updated_at || document.created_at || "") || 0));
+    group.forEach((document) => {
+      if (hints.has(document.id) && hints.get(document.id)?.basis === "filename_and_number") return;
+      const updatedTime = Date.parse(document.updated_at || document.created_at || "") || 0;
+      hints.set(document.id, { count: group.length, isLatest: updatedTime >= latestTime, basis });
+    });
+}
+
+function duplicateExactKey(document: DocumentRecord): string | null {
+  const filename = normalizeDuplicateKey(document.original_filename);
+  const number = (document.document_number || "").trim().toLowerCase();
+  if (!filename || !number) return null;
+  return `${filename}::${number}`;
+}
+
+function duplicateFilenameKey(document: DocumentRecord): string | null {
+  const filename = normalizeDuplicateKey(document.original_filename);
+  return filename || null;
+}
+
+function normalizeDuplicateKey(value?: string | null) {
+  return (value || "").normalize("NFKC").replace(/\s+/g, "").trim().toLowerCase();
 }

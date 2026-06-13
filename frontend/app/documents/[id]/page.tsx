@@ -34,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
-import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, informationalReviewIssues, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueSummary, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, groupedReviewIssues, informationalReviewIssues, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["original", "extracted", "ai"] as const;
@@ -335,6 +335,23 @@ export default function DocumentDetailPage() {
     }
   }
 
+  async function setReviewIssueGroupStatus(keys: string[], status: "resolved" | "ignored") {
+    if (!keys.length) return;
+    setSaving(true);
+    try {
+      let updated: DocumentRecord | null = null;
+      for (const key of keys) {
+        updated = await api.updateReviewIssue(params.id, { key, status });
+      }
+      if (updated) syncDocument(updated);
+      toast.success(status === "resolved" ? "검토 항목을 해결됨으로 표시했습니다" : "검토 항목을 무시로 표시했습니다");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "검토 항목 상태를 변경하지 못했습니다");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function toggleFavorite() {
     try {
       const updated = await api.toggleFavorite(params.id);
@@ -452,13 +469,21 @@ export default function DocumentDetailPage() {
   const selectedCategory = form.watch("category") ?? "";
   const lineItems = form.watch("line_items") ?? [];
   const blockingIssues = blockingReviewIssues(document);
+  const blockingIssueSummaryItems = reviewIssueSummaryItems(blockingIssues);
+  const groupedBlockingIssueItems = groupedReviewIssues(blockingIssues);
   const infoIssues = informationalReviewIssues(document);
   const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
   const displayTitle = documentDisplayTitle(document);
   const reviewMetadata = documentReviewMetadata(document);
-  const openIssueCount = (reviewMetadata.issues || []).filter((issue) => !["resolved", "ignored"].includes(String(issue.status || "open"))).length;
-  const resolvedIssueCount = (reviewMetadata.issues || []).filter((issue) => ["resolved", "ignored"].includes(String(issue.status || ""))).length;
+  const reviewIssueProgress = reviewIssueProgressCounts(reviewMetadata, blockingIssues.length);
+  const openIssueCount = reviewIssueProgress.open;
+  const resolvedIssueCount = reviewIssueProgress.resolved;
+  const exportNotice = document.review_required && !reviewMetadata.approved
+    ? "검토 필요 상태입니다. 내보내기 파일에는 review_required와 경고 정보가 함께 포함됩니다."
+    : isConfirmed
+      ? "확정 완료된 문서입니다. 내보내기 파일에 승인 정보가 함께 포함됩니다."
+      : null;
 
   return (
     <main className="shell py-8">
@@ -479,41 +504,44 @@ export default function DocumentDetailPage() {
             {documentSummaryDetailed(document, 700)}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant={isConfirmed ? "secondary" : "default"} onClick={confirmDocument} disabled={saving || isConfirmed}>
-            <CheckCheck className="size-4" />
-            {isConfirmed ? "확정 완료" : "확정 처리"}
-          </Button>
-          <Button variant="outline" onClick={markNeedsReview} disabled={saving}>
-            <AlertTriangle className="size-4" />
-            검토 필요
-          </Button>
-          <Button variant="outline" onClick={toggleFavorite}>
-            <Star className={`size-4 ${document.is_favorite ? "fill-amber-400 text-amber-400" : ""}`} />
-            {document.is_favorite ? "즐겨찾기" : "즐겨찾기"}
-          </Button>
-          <Button variant="outline" onClick={reprocess} disabled={saving}>
-            <RefreshCw className="size-4" />
-            다시 처리
-          </Button>
-          <Button asChild variant="outline">
-            <a href={api.exportJsonUrl(document.id)}>
-              <Download className="size-4" />
-              JSON으로 내보내기
-            </a>
-          </Button>
-          {document.document_type === "invoice" ? (
+        <div className="max-w-md space-y-2">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant={isConfirmed ? "secondary" : "default"} onClick={confirmDocument} disabled={saving || isConfirmed}>
+              <CheckCheck className="size-4" />
+              {isConfirmed ? "확정 완료" : "확정 처리"}
+            </Button>
+            <Button variant="outline" onClick={markNeedsReview} disabled={saving}>
+              <AlertTriangle className="size-4" />
+              검토 필요
+            </Button>
+            <Button variant="outline" onClick={toggleFavorite}>
+              <Star className={`size-4 ${document.is_favorite ? "fill-amber-400 text-amber-400" : ""}`} />
+              {document.is_favorite ? "즐겨찾기" : "즐겨찾기"}
+            </Button>
+            <Button variant="outline" onClick={reprocess} disabled={saving}>
+              <RefreshCw className="size-4" />
+              다시 처리
+            </Button>
             <Button asChild variant="outline">
-              <a href={api.exportTaxInvoiceXmlUrl(document.id)}>
+              <a href={api.exportJsonUrl(document.id)}>
                 <Download className="size-4" />
-                XML 초안
+                JSON으로 내보내기
               </a>
             </Button>
-          ) : null}
-          <Button variant="destructive" onClick={remove}>
-            <Trash2 className="size-4" />
-            삭제
-          </Button>
+            {document.document_type === "invoice" ? (
+              <Button asChild variant="outline">
+                <a href={api.exportTaxInvoiceXmlUrl(document.id)}>
+                  <Download className="size-4" />
+                  XML 초안
+                </a>
+              </Button>
+            ) : null}
+            <Button variant="destructive" onClick={remove}>
+              <Trash2 className="size-4" />
+              삭제
+            </Button>
+          </div>
+          {exportNotice ? <p className="text-right text-xs text-muted-foreground">{exportNotice}</p> : null}
         </div>
       </div>
 
@@ -689,7 +717,7 @@ export default function DocumentDetailPage() {
                   ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
                   ["검토 진행", `${openIssueCount}개 열림 / ${resolvedIssueCount}개 해결`],
                   ["승인 일시", reviewMetadata.approved_at ? formatDateTime(reviewMetadata.approved_at) : null],
-                  ["검토 필요 항목", blockingIssues.length ? blockingIssues.map(reviewIssueSummary).join(", ") : "없음"],
+                  ["검토 필요 항목", blockingIssueSummaryItems.length ? blockingIssueSummaryItems.join(", ") : "없음"],
                 ]}
               />
               <div className="grid gap-2 rounded-lg border bg-white p-3">
@@ -706,22 +734,28 @@ export default function DocumentDetailPage() {
               </div>
               {blockingIssues.length ? (
                 <div className="grid gap-2">
-                  {blockingIssues.map((issue) => (
-                    <div key={`${issue.code}-${issue.field}-${issue.item_index}-${issue.message_ko}`} className="rounded-lg border border-amber-200 bg-white p-3 text-sm">
+                  {groupedBlockingIssueItems.map((group) => {
+                    const issueKeys = group.issues.map((issue) => issue.key).filter((key): key is string => Boolean(key));
+                    return (
+                    <div key={`${group.summary}-${group.description}`} className="rounded-lg border border-amber-200 bg-white p-3 text-sm">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
-                          <p className="font-medium text-amber-900">{reviewIssueSummary(issue)}</p>
-                          <p className="mt-1 text-xs text-amber-800">{reviewIssueDescription(issue)}</p>
+                          <p className="font-medium text-amber-900">
+                            {group.summary}
+                            {group.count > 1 ? <span className="ml-1 text-xs text-amber-700">({group.count}건)</span> : null}
+                          </p>
+                          <p className="mt-1 text-xs text-amber-800">{group.description}</p>
                         </div>
-                        {issue.key ? (
+                        {issueKeys.length ? (
                           <div className="flex gap-1">
-                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => setReviewIssueStatus(issue.key!, "resolved")}>해결</Button>
-                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => setReviewIssueStatus(issue.key!, "ignored")}>무시</Button>
+                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => issueKeys.length === 1 ? setReviewIssueStatus(issueKeys[0], "resolved") : setReviewIssueGroupStatus(issueKeys, "resolved")}>해결</Button>
+                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => issueKeys.length === 1 ? setReviewIssueStatus(issueKeys[0], "ignored") : setReviewIssueGroupStatus(issueKeys, "ignored")}>무시</Button>
                           </div>
                         ) : null}
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               ) : null}
               <InfoIssueDetails items={infoIssues.map((issue) => `${reviewIssueSummary(issue)}: ${reviewIssueDescription(issue)}`)} />

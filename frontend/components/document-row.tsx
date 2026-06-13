@@ -7,7 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { documentDisplayTitle, documentSummaryShort, formatDateTime, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
-export function DocumentRow({ document, selected = false, onSelect, returnTo }: { document: DocumentRecord; selected?: boolean; onSelect?: (checked: boolean) => void; returnTo?: string }) {
+export function DocumentRow({
+  document,
+  duplicateHint,
+  selected = false,
+  onSelect,
+  returnTo
+}: {
+  document: DocumentRecord;
+  duplicateHint?: { count: number; isLatest: boolean };
+  selected?: boolean;
+  onSelect?: (checked: boolean) => void;
+  returnTo?: string;
+}) {
   const href = returnTo ? `/documents/${document.id}?from=${encodeURIComponent(returnTo)}` : `/documents/${document.id}`;
   const displayTitle = documentDisplayTitle(document);
   return (
@@ -34,6 +46,7 @@ export function DocumentRow({ document, selected = false, onSelect, returnTo }: 
       <div className="flex min-w-0 flex-wrap gap-2 lg:justify-self-start">
         <Badge className="bg-accent text-accent-foreground">{primaryCategoryLabel(document)}</Badge>
         <TaxonomyBadges document={document} maxProfiles={1} />
+        {duplicateHint ? <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{duplicateHint.isLatest ? `같은 파일 후보 ${duplicateHint.count}건` : "이전 업로드 후보"}</Badge> : null}
         {document.source_file_type ? <Badge variant="outline">{titleCaseLabel(document.source_file_type)}</Badge> : null}
       </div>
       <div className="min-w-0 text-sm text-muted-foreground">

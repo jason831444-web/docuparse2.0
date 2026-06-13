@@ -2,7 +2,7 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummary } from "@/lib/utils";
+import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems } from "@/lib/utils";
 import type { BBoxTableCandidate, DocumentRecord, LayoutDebugMetadata } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
@@ -122,7 +122,7 @@ function LayoutDebugBlock({ layoutDebug }: { layoutDebug: LayoutDebugMetadata | 
 export function WorkflowPanel({ document }: { document: DocumentRecord }) {
   const labels = documentFieldLabels(document.document_type);
   const blockingIssues = blockingReviewIssues(document);
-  const reviewItems = blockingIssues.map(reviewIssueSummary);
+  const reviewItems = reviewIssueSummaryItems(blockingIssues);
   const infoItems = informationalReviewIssues(document).map((issue) => issue.message_ko);
   const warningItems = displayWarningsWithoutReviewDuplicates(document.warnings, blockingIssues);
   const roleDate = businessFieldDate(document);

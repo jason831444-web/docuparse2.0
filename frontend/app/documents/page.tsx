@@ -5,13 +5,13 @@ import { useSearchParams } from "next/navigation";
 import { Download, Grid2X2, Rows3, Search } from "lucide-react";
 import { toast } from "sonner";
 
-import { DocumentList } from "@/components/document-list";
+import { DocumentList, duplicateUploadHints } from "@/components/document-list";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
-import { primaryCategoryLabel } from "@/lib/utils";
+import { primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentListResponse, FolderSummary, ProcessingStatus } from "@/types/document";
 
 const statuses: Array<"" | ProcessingStatus> = ["", "uploaded", "queued", "processing", "ready", "needs_review", "confirmed", "failed"];
@@ -119,6 +119,8 @@ function DocumentsContent() {
       return groups;
     }, []);
   }, [data?.items, groupLabel]);
+  const duplicateHints = useMemo(() => duplicateUploadHints(data?.items || []), [data?.items]);
+  const duplicateHintCount = useMemo(() => duplicateFilenameCount(data?.items || []), [data?.items]);
 
   return (
     <main className="shell py-8">
@@ -147,7 +149,7 @@ function DocumentsContent() {
             <option value="">문서 유형</option>
             {categories.map((folder) => (
               <option key={folder.value} value={folder.category || folder.value}>
-                {folder.label}
+                {titleCaseLabel(folder.category || folder.value || folder.label)}
               </option>
             ))}
           </select>
@@ -173,6 +175,12 @@ function DocumentsContent() {
         </CardContent>
       </Card>
 
+      {duplicateHintCount ? (
+        <div className="mb-5 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          같은 파일명으로 업로드된 후보 {duplicateHintCount}건이 있습니다. 재처리/검토 전 최신 업로드인지 확인하세요.
+        </div>
+      ) : null}
+
       {loading ? (
         <div className={view === "grid" ? "grid gap-4 lg:grid-cols-2" : "space-y-3"}>
           {Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-28 animate-pulse rounded-lg bg-muted" />)}
@@ -185,7 +193,7 @@ function DocumentsContent() {
                 <h2 className="font-semibold">{group.label}</h2>
                 <span className="text-sm text-muted-foreground">{group.items.length}건</span>
               </div>
-              <DocumentList documents={group.items} view={view} onChanged={() => api.list(params).then(setData)} returnTo="/documents" />
+              <DocumentList documents={group.items} view={view} duplicateHintsOverride={duplicateHints} onChanged={() => api.list(params).then(setData)} returnTo="/documents" />
             </section>
           ))}
         </div>
@@ -196,4 +204,22 @@ function DocumentsContent() {
       )}
     </main>
   );
+}
+
+function duplicateFilenameCount(documents: DocumentListResponse["items"]) {
+  const counts = new Map<string, number>();
+  for (const document of documents) {
+    const key = duplicateFilenameKey(document.original_filename);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let total = 0;
+  for (const count of counts.values()) {
+    if (count > 1) total += count;
+  }
+  return total;
+}
+
+function duplicateFilenameKey(value?: string | null) {
+  return (value || "").normalize("NFKC").replace(/\s+/g, "").trim().toLowerCase() || null;
 }

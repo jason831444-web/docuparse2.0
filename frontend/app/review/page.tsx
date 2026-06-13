@@ -9,7 +9,7 @@ import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, reviewIssueDescription, reviewIssueSummary } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, requiresReviewExportConfirmation, reviewIssueDescription, reviewIssuesForLineItem, reviewIssueSummary } from "@/lib/utils";
 import type { DocumentListResponse, DocumentRecord, ManufacturingLineItem } from "@/types/document";
 
 export default function ReviewPage() {
@@ -28,7 +28,7 @@ export default function ReviewPage() {
     return (data?.items || []).flatMap((document) => {
       const issues = blockingReviewIssues(document);
       const items = document.line_items?.length ? document.line_items : [{} as ManufacturingLineItem];
-      return items.map((item, index) => ({ document, item, index, issues: issues.filter((issue) => issue.item_index === undefined || issue.item_index === index) }));
+      return items.map((item, index) => ({ document, item, index, issues: reviewIssuesForLineItem(issues, index) }));
     });
   }, [data]);
 
@@ -45,6 +45,8 @@ export default function ReviewPage() {
 
   function exportSelected() {
     if (!selectedIds.length) return;
+    const selectedDocuments = (data?.items || []).filter((document) => selected.has(document.id));
+    if (selectedDocuments.some(requiresReviewExportConfirmation) && !window.confirm("검토 필요 문서를 내보냅니다. ERP 입력 전 review_required와 경고 정보를 확인해야 합니다. 계속할까요?")) return;
     const params = new URLSearchParams({ sheet_mode: "combined" });
     selectedIds.forEach((id) => params.append("document_ids", id));
     window.location.href = api.exportExcelUrl(params);
@@ -95,7 +97,10 @@ export default function ReviewPage() {
           </div>
           <ReviewTable rows={rows} selected={selected} onToggle={toggle} />
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white p-4">
-            <p className="text-sm text-muted-foreground">{selected.size}개 문서 선택됨</p>
+            <div className="text-sm text-muted-foreground">
+              <p>{selected.size}개 문서 선택됨</p>
+              <p className="mt-1">검토 필요 문서를 내보내면 ERP 입력 전 확인해야 할 review_required와 경고 정보가 함께 포함됩니다.</p>
+            </div>
             <div className="flex gap-2">
               <Button type="button" variant="outline" disabled={!selected.size} onClick={exportSelected}>선택 문서 Excel</Button>
               <Button asChild type="button"><Link href="/documents">문서 목록에서 더 보기</Link></Button>

@@ -8,7 +8,19 @@ import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { documentDisplayTitle, documentSummaryShort, formatDate, formatMoney, primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
 
-export function DocumentCard({ document, selected = false, onSelect, returnTo }: { document: DocumentRecord; selected?: boolean; onSelect?: (checked: boolean) => void; returnTo?: string }) {
+export function DocumentCard({
+  document,
+  duplicateHint,
+  selected = false,
+  onSelect,
+  returnTo
+}: {
+  document: DocumentRecord;
+  duplicateHint?: { count: number; isLatest: boolean };
+  selected?: boolean;
+  onSelect?: (checked: boolean) => void;
+  returnTo?: string;
+}) {
   const href = returnTo ? `/documents/${document.id}?from=${encodeURIComponent(returnTo)}` : `/documents/${document.id}`;
   const displayTitle = documentDisplayTitle(document);
   return (
@@ -40,6 +52,7 @@ export function DocumentCard({ document, selected = false, onSelect, returnTo }:
           <div className="flex flex-wrap gap-2">
             <Badge className="bg-accent text-accent-foreground">{primaryCategoryLabel(document)}</Badge>
             <TaxonomyBadges document={document} maxProfiles={1} />
+            {duplicateHint ? <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{duplicateHint.isLatest ? `같은 파일 후보 ${duplicateHint.count}건` : "이전 업로드 후보"}</Badge> : null}
             {document.source_file_type ? <Badge variant="outline">{document.source_file_type.toUpperCase()}</Badge> : null}
           </div>
           <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">

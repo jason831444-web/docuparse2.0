@@ -30,6 +30,9 @@ const LABEL_ALIASES: Record<string, string> = {
   invoice: "인보이스/세금계산서",
   packing_list: "포장명세서",
   inspection_report: "검사성적서",
+  return_note: "반품 문서",
+  credit_note: "차감/크레딧 문서",
+  internal_transfer: "내부 이동서",
   contract: "계약서",
   general_document: "일반 문서",
   receipt: "영수증",
@@ -453,6 +456,18 @@ export function documentReviewMetadata(document: { workflow_metadata?: Record<st
   };
 }
 
+export function reviewIssueProgressCounts(
+  reviewMetadata: Pick<DocumentReviewMetadata, "issues">,
+  fallbackOpenCount = 0
+) {
+  const trackedIssues = reviewMetadata.issues || [];
+  const resolved = trackedIssues.filter((issue) => ["resolved", "ignored"].includes(String(issue.status || ""))).length;
+  const open = trackedIssues.length
+    ? trackedIssues.filter((issue) => !["resolved", "ignored"].includes(String(issue.status || "open"))).length
+    : fallbackOpenCount;
+  return { open, resolved };
+}
+
 export function reviewIssueAmountLines(issue: NormalizedReviewIssue) {
   if (issue.code !== "amount_mismatch") return [];
   const currency = issue.currency || "KRW";
@@ -475,6 +490,9 @@ export function reviewIssueSummary(issue: NormalizedReviewIssue) {
     untrusted_ocr_amount: "금액 OCR 신뢰도 낮음",
     amount_mismatch: "문서 총액과 품목 합계 불일치",
     line_items_total_mismatch: "문서 총액과 품목 합계 불일치",
+    amount_direction_requires_review: "반품/차감 금액 방향 확인",
+    statement_balance_summary_requires_review: "정산 요약 확인",
+    related_document_missing: "관련 원문서 번호 확인",
     ambiguous_item_match: "품목 매칭 모호",
     internal_item_ambiguous: "품목 매칭 모호",
     internal_item_unmatched: "내부 품목 미매칭",
@@ -485,12 +503,56 @@ export function reviewIssueSummary(issue: NormalizedReviewIssue) {
   return labels[issue.code] || issue.message_ko;
 }
 
+export interface ReviewIssueDisplayGroup {
+  summary: string;
+  description: string;
+  count: number;
+  issues: NormalizedReviewIssue[];
+}
+
+export function groupedReviewIssues(issues: NormalizedReviewIssue[]): ReviewIssueDisplayGroup[] {
+  const groups: ReviewIssueDisplayGroup[] = [];
+  const indexByKey = new Map<string, number>();
+  issues.forEach((issue) => {
+    const summary = reviewIssueSummary(issue);
+    const description = reviewIssueDescription(issue);
+    const key = `${summary}:${description}`;
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex !== undefined) {
+      groups[existingIndex].count += 1;
+      groups[existingIndex].issues.push(issue);
+      return;
+    }
+    indexByKey.set(key, groups.length);
+    groups.push({ summary, description, count: 1, issues: [issue] });
+  });
+  return groups;
+}
+
+export function reviewIssueSummaryItems(issues: NormalizedReviewIssue[]) {
+  return groupedReviewIssues(issues).map((group) => group.count > 1 ? `${group.summary} ×${group.count}` : group.summary);
+}
+
+export function reviewIssuesForLineItem(issues: NormalizedReviewIssue[], itemIndex: number) {
+  return issues.filter((issue) => issue.item_index === itemIndex || (issue.item_index === undefined && itemIndex === 0));
+}
+
+export function requiresReviewExportConfirmation(document: {
+  review_required?: boolean | null;
+  processing_status?: string | null;
+}) {
+  return Boolean(document.review_required || document.processing_status === "needs_review");
+}
+
 export function reviewIssueDescription(issue: NormalizedReviewIssue) {
   const descriptions: Record<string, string> = {
     missing_price_or_total: "이 문서 유형에서는 총액 확인이 필요할 수 있습니다.",
     untrusted_ocr_amount: "OCR이 읽은 금액이 불확실하여 사람 검토가 필요합니다.",
     amount_mismatch: "품목별 금액 합계와 문서 총액이 맞지 않습니다.",
     line_items_total_mismatch: "품목별 금액 합계와 문서 총액이 맞지 않습니다.",
+    amount_direction_requires_review: "반품/차감 금액을 원문서에 더할지 차감할지 확인해야 합니다.",
+    statement_balance_summary_requires_review: "전월이월, 입금액, 미수잔액 등 정산 요약은 품목 합계와 구분해서 확인해야 합니다.",
+    related_document_missing: "반품/차감 처리에 연결할 원문서 번호를 확인해야 합니다.",
     ambiguous_item_match: "사내 품목 master와 정확히 일치하지 않습니다.",
     internal_item_ambiguous: "사내 품목 master와 정확히 일치하지 않습니다.",
     internal_item_unmatched: "사내 품목 master에서 확실한 항목을 찾지 못했습니다.",
@@ -529,6 +591,7 @@ export function isBlockingReviewIssue(issue: NormalizedReviewIssue) {
     "missing_quantity",
     "missing_price_or_total",
     "amount_mismatch",
+    "amount_direction_requires_review",
     "invalid_line_amount",
     "item_code_name_conflict",
     "internal_item_unmatched",
