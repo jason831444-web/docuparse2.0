@@ -70,6 +70,9 @@ class DocumentProcessor:
                 "document_ai_provider": None,
                 "document_ai_failed_reason": None,
                 "document_ai_fallback_provider": None,
+                "primary_provider": None,
+                "primary_provider_status": None,
+                "primary_provider_failed_reason": None,
             }
             if route.heavy_ai_required and normalized.primary_image_path:
                 try:
@@ -81,17 +84,21 @@ class DocumentProcessor:
                     )
                     ai_provider_diagnostics["document_ai_succeeded"] = True
                     ai_provider_diagnostics["document_ai_provider"] = ai_result.provider
+                    self._apply_ai_provider_chain_diagnostics(ai_provider_diagnostics, ai_result.provider_chain or [])
                 except Exception as exc:
                     ai_fallback_notes.append(f"AI extraction failed; parser result used: {exc}")
                     ai_provider_diagnostics["document_ai_failed_reason"] = str(exc)
                     ai_result = self.lightweight_ai.analyze(analysis_path, raw_text, parsed, document.original_filename)
                     ai_provider_diagnostics["document_ai_fallback_provider"] = ai_result.provider
+                    ai_provider_diagnostics["primary_provider_status"] = "failed"
+                    ai_provider_diagnostics["primary_provider_failed_reason"] = str(exc)
             else:
                 ai_result = self.lightweight_ai.analyze(analysis_path, raw_text, parsed, document.original_filename)
                 ai_result.extraction_provider = normalized.extraction_method or route.route_label
                 ai_result.provider = ai_result.extraction_provider
                 ai_result.provider_chain = [normalized.extraction_method or route.route_label, "heuristic_fallback"]
                 ai_result.merge_strategy = route.route_label
+                self._apply_ai_provider_chain_diagnostics(ai_provider_diagnostics, ai_result.provider_chain or [])
             if self._is_manufacturing_parsed_type(parsed):
                 merge = self.ai_merger.merge(parsed, ai_result)
                 ai_result = merge.result
@@ -652,6 +659,23 @@ class DocumentProcessor:
     ) -> list[str]:
         values = [normalized.extraction_method, route.route_label, *ai_chain, *(interpretation_chain or [])]
         return list(dict.fromkeys(value for value in values if value))
+
+    def _apply_ai_provider_chain_diagnostics(self, diagnostics: dict, provider_chain: list[str]) -> None:
+        if not diagnostics.get("document_ai_attempted"):
+            diagnostics["primary_provider_status"] = "not_attempted"
+            return
+        diagnostics["primary_provider"] = "paddleocr_vl"
+        unavailable = next((provider for provider in provider_chain if provider.endswith("_unavailable") or "unavailable" in provider), None)
+        if unavailable:
+            diagnostics["primary_provider_status"] = "unavailable"
+            diagnostics["primary_provider_failed_reason"] = unavailable
+            fallback = next((provider for provider in provider_chain if provider in {"heuristic_fallback", "local", "qwen2_5_vl"}), None)
+            diagnostics["document_ai_fallback_provider"] = fallback or diagnostics.get("document_ai_fallback_provider")
+            return
+        if "paddleocr_vl" in provider_chain:
+            diagnostics["primary_provider_status"] = "succeeded"
+            return
+        diagnostics["primary_provider_status"] = "not_used"
 
     def _notes(self, notes: list[str]) -> str | None:
         if not notes:

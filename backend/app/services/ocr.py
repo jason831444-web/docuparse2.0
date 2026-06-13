@@ -391,9 +391,31 @@ def provider_health() -> dict[str, Any]:
     settings = get_settings()
     paddle_importable = PaddleOCRProvider.is_available()
     paddle_usable, paddle_error = _paddleocr_usable()
-    paddle_vl_importable, paddle_vl_error = _paddleocr_vl_status()
+    paddle_vl_status = _paddleocr_vl_status()
+    paddle_vl_importable = bool(paddle_vl_status.get("importable"))
+    paddle_vl_usable = bool(paddle_vl_status.get("usable"))
+    paddle_vl_error = paddle_vl_status.get("error")
     worker_health, worker_error = _ocr_worker_health(settings.ocr_worker_url, settings.ocr_worker_timeout_seconds)
+    worker_model = (worker_health or {}).get("ocr_version") or "PP-OCRv4"
+    primary_provider_available = bool(settings.enable_paddleocr_vl and paddle_vl_usable)
+    active_ocr_engine = "PaddleOCR-VL" if primary_provider_available else str(worker_model)
+    runtime_strategy = (
+        "paddleocr_vl_primary_with_ppocrv4_fallback"
+        if primary_provider_available
+        else ((worker_health or {}).get("runtime_strategy") or "paddleocr_2x_legacy_ocr_api")
+    )
     return {
+        "ocr_engine": active_ocr_engine,
+        "ocr_model": settings.paddleocr_vl_model_name if primary_provider_available else worker_model,
+        "primary_provider": "paddleocr_vl",
+        "primary_provider_enabled": settings.enable_paddleocr_vl,
+        "primary_provider_available": primary_provider_available,
+        "primary_provider_status": "available" if primary_provider_available else "unavailable",
+        "fallback_provider": "paddleocr_ppocrv4",
+        "fallback_provider_available": worker_health is not None or paddle_usable,
+        "fallback_reason": None if primary_provider_available else (paddle_vl_error or "paddleocr_vl_unavailable"),
+        "runtime_strategy": runtime_strategy,
+        "device": settings.paddleocr_vl_device or (worker_health or {}).get("device") or "cpu",
         "tesseract_available": _module_available("pytesseract"),
         "ocr_worker_configured": bool(settings.ocr_worker_url),
         "ocr_worker_url": settings.ocr_worker_url,
@@ -409,15 +431,22 @@ def provider_health() -> dict[str, Any]:
         "paddleocr_runtime_note": "Actual inference is isolated per document and falls back to Tesseract on timeout or worker failure.",
         "paddleocr_runtime_disabled_reason": _paddleocr_runtime_disabled_reason,
         "paddleocr_vl_importable": paddle_vl_importable,
-        "paddleocr_vl_usable": paddle_vl_importable,
+        "paddleocr_vl_usable": paddle_vl_usable,
         "paddleocr_vl_init_error": paddle_vl_error,
-        "paddleocr_vl_runtime_mode": "heavy_fallback_configured" if paddle_vl_importable else "unavailable",
+        "paddleocr_vl_runtime_mode": "primary_provider" if primary_provider_available else "unavailable",
+        "paddleocr_vl_model": settings.paddleocr_vl_model_name,
+        "paddleocr_vl_model_dir": str(settings.paddleocr_vl_model_dir) if settings.paddleocr_vl_model_dir else None,
+        "paddleocr_vl_hf_repo": settings.paddleocr_vl_hf_repo,
+        "paddleocr_vl_probe": paddle_vl_status,
         "qwen_vl_available": _module_available("qwen_vl_utils") and _module_available("transformers"),
     }
 
 
 def _module_available(name: str) -> bool:
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def _ocr_worker_health(url: str | None, timeout_seconds: float) -> tuple[dict[str, Any] | None, str | None]:
@@ -442,14 +471,43 @@ def _paddleocr_usable() -> tuple[bool, str | None]:
         return False, str(exc)
 
 
-def _paddleocr_vl_status() -> tuple[bool, str | None]:
-    if not PaddleOCRProvider.is_available():
-        return False, "paddleocr package is not installed"
+def _paddleocr_vl_status() -> dict[str, Any]:
+    settings = get_settings()
+    if not settings.enable_paddleocr_vl:
+        return {"importable": False, "usable": False, "error": "paddleocr_vl_disabled"}
+    probe = (
+        "import importlib.util, json\n"
+        "mods = {name: importlib.util.find_spec(name) is not None for name in ['paddleocr', 'paddlex', 'torch', 'transformers']}\n"
+        "payload = {'modules': mods, 'importable': False, 'usable': False, 'error': None}\n"
+        "try:\n"
+        "    from paddleocr import PaddleOCRVL\n"
+        "    payload['importable'] = True\n"
+        "    payload['usable'] = all(mods.get(name) for name in ['paddleocr', 'paddlex'])\n"
+        "except Exception as exc:\n"
+        "    payload['error'] = str(exc)\n"
+        "print(json.dumps(payload))\n"
+    )
     try:
-        from paddleocr import PaddleOCRVL  # noqa: F401
-        return True, None
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
     except Exception as exc:
-        return False, str(exc)
+        return {"importable": False, "usable": False, "error": f"paddleocr_vl_probe_failed: {exc}"}
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip()
+        return {"importable": False, "usable": False, "error": message[-800:] or f"probe_exit_{completed.returncode}"}
+    try:
+        payload = json.loads((completed.stdout or "{}").strip().splitlines()[-1])
+    except Exception as exc:
+        return {"importable": False, "usable": False, "error": f"paddleocr_vl_probe_malformed: {exc}"}
+    payload.setdefault("importable", False)
+    payload.setdefault("usable", bool(payload.get("importable")))
+    payload.setdefault("error", None)
+    return payload
 
 
 def _ocr_line_candidate_from_mapping(item: dict[str, Any], text: str, score: object) -> dict[str, Any] | None:

@@ -13,6 +13,7 @@ sys.modules.setdefault(
 
 from app.services.file_ingestion import FileIngestionService
 from app.services.file_type_detection import DetectedFileType
+import app.services.ocr as ocr_module
 from app.services.ocr import OCRResult, OCRService, PaddleOCRProvider
 from fastapi.testclient import TestClient
 import app.services.ocr_worker_server as ocr_worker_server
@@ -264,6 +265,66 @@ def test_paddleocr_output_normalization_preserves_bbox_candidates():
     assert line_candidates[1]["confidence"] == 0.86
 
 
+def test_provider_health_reports_paddleocr_vl_degraded_with_ppocr_fallback(monkeypatch):
+    monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
+    monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(
+        ocr_module,
+        "_paddleocr_vl_status",
+        lambda: {
+            "importable": False,
+            "usable": False,
+            "error": "cannot import name 'PaddleOCRVL'",
+            "modules": {"paddleocr": True, "paddlex": False},
+        },
+    )
+    monkeypatch.setattr(
+        ocr_module,
+        "_ocr_worker_health",
+        lambda url, timeout: (
+            {
+                "status": "ok",
+                "ocr_engine": "PP-OCRv4",
+                "model": "PP-OCRv4",
+                "ocr_version": "PP-OCRv4",
+                "device": "cpu",
+                "runtime_strategy": "paddleocr_2x_legacy_ocr_api",
+            },
+            None,
+        ),
+    )
+
+    payload = ocr_module.provider_health()
+
+    assert payload["primary_provider"] == "paddleocr_vl"
+    assert payload["primary_provider_available"] is False
+    assert payload["fallback_provider"] == "paddleocr_ppocrv4"
+    assert payload["ocr_engine"] == "PP-OCRv4"
+    assert payload["ocr_model"] == "PP-OCRv4"
+    assert payload["fallback_reason"] == "cannot import name 'PaddleOCRVL'"
+
+
+def test_provider_health_reports_paddleocr_vl_primary_when_available(monkeypatch):
+    monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
+    monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(ocr_module, "_paddleocr_vl_status", lambda: {"importable": True, "usable": True, "error": None})
+    monkeypatch.setattr(
+        ocr_module,
+        "_ocr_worker_health",
+        lambda url, timeout: (
+            {"status": "ok", "ocr_engine": "PP-OCRv4", "model": "PP-OCRv4", "ocr_version": "PP-OCRv4"},
+            None,
+        ),
+    )
+
+    payload = ocr_module.provider_health()
+
+    assert payload["ocr_engine"] == "PaddleOCR-VL"
+    assert payload["ocr_model"] == "PaddleOCR-VL-1.6"
+    assert payload["primary_provider_available"] is True
+    assert payload["runtime_strategy"] == "paddleocr_vl_primary_with_ppocrv4_fallback"
+
+
 def test_ocr_worker_resets_provider_and_retries_paddle_runtime_error(monkeypatch, tmp_path):
     image_path = tmp_path / "scan.png"
     image_path.write_bytes(b"fake")
@@ -375,3 +436,19 @@ def test_ocr_worker_proactively_resets_provider_after_request_limit(monkeypatch,
     assert payload["provider_reset_reason"] == "request_limit"
     assert payload["requests_since_provider_reset"] == 1
     assert calls["reset"] == 1
+
+
+def test_ocr_worker_health_identifies_ppocrv4_fallback_worker(monkeypatch):
+    monkeypatch.setenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4")
+    monkeypatch.setattr(ocr_worker_server.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
+
+    client = TestClient(ocr_worker_server.app)
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ocr_engine"] == "PP-OCRv4"
+    assert payload["model"] == "PP-OCRv4"
+    assert payload["primary_provider"] == "paddleocr_ppocrv4"
+    assert payload["fallback_provider"] == "tesseract"
+    assert payload["runtime_strategy"] == "paddleocr_2x_legacy_ocr_api"

@@ -44,11 +44,14 @@ class Settings(BaseSettings):
     ai_enable_second_pass: bool = True
     ai_second_pass_confidence_threshold: float = 0.80
     ai_model_dir: Path = Path("models")
+    enable_paddleocr_vl: bool = True
     paddleocr_vl_model_dir: Path | None = None
     paddleocr_vl_layout_model_dir: Path | None = None
-    paddleocr_vl_hf_repo: str = "PaddlePaddle/PaddleOCR-VL-1.5"
+    paddleocr_vl_hf_repo: str = "PaddlePaddle/PaddleOCR-VL-1.6"
+    paddleocr_vl_model_name: str = "PaddleOCR-VL-1.6"
     paddleocr_vl_device: str | None = "cpu"
     paddleocr_vl_engine: str | None = None
+    paddleocr_vl_timeout_seconds: float = 180.0
     qwen2_5_vl_model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
     qwen2_5_vl_model_dir: Path | None = None
     qwen2_5_vl_device: str = "auto"

@@ -20,8 +20,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { providerHealthLabel } from "@/lib/provider-health";
 import { cn } from "@/lib/utils";
-import type { DocumentStats } from "@/types/document";
+import type { DocumentStats, ProviderHealth } from "@/types/document";
 
 const navGroups = [
   {
@@ -57,6 +58,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/signup");
   const [notificationCount, setNotificationCount] = useState(0);
   const [stats, setStats] = useState<DocumentStats | null>(null);
+  const [providerHealth, setProviderHealth] = useState<ProviderHealth | null>(null);
 
   useEffect(() => {
     if (isAuthPage) return;
@@ -65,6 +67,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .then((items) => setNotificationCount(items.filter((item) => item.action_required).length || items.length))
       .catch(() => setNotificationCount(0));
     api.stats().then(setStats).catch(() => setStats(null));
+    api.health().then(setProviderHealth).catch(() => setProviderHealth(null));
   }, [isAuthPage, pathname]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
@@ -72,6 +75,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const trimmed = query.trim();
     router.push(trimmed ? `/documents?search=${encodeURIComponent(trimmed)}` : "/documents");
   }
+
+  const providerStatus = providerHealthLabel(providerHealth);
 
   if (isAuthPage) {
     return (
@@ -150,33 +155,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="min-w-0">
           <header className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
             <div className="shell flex h-14 items-center gap-4">
-              <form onSubmit={submitSearch} className="relative max-w-xl flex-1">
-                <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-                <Input className="h-9 border-slate-200 bg-slate-50 pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={query} onChange={(event) => setQuery(event.target.value)} />
-              </form>
-              <Badge className="hidden border-emerald-200 bg-emerald-50 text-emerald-700 shadow-none md:inline-flex">OCR/Provider 정상</Badge>
-              <div className="hidden items-center gap-2 md:flex">
-                <span className="grid size-9 place-items-center rounded-full bg-blue-100 text-sm font-semibold text-primary">대성</span>
-                <div className="text-right text-xs">
-                  <p className="font-semibold text-slate-900">(주)대성정공</p>
-                  <p className="text-muted-foreground">회계팀 · 김선영</p>
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <form onSubmit={submitSearch} className="relative w-full max-w-xl">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                  <Input className="h-9 border-slate-200 bg-slate-50 pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={query} onChange={(event) => setQuery(event.target.value)} />
+                </form>
+                <Link
+                  href="/notifications"
+                  aria-label="알림"
+                  className={cn(
+                    "relative grid size-9 shrink-0 place-items-center rounded-lg border bg-white text-muted-foreground transition hover:border-primary/40 hover:text-foreground",
+                    pathname.startsWith("/notifications") && "border-primary/50 text-primary"
+                  )}
+                >
+                  <BellRing className="size-4" />
+                  {notificationCount ? (
+                    <span className="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-primary px-1 text-[11px] font-semibold leading-5 text-primary-foreground">
+                      {notificationCount > 9 ? "9+" : notificationCount}
+                    </span>
+                  ) : null}
+                </Link>
+              </div>
+              <div className="ml-auto flex shrink-0 items-center gap-4">
+                <Badge
+                  title={providerStatus.detail}
+                  className={cn(
+                    "hidden shadow-none md:inline-flex",
+                    providerStatus.tone === "primary"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                  )}
+                >
+                  {providerStatus.label}
+                </Badge>
+                <div className="hidden items-center gap-2 md:flex">
+                  <span className="grid size-9 place-items-center rounded-full bg-blue-100 text-sm font-semibold text-primary">대성</span>
+                  <div className="text-right text-xs">
+                    <p className="font-semibold text-slate-900">(주)대성정공</p>
+                    <p className="text-muted-foreground">회계팀 · 김선영</p>
+                  </div>
                 </div>
               </div>
-              <Link
-                href="/notifications"
-                aria-label="알림"
-                className={cn(
-                  "relative grid size-9 place-items-center rounded-lg border bg-white text-muted-foreground transition hover:border-primary/40 hover:text-foreground",
-                  pathname.startsWith("/notifications") && "border-primary/50 text-primary"
-                )}
-              >
-                <BellRing className="size-4" />
-                {notificationCount ? (
-                  <span className="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-primary px-1 text-[11px] font-semibold leading-5 text-primary-foreground">
-                    {notificationCount > 9 ? "9+" : notificationCount}
-                  </span>
-                ) : null}
-              </Link>
             </div>
           </header>
           {children}

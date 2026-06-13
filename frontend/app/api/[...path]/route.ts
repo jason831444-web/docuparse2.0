@@ -4,7 +4,9 @@ const backendInternalUrl = process.env.DOCUPARSE_BACKEND_INTERNAL_URL ?? "http:/
 
 async function proxy(request: NextRequest, context: { params: Promise<{ path?: string[] }> }) {
   const { path = [] } = await context.params;
-  const target = new URL(`/api/${path.join("/")}`, backendInternalUrl);
+  const requestPath = path.join("/");
+  const targetPath = requestPath === "health" ? "/health" : `/api/${requestPath}`;
+  const target = new URL(targetPath, backendInternalUrl);
   request.nextUrl.searchParams.forEach((value, key) => target.searchParams.append(key, value));
 
   const headers = new Headers(request.headers);

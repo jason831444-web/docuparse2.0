@@ -602,6 +602,8 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
     def __init__(self) -> None:
         self.settings = get_settings()
         self.local_normalizer = LocalDocumentAIService()
+        if not self.settings.enable_paddleocr_vl:
+            raise RuntimeError("PaddleOCR-VL provider is disabled by ENABLE_PADDLEOCR_VL=false.")
 
         logger.warning("PaddleOCR-VL provider initialization started")
         start_time = time.perf_counter()
@@ -620,8 +622,9 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         model_dir = self._clean_path(self.settings.paddleocr_vl_model_dir)
         layout_model_dir = self._clean_path(self.settings.paddleocr_vl_layout_model_dir)
 
+        pipeline_version = "v1.6" if "1.6" in self.settings.paddleocr_vl_model_name else "v1.5"
         kwargs: dict[str, Any] = {
-            "pipeline_version": "v1.5",
+            "pipeline_version": pipeline_version,
             "device": self.settings.paddleocr_vl_device,
         }
 
@@ -688,7 +691,7 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         result.provider_chain = [self.provider_name]
         result.merge_strategy = "paddleocr_vl_structured_output_normalized"
         result.field_sources.update({key: self.provider_name for key in result.field_sources})
-        result.extraction_notes.append("PaddleOCR-VL primary extraction completed.")
+        result.extraction_notes.append(f"{self.settings.paddleocr_vl_model_name} primary extraction completed.")
         if provider_text:
             result.cleaned_raw_text = provider_text
         postprocess_elapsed = time.perf_counter() - postprocess_start

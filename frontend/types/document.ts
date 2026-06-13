@@ -125,6 +125,36 @@ export interface AppNotification {
   action_required: boolean;
 }
 
+export interface ProviderHealth {
+  status?: string;
+  providers?: {
+    ocr_engine?: string | null;
+    ocr_model?: string | null;
+    primary_provider?: string | null;
+    primary_provider_enabled?: boolean | null;
+    primary_provider_available?: boolean | null;
+    primary_provider_status?: string | null;
+    fallback_provider?: string | null;
+    fallback_provider_available?: boolean | null;
+    fallback_reason?: string | null;
+    runtime_strategy?: string | null;
+    device?: string | null;
+    ocr_worker_health?: {
+      status?: string | null;
+      ocr_engine?: string | null;
+      model?: string | null;
+      ocr_version?: string | null;
+      device?: string | null;
+      runtime_strategy?: string | null;
+    } | null;
+    paddleocr_vl_importable?: boolean | null;
+    paddleocr_vl_usable?: boolean | null;
+    paddleocr_vl_init_error?: string | null;
+    paddleocr_vl_runtime_mode?: string | null;
+    paddleocr_vl_model?: string | null;
+  };
+}
+
 export interface DocumentRecord {
   id: string;
   original_filename: string;

@@ -14,12 +14,18 @@ import type {
   ItemMasterRecord,
   ItemMasterStats,
   ItemMasterUploadResult,
+  ProviderHealth,
   UpdateItemAliasPayload,
   UpdateItemMasterPayload,
 } from "@/types/document";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001/api";
 const BULK_DOCUMENT_CHUNK_SIZE = 100;
+const HEALTH_URL = API_BASE.startsWith("/")
+  ? `${API_BASE}/health`
+  : API_BASE.endsWith("/api")
+    ? `${API_BASE.slice(0, -4)}/health`
+    : `${API_BASE}/health`;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -34,6 +40,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  health: async () => {
+    const response = await fetch(HEALTH_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error("OCR 상태를 불러오지 못했습니다");
+    return response.json() as Promise<ProviderHealth>;
+  },
   stats: () => request<DocumentStats>("/documents/stats", { cache: "no-store" }),
   activity: () => request<ActivitySummary>("/documents/activity", { cache: "no-store" }),
   list: (params: URLSearchParams) => request<DocumentListResponse>(`/documents?${params.toString()}`, { cache: "no-store" }),

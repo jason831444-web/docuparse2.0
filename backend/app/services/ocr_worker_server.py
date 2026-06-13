@@ -92,15 +92,21 @@ def _run_provider_ocr(provider: PaddleOCRProvider, image_path: Path) -> tuple[st
 @app.get("/health")
 def health() -> dict[str, Any]:
     importable = PaddleOCRProvider.is_available()
+    model = os.getenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4")
     return {
         "status": "ok" if importable else "unavailable",
+        "ocr_engine": model,
+        "model": model,
+        "primary_provider": "paddleocr_ppocrv4",
+        "primary_provider_available": importable,
+        "fallback_provider": "tesseract",
         "paddleocr_importable": importable,
         "paddleocr_initialized": _provider is not None,
         "lazy_initialization": _provider is None,
         "model_cache_path": os.getenv("PADDLEOCR_CACHE_DIR") or str(Path.home() / ".paddlex"),
         "device": os.getenv("PADDLEOCR_DEVICE", "cpu"),
         "lang": os.getenv("PADDLEOCR_LANG", "korean"),
-        "ocr_version": os.getenv("PADDLEOCR_OCR_VERSION", "PP-OCRv4"),
+        "ocr_version": model,
         "runtime_strategy": "paddleocr_2x_legacy_ocr_api",
         "runtime_flags": {
             "FLAGS_use_onednn": os.getenv("FLAGS_use_onednn"),
