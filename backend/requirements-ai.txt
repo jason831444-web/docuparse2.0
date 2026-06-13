@@ -1,9 +1,14 @@
 # Optional heavy local model runtime dependencies.
 # Install only on machines intended to run PaddleOCR-VL / Qwen2.5-VL locally.
 
-# PaddleOCR-VL provider.
+# PaddleOCR-VL ONNX quantized provider.
 # Keep this stack optional. The PP-OCRv4 OCR worker remains the production
-# fallback because PaddleOCR-VL pulls in the newer PaddleOCR/PaddleX runtime.
+# fallback and must not install this file by default.
+onnxruntime>=1.20.0
+
+# PaddleOCR-VL 3.x/PaddleX provider experiments.
+# These are not installed in the ocr-worker because they can conflict with
+# the legacy PaddleOCR 2.x PP-OCRv4 runtime.
 paddleocr==3.6.0
 paddlex[ocr]==3.6.0
 

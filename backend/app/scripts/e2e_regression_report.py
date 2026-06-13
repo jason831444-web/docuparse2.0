@@ -134,6 +134,15 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         "review_required": result.get("review_required"),
         "review_reasons": result.get("review_reasons") or [],
         "review_reason_summary": review_reasons,
+        "provider_used": result.get("provider_used") or result.get("ocr_provider_succeeded"),
+        "primary_provider": result.get("primary_provider"),
+        "fallback_provider": result.get("fallback_provider"),
+        "fallback_used": result.get("ocr_fallback_used"),
+        "fallback_reason": _compact_json(result.get("fallback_reason")),
+        "api_provider_chain": result.get("api_provider_chain"),
+        "line_candidates_count": result.get("line_candidates_count"),
+        "review_candidates_count": result.get("review_candidates_count"),
+        "processing_time_ms": result.get("processing_time_ms"),
         "status": status,
         "reasons": reasons,
         "source": source,
@@ -217,15 +226,15 @@ def _markdown_report(rows: list[dict[str, Any]]) -> str:
         "",
         "## Document Results",
         "",
-        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Review Reasons | Report Reasons |",
-        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|",
+        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Provider | Fallback | Candidates | Review Reasons | Report Reasons |",
+        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---:|---|---|",
     ]
     for row in rows:
         reasons = "<br>".join(row.get("reasons") or [])
         values = {key: row.get(key) if row.get(key) is not None else "" for key in row}
         values["reasons"] = reasons
         lines.append(
-            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {review_reason_summary} | {reasons} |".format(
+            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {provider_used} | {fallback_reason} | {review_candidates_count} | {review_reason_summary} | {reasons} |".format(
                 **values,
             )
         )
@@ -265,6 +274,14 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "processing_statuses": processing_summary,
         "top_review_signals": top_reasons,
     }
+
+
+def _compact_json(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 if __name__ == "__main__":

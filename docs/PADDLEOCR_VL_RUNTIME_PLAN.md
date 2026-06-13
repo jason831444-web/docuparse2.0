@@ -12,16 +12,17 @@ the default provider in production.
 - Language: `korean`
 - Device: CPU
 - Runtime strategy: `paddleocr_2x_legacy_ocr_api`
-- Backend heavy provider setting: `AI_PRIMARY_PROVIDER=paddleocr_vl`
-- Actual PaddleOCR-VL status today: degraded unless AI dependencies are
-  installed and `PaddleOCRVL` can be imported.
+- Backend heavy provider setting: `AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized`
+- Actual PaddleOCR-VL ONNX status today: disabled/degraded unless
+  `ENABLE_PADDLEOCR_VL_ONNX=true`, `onnxruntime` is installed, and an ONNX
+  quantized model bundle is mounted.
 
 The PP-OCRv4 worker must remain available even when PaddleOCR-VL is enabled.
 
 ## Target Provider Chain
 
-1. `paddleocr_vl`
-   - Model: `PaddleOCR-VL-1.6`
+1. `paddleocr_vl_onnx_quantized`
+   - Model: `PaddleOCR-VL-1.5-ONNX-quantized`
    - Use for image/scanned/photographed documents that route to heavy document
      understanding.
    - Normalize output into text/table candidates before existing parser,
@@ -34,22 +35,19 @@ The PP-OCRv4 worker must remain available even when PaddleOCR-VL is enabled.
 
 ## Required Dependencies
 
-The PaddleOCR-VL stack is intentionally optional because it upgrades the OCR
-runtime family:
+The PaddleOCR-VL ONNX stack is intentionally optional. The minimal runtime
+should stay separate from the PP-OCRv4 worker:
 
 ```text
-paddleocr==3.6.0
-paddlex[ocr]==3.6.0
-torch>=2.5.0
-transformers>=4.58.0
-accelerate>=1.2.0
-sentencepiece>=0.2.0
-protobuf>=5.29.0
-huggingface_hub>=0.27.0
-hf_xet>=1.1.0
+onnxruntime>=1.20.0
+numpy>=1.26.0
+pillow>=10.0.0
+opencv-python-headless>=4.9.0
 ```
 
-`qwen-vl-utils` is only needed for the Qwen fallback provider.
+If the ONNX bundle still requires a tokenizer/processor from the original
+PaddleOCR-VL repository, add those dependencies in a dedicated VL container.
+Do not install PaddleOCR 3.x into the legacy `ocr-worker`.
 
 ## PaddleOCR 2.x / 3.x Collision Risk
 
@@ -61,24 +59,25 @@ paddlepaddle==2.6.2
 numpy==1.26.4
 ```
 
-PaddleOCR-VL needs the newer PaddleOCR/PaddleX runtime. Installing it in the
-same process as the legacy worker can change import behavior and route legacy
-OCR through PaddleX/PIR paths. That is why the PP-OCRv4 worker must stay
-isolated and why PaddleOCR-VL should run in the backend heavy provider or in a
-separate future `vl-worker` container.
+The ONNX quantized path should avoid installing PaddleOCR 3.x into the same
+process as the legacy worker. Mixing both stacks can change import behavior and
+route legacy OCR through PaddleX/PIR paths. The PP-OCRv4 worker must stay
+isolated. A future `vl-worker` container is the safest home for the ONNX
+document parser once the model bundle and processor contract are finalized.
 
 ## Recommended Container Shape
 
 Short term:
 
-- Backend may install AI dependencies with `INSTALL_AI_DEPS=true`.
+- Backend may install ONNX dependencies with `INSTALL_AI_DEPS=true`.
 - OCR worker keeps `INSTALL_AI_DEPS=false`.
-- Backend tries PaddleOCR-VL for heavy image documents.
+- Backend tries `paddleocr_vl_onnx_quantized` for heavy image documents only
+  when `ENABLE_PADDLEOCR_VL_ONNX=true`.
 - OCR worker remains PP-OCRv4 fallback.
 
 Long term:
 
-- Add a separate `vl-worker` service for PaddleOCR-VL.
+- Add a separate `vl-worker` service for PaddleOCR-VL ONNX.
 - Keep `ocr-worker` small and stable for PP-OCRv4.
 - Route through backend provider chain:
   `vl-worker -> ocr-worker -> tesseract`.
@@ -86,13 +85,13 @@ Long term:
 ## Environment
 
 ```bash
-ENABLE_PADDLEOCR_VL=true
-AI_PRIMARY_PROVIDER=paddleocr_vl
-PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6
-PADDLEOCR_VL_HF_REPO=PaddlePaddle/PaddleOCR-VL-1.6
-PADDLEOCR_VL_MODEL_DIR=/app/models/paddleocr_vl
-PADDLEOCR_VL_DEVICE=cpu
-PADDLEOCR_VL_TIMEOUT_SECONDS=180
+ENABLE_PADDLEOCR_VL_ONNX=true
+AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized
+PADDLEOCR_VL_ONNX_MODEL_NAME=PaddleOCR-VL-1.5-ONNX-quantized
+PADDLEOCR_VL_ONNX_MODEL_PATH=/app/models/paddleocr_vl_onnx_quantized
+PADDLEOCR_VL_ONNX_DEVICE=cpu
+PADDLEOCR_VL_ONNX_TIMEOUT_SECONDS=60
+PADDLEOCR_VL_ONNX_RUNNER_MODULE=docuparse_vl_onnx_runner
 OCR_WORKER_URL=http://ocr-worker:8010
 PREFER_OCR_WORKER=true
 ```
@@ -100,12 +99,26 @@ PREFER_OCR_WORKER=true
 ## Model Cache
 
 - Docker model volume: `/app/models`
-- PaddleOCR/PaddleX cache: `/root/.paddlex`
-- Existing local model path: `/app/models/paddleocr_vl`
+- ONNX model bundle path: `/app/models/paddleocr_vl_onnx_quantized`
+- Legacy PaddleOCR/PaddleX cache: `/root/.paddlex`
 
-When using Docker named volumes, verify that `/app/models/paddleocr_vl` contains
-the intended PaddleOCR-VL-1.6 files. A named volume can shadow files copied into
+When using Docker named volumes, verify that
+`/app/models/paddleocr_vl_onnx_quantized` contains `.onnx` files plus the
+required tokenizer/processor files. A named volume can shadow files copied into
 the image.
+
+DocuParse also requires an executable runner module named by
+`PADDLEOCR_VL_ONNX_RUNNER_MODULE`. The module must expose:
+
+```python
+def predict(*, image_path: str, model_path: str, model_files: list[str], device: str, timeout_seconds: float, max_pages: int) -> dict:
+    ...
+```
+
+The returned dict should contain optional `text`, `line_candidates`,
+`table_candidates`, `layout_elements`, and `raw_blocks` fields. Without this
+runner module, health intentionally reports
+`paddleocr_vl_onnx_runner_missing` and continues with PP-OCRv4 fallback.
 
 ## CPU Cost Expectations
 
@@ -120,13 +133,15 @@ Expected CPU behavior:
 
 ## Activation Criteria
 
-Do not treat `AI_PRIMARY_PROVIDER=paddleocr_vl` as proof that PaddleOCR-VL is
+Do not treat `AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized` as proof that PaddleOCR-VL is
 active. Activation requires:
 
 - `/health.providers.primary_provider_available=true`
-- `/health.providers.ocr_engine=PaddleOCR-VL`
+- `/health.providers.ocr_engine=PaddleOCR-VL ONNX`
+- `/health.providers.paddleocr_vl_onnx_probe.runner_module` is configured and importable
 - provider metadata contains `document_ai_succeeded=true`
-- provider chain contains `paddleocr_vl` without `paddleocr_vl_unavailable`
+- provider chain contains `paddleocr_vl_onnx_quantized` without
+  `paddleocr_vl_onnx_quantized_unavailable`
 - row-level E2E shows no fake quantity/amount/currency regressions
 
 If any of these fail, DocuParse must report degraded mode and continue through

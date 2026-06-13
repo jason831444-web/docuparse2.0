@@ -152,6 +152,13 @@ export interface ProviderHealth {
     paddleocr_vl_init_error?: string | null;
     paddleocr_vl_runtime_mode?: string | null;
     paddleocr_vl_model?: string | null;
+    paddleocr_vl_onnx_enabled?: boolean | null;
+    paddleocr_vl_onnx_usable?: boolean | null;
+    paddleocr_vl_onnx_init_error?: string | null;
+    paddleocr_vl_onnx_runtime_mode?: string | null;
+    paddleocr_vl_onnx_model?: string | null;
+    paddleocr_vl_onnx_model_path?: string | null;
+    paddleocr_vl_onnx_runner_module?: string | null;
   };
 }
 

@@ -19,6 +19,24 @@ from fastapi.testclient import TestClient
 import app.services.ocr_worker_server as ocr_worker_server
 
 
+def _ocr_settings(**overrides):
+    values = {
+        "enable_paddleocr_vl_onnx": False,
+        "paddleocr_vl_onnx_model_name": "PaddleOCR-VL-1.5-ONNX-quantized",
+        "paddleocr_vl_onnx_device": "cpu",
+        "paddleocr_vl_onnx_runner_module": None,
+        "ocr_fallback_provider": "paddleocr_ppocrv4",
+        "ocr_worker_url": "http://ocr-worker:8010",
+        "ocr_worker_timeout_seconds": 120.0,
+        "enable_paddleocr_vl": False,
+        "paddleocr_vl_model_name": "PaddleOCR-VL-1.6",
+        "paddleocr_vl_model_dir": None,
+        "paddleocr_vl_hf_repo": "PaddlePaddle/PaddleOCR-VL-1.6",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 class FakePaddleProvider:
     engine_name = "paddleocr"
 
@@ -265,9 +283,20 @@ def test_paddleocr_output_normalization_preserves_bbox_candidates():
     assert line_candidates[1]["confidence"] == 0.86
 
 
-def test_provider_health_reports_paddleocr_vl_degraded_with_ppocr_fallback(monkeypatch):
+def test_provider_health_reports_paddleocr_vl_onnx_disabled_with_ppocr_fallback(monkeypatch):
+    monkeypatch.setattr(ocr_module, "get_settings", lambda: _ocr_settings())
     monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
     monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(
+        ocr_module,
+        "_paddleocr_vl_onnx_status",
+        lambda: {
+            "provider": "paddleocr_vl_onnx_quantized",
+            "enabled": False,
+            "usable": False,
+            "error": "paddleocr_vl_onnx_disabled",
+        },
+    )
     monkeypatch.setattr(
         ocr_module,
         "_paddleocr_vl_status",
@@ -296,17 +325,29 @@ def test_provider_health_reports_paddleocr_vl_degraded_with_ppocr_fallback(monke
 
     payload = ocr_module.provider_health()
 
-    assert payload["primary_provider"] == "paddleocr_vl"
+    assert payload["primary_provider"] == "paddleocr_vl_onnx_quantized"
     assert payload["primary_provider_available"] is False
     assert payload["fallback_provider"] == "paddleocr_ppocrv4"
     assert payload["ocr_engine"] == "PP-OCRv4"
     assert payload["ocr_model"] == "PP-OCRv4"
-    assert payload["fallback_reason"] == "cannot import name 'PaddleOCRVL'"
+    assert payload["fallback_reason"] == "paddleocr_vl_onnx_disabled"
 
 
-def test_provider_health_reports_paddleocr_vl_primary_when_available(monkeypatch):
+def test_provider_health_reports_paddleocr_vl_onnx_primary_when_available(monkeypatch):
+    monkeypatch.setattr(ocr_module, "get_settings", lambda: _ocr_settings(enable_paddleocr_vl_onnx=True))
     monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
     monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(
+        ocr_module,
+        "_paddleocr_vl_onnx_status",
+        lambda: {
+            "provider": "paddleocr_vl_onnx_quantized",
+            "enabled": True,
+            "usable": True,
+            "error": None,
+            "model_path": "/models/paddleocr-vl-onnx",
+        },
+    )
     monkeypatch.setattr(ocr_module, "_paddleocr_vl_status", lambda: {"importable": True, "usable": True, "error": None})
     monkeypatch.setattr(
         ocr_module,
@@ -319,10 +360,83 @@ def test_provider_health_reports_paddleocr_vl_primary_when_available(monkeypatch
 
     payload = ocr_module.provider_health()
 
-    assert payload["ocr_engine"] == "PaddleOCR-VL"
-    assert payload["ocr_model"] == "PaddleOCR-VL-1.6"
+    assert payload["ocr_engine"] == "PaddleOCR-VL ONNX"
+    assert payload["ocr_model"] == "PaddleOCR-VL-1.5-ONNX-quantized"
+    assert payload["primary_provider"] == "paddleocr_vl_onnx_quantized"
     assert payload["primary_provider_available"] is True
-    assert payload["runtime_strategy"] == "paddleocr_vl_primary_with_ppocrv4_fallback"
+    assert payload["runtime_strategy"] == "paddleocr_vl_onnx_primary_with_ppocrv4_fallback"
+
+
+def test_paddleocr_vl_onnx_status_reports_missing_model_path(monkeypatch, tmp_path):
+    missing_path = tmp_path / "missing-onnx-model"
+    monkeypatch.setattr(ocr_module, "_module_available", lambda name: name == "onnxruntime")
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            enable_paddleocr_vl_onnx=True,
+            paddleocr_vl_onnx_model_path=missing_path,
+            ai_model_dir=tmp_path,
+            paddleocr_vl_onnx_model_name="PaddleOCR-VL-1.5-ONNX-quantized",
+            paddleocr_vl_onnx_device="cpu",
+            paddleocr_vl_onnx_runner_module=None,
+        ),
+    )
+
+    payload = ocr_module._paddleocr_vl_onnx_status()
+
+    assert payload["provider"] == "paddleocr_vl_onnx_quantized"
+    assert payload["usable"] is False
+    assert payload["error"] == "paddleocr_vl_onnx_model_path_missing"
+
+
+def test_paddleocr_vl_onnx_status_reports_missing_onnxruntime(monkeypatch, tmp_path):
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    monkeypatch.setattr(ocr_module, "_module_available", lambda name: False)
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            enable_paddleocr_vl_onnx=True,
+            paddleocr_vl_onnx_model_path=model_path,
+            ai_model_dir=tmp_path,
+            paddleocr_vl_onnx_model_name="PaddleOCR-VL-1.5-ONNX-quantized",
+            paddleocr_vl_onnx_device="cpu",
+            paddleocr_vl_onnx_runner_module=None,
+        ),
+    )
+
+    payload = ocr_module._paddleocr_vl_onnx_status()
+
+    assert payload["usable"] is False
+    assert payload["error"] == "onnxruntime_missing"
+
+
+def test_paddleocr_vl_onnx_status_requires_runner_module(monkeypatch, tmp_path):
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    (model_path / "vision_encoder.onnx").write_text("stub", encoding="utf-8")
+    for filename in ["tokenizer.json", "tokenizer.model", "processor_config.json", "preprocessor_config.json"]:
+        (model_path / filename).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(ocr_module, "_module_available", lambda name: name == "onnxruntime")
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            enable_paddleocr_vl_onnx=True,
+            paddleocr_vl_onnx_model_path=model_path,
+            ai_model_dir=tmp_path,
+            paddleocr_vl_onnx_model_name="PaddleOCR-VL-1.5-ONNX-quantized",
+            paddleocr_vl_onnx_device="cpu",
+            paddleocr_vl_onnx_runner_module=None,
+        ),
+    )
+
+    payload = ocr_module._paddleocr_vl_onnx_status()
+
+    assert payload["usable"] is False
+    assert payload["error"] == "paddleocr_vl_onnx_runner_missing"
 
 
 def test_ocr_worker_resets_provider_and_retries_paddle_runtime_error(monkeypatch, tmp_path):

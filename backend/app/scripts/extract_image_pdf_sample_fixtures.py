@@ -394,8 +394,28 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
         "review_reasons": [issue.get("code") or issue.get("message") for issue in review_issues if isinstance(issue, dict)],
         "ocr_provider_succeeded": metadata.get("ocr_provider_succeeded"),
         "ocr_fallback_used": metadata.get("ocr_fallback_used"),
+        "provider_used": metadata.get("ocr_provider_succeeded") or metadata.get("ocr_engine"),
+        "primary_provider": metadata.get("primary_provider"),
+        "fallback_provider": metadata.get("fallback_provider"),
+        "fallback_reason": metadata.get("fallback_reason") or metadata.get("ocr_provider_failed_reason"),
+        "api_provider_chain": metadata.get("api_provider_chain"),
+        "line_candidates_count": metadata.get("ocr_line_candidate_count"),
+        "review_candidates_count": _review_candidate_count(parsed),
         "processing_time_ms": payload.get("processing_time_ms"),
     }
+
+
+def _review_candidate_count(parsed: dict[str, Any]) -> int:
+    workflow_metadata = parsed.get("workflow_metadata") or {}
+    layout_debug = workflow_metadata.get("layout_debug") or {}
+    candidates = layout_debug.get("bbox_table_candidates")
+    if isinstance(candidates, list):
+        return len(candidates)
+    export_policy = (parsed.get("canonical_export") or {}).get("review_candidates") or {}
+    candidates = export_policy.get("bbox_table_candidates")
+    if isinstance(candidates, list):
+        return len(candidates)
+    return 0
 
 
 def _line_items_total(line_items: list[dict[str, Any]]) -> float | int | None:
