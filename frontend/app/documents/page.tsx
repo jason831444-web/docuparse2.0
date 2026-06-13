@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, Grid2X2, Rows3, Search } from "lucide-react";
+import { Download, Grid2X2, Rows3, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DocumentList, duplicateUploadHints } from "@/components/document-list";
@@ -11,7 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
-import { primaryCategoryLabel, titleCaseLabel } from "@/lib/utils";
+import { primaryCategoryLabel, requiresReviewExportConfirmation, titleCaseLabel } from "@/lib/utils";
 import type { DocumentListResponse, FolderSummary, ProcessingStatus } from "@/types/document";
 
 const statuses: Array<"" | ProcessingStatus> = ["", "uploaded", "queued", "processing", "ready", "needs_review", "confirmed", "failed"];
@@ -56,6 +56,7 @@ function DocumentsContent() {
   const [selectionScopeDocuments, setSelectionScopeDocuments] = useState<DocumentListResponse["items"]>([]);
   const [selectingAllDocuments, setSelectingAllDocuments] = useState(false);
   const [allDocumentCount, setAllDocumentCount] = useState<number | null>(null);
+  const [bulkExcelMode, setBulkExcelMode] = useState<"combined" | "party_tabs">("combined");
   const [filters, setFilters] = useState({
     search: searchParams.get("search") ?? "",
     category: "",
@@ -134,6 +135,11 @@ function DocumentsContent() {
     selectionScopeDocuments.forEach((document) => combined.set(document.id, document));
     return Array.from(combined.values());
   }, [selectionScopeDocuments, visibleDocuments]);
+  const selectedDocumentIds = useMemo(() => Array.from(selectedDocuments), [selectedDocuments]);
+  const selectedScopeDocuments = useMemo(
+    () => selectionScopeById.filter((document) => selectedDocuments.has(document.id)),
+    [selectedDocuments, selectionScopeById]
+  );
   const allDocumentsSelected = totalDocumentCount > 0 && selectedDocuments.size >= totalDocumentCount;
 
   async function selectAllDocuments() {
@@ -154,6 +160,63 @@ function DocumentsContent() {
   function clearSelectedDocuments() {
     setSelectedDocuments(new Set());
     setSelectionScopeDocuments([]);
+  }
+
+  function selectedExportParams(extra?: Record<string, string>) {
+    const exportParams = new URLSearchParams();
+    selectedDocumentIds.forEach((id) => exportParams.append("document_ids", id));
+    Object.entries(extra || {}).forEach(([key, value]) => {
+      if (value) exportParams.set(key, value);
+    });
+    return exportParams;
+  }
+
+  function confirmReviewExport() {
+    if (!selectedDocumentIds.length) {
+      toast.error("선택된 문서가 없습니다.");
+      return false;
+    }
+    if (selectedScopeDocuments.some(requiresReviewExportConfirmation)) {
+      return window.confirm("선택한 문서 중 검토 필요 문서가 있습니다. 내보내기 파일에는 review_required와 경고 정보가 포함됩니다. 계속할까요?");
+    }
+    return true;
+  }
+
+  function exportSelectedDocuments(kind: "csv" | "xlsx") {
+    if (!confirmReviewExport()) return;
+    window.location.href = kind === "csv"
+      ? api.exportCsvUrl(selectedExportParams())
+      : api.exportExcelUrl(selectedExportParams({ sheet_mode: bulkExcelMode }));
+  }
+
+  async function downloadSelectedDocuments() {
+    if (!selectedDocumentIds.length) {
+      toast.error("선택된 문서가 없습니다.");
+      return;
+    }
+    try {
+      await api.bulkDownload(selectedDocumentIds);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "원본 다운로드에 실패했습니다");
+    }
+  }
+
+  async function deleteSelectedDocuments() {
+    if (!selectedDocumentIds.length) return;
+    if (!window.confirm(`선택한 문서 ${selectedDocumentIds.length}건을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+    try {
+      const result = await api.bulkDelete(selectedDocumentIds);
+      toast.success(`문서 ${result.deleted}건을 삭제했습니다`);
+      clearSelectedDocuments();
+      const [nextData, stats] = await Promise.all([
+        api.list(params),
+        api.stats().catch(() => null),
+      ]);
+      setData(nextData);
+      if (stats) setAllDocumentCount(stats.total);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "삭제에 실패했습니다");
+    }
   }
 
   return (
@@ -228,6 +291,31 @@ function DocumentsContent() {
             </Button>
             <Button type="button" variant="ghost" size="sm" disabled={!selectedDocuments.size} onClick={clearSelectedDocuments}>
               전체 선택 해제
+            </Button>
+            <select
+              className="h-8 rounded-md border bg-white px-2 text-xs"
+              value={bulkExcelMode}
+              onChange={(event) => setBulkExcelMode(event.target.value as "combined" | "party_tabs")}
+              aria-label="전체 선택 Excel 내보내기 방식"
+            >
+              <option value="combined">통합 시트형</option>
+              <option value="party_tabs">거래처별 탭</option>
+            </select>
+            <Button type="button" variant="outline" size="sm" disabled={!selectedDocuments.size} onClick={() => exportSelectedDocuments("xlsx")}>
+              <Download className="size-4" />
+              선택 Excel
+            </Button>
+            <Button type="button" variant="outline" size="sm" disabled={!selectedDocuments.size} onClick={() => exportSelectedDocuments("csv")}>
+              <Download className="size-4" />
+              선택 CSV
+            </Button>
+            <Button type="button" variant="outline" size="sm" disabled={!selectedDocuments.size} onClick={downloadSelectedDocuments}>
+              <Download className="size-4" />
+              원본 다운로드
+            </Button>
+            <Button type="button" variant="destructive" size="sm" disabled={!selectedDocuments.size} onClick={deleteSelectedDocuments}>
+              <Trash2 className="size-4" />
+              선택 삭제
             </Button>
           </div>
         </div>
