@@ -131,6 +131,7 @@ def smoke(args: argparse.Namespace) -> dict[str, Any]:
         "bundle": bundle,
         "runtime": runtime,
         "onnx_session_load": session_load,
+        "diagnostic_interpretation": _diagnostic_interpretation(bundle, runtime, session_load, can_infer),
         "samples": samples,
         "download_commands": _download_commands(args.repo_id, model_path),
     }
@@ -245,7 +246,7 @@ import json
 import time
 import onnxruntime as ort
 started = time.perf_counter()
-row = {{"file": {str(path.relative_to(model_path))!r}, "loaded": False, "load_time_ms": None, "inputs": [], "outputs": [], "error": None, "onnxruntime_version": getattr(ort, "__version__", None), "providers": ort.get_available_providers()}}
+row = {{"file": {str(path.relative_to(model_path))!r}, "file_size_bytes": {path.stat().st_size}, "loaded": False, "load_time_ms": None, "inputs": [], "outputs": [], "error": None, "onnxruntime_version": getattr(ort, "__version__", None), "providers": ort.get_available_providers()}}
 try:
     opts = ort.SessionOptions()
     opts.enable_mem_pattern = False
@@ -270,6 +271,7 @@ print(json.dumps(row, ensure_ascii=False))
         rows.append(
             {
                 "file": str(path.relative_to(model_path)),
+                "file_size_bytes": path.stat().st_size,
                 "loaded": False,
                 "load_time_ms": int((time.perf_counter() - started) * 1000),
                 "exit_code": completed.returncode,
@@ -277,6 +279,75 @@ print(json.dumps(row, ensure_ascii=False))
             }
         )
     return rows
+
+
+def _diagnostic_interpretation(
+    bundle: dict[str, Any],
+    runtime: dict[str, Any],
+    session_load: list[dict[str, Any]],
+    can_infer: bool,
+) -> dict[str, Any]:
+    decoder_rows = [row for row in session_load if str(row.get("file", "")).endswith("decoder_model_merged.onnx")]
+    decoder_loaded = any(row.get("loaded") for row in decoder_rows)
+    decoder_crashed = any(row.get("exit_code") in {-11, 139} for row in decoder_rows)
+    decoder_op_missing = any("NOT_IMPLEMENTED" in str(row.get("error") or "") for row in decoder_rows)
+    component_rows = {
+        row.get("file"): bool(row.get("loaded"))
+        for row in session_load
+        if str(row.get("file", "")).endswith((".onnx",))
+    }
+
+    if can_infer:
+        provider_available = True
+        fallback_reason = None
+        artifact_status = "runner_available"
+    elif not bundle.get("usable"):
+        provider_available = False
+        fallback_reason = "model_bundle_missing_or_incomplete"
+        artifact_status = "bundle_incomplete"
+    elif not runtime.get("onnxruntime_available"):
+        provider_available = False
+        fallback_reason = "onnxruntime_missing"
+        artifact_status = "runtime_missing"
+    elif not runtime.get("runner_available"):
+        provider_available = False
+        fallback_reason = "runner_contract_missing"
+        artifact_status = "onnx_sessions_probe_only"
+    else:
+        provider_available = False
+        fallback_reason = "provider_not_ready"
+        artifact_status = "unknown"
+
+    compatibility_note = "not_evaluated"
+    if session_load:
+        if decoder_loaded:
+            compatibility_note = "model_artifact_not_fully_broken_runtime_version_can_load_decoder"
+        elif decoder_crashed:
+            compatibility_note = "decoder_native_crash_on_this_runtime"
+        elif decoder_op_missing:
+            compatibility_note = "decoder_operator_not_supported_on_this_runtime"
+        else:
+            compatibility_note = "decoder_not_loaded"
+
+    return {
+        "artifact_status": artifact_status,
+        "compatibility_note": compatibility_note,
+        "provider_available": provider_available,
+        "fallback_provider": "paddleocr_ppocrv4",
+        "fallback_reason": fallback_reason,
+        "decoder_loaded": decoder_loaded,
+        "decoder_native_crash": decoder_crashed,
+        "decoder_operator_missing": decoder_op_missing,
+        "component_load_results": component_rows,
+        "runner_contract_required": [
+            "preprocess PDF/page image into pixel_values and image_grid_thw",
+            "run vision_encoder.onnx",
+            "prepare prompt token ids through tokenizer and embed_tokens.onnx",
+            "drive decoder_model_merged.onnx autoregressive generation with past_key_values",
+            "decode text/markdown output and normalize into OCRResult candidates",
+        ],
+        "next_action": "Implement minimal Linux ONNX runner with onnxruntime 1.23.2 or 1.20.1, then run 08_image first-text-output smoke.",
+    }
 
 
 def _run_sample(
@@ -360,6 +431,7 @@ def _session_only_report(report: dict[str, Any]) -> dict[str, Any]:
         "summary": report["summary"],
         "environment": report.get("environment"),
         "runtime": report.get("runtime"),
+        "diagnostic_interpretation": report.get("diagnostic_interpretation"),
         "bundle": {
             "path": report.get("bundle", {}).get("path"),
             "onnx_files": report.get("bundle", {}).get("onnx_files"),
@@ -440,15 +512,18 @@ def _session_markdown(report: dict[str, Any]) -> str:
         f"- Providers: `{', '.join(runtime.get('onnxruntime_providers') or []) or 'none'}`",
         f"- Provider available: `{report['summary'].get('provider_used') == 'paddleocr_vl_onnx_quantized'}`",
         f"- Fallback reason: `{report['summary'].get('fallback_reason')}`",
+        f"- Diagnostic: `{(report.get('diagnostic_interpretation') or {}).get('compatibility_note')}`",
+        f"- Next action: `{(report.get('diagnostic_interpretation') or {}).get('next_action')}`",
         "",
-        "| file | loaded | exit | time_ms | onnxruntime | providers | inputs | outputs | error |",
-        "|---|---:|---:|---:|---|---|---|---|---|",
+        "| file | size_mb | loaded | exit | time_ms | onnxruntime | providers | inputs | outputs | error |",
+        "|---|---:|---:|---:|---:|---|---|---|---|---|",
     ]
     for row in report.get("onnx_session_load") or []:
         inputs = ", ".join(item.get("name", "") for item in row.get("inputs") or [])
         outputs = ", ".join(item.get("name", "") for item in row.get("outputs") or [])
+        size_mb = round((row.get("file_size_bytes") or 0) / 1024**2, 1)
         lines.append(
-            f"| {row.get('file', '')} | {row.get('loaded')} | {row.get('exit_code', '')} | {row.get('load_time_ms', '')} | {row.get('onnxruntime_version', '')} | {', '.join(row.get('providers') or [])} | {inputs} | {outputs} | {str(row.get('error') or '')[:160]} |"
+            f"| {row.get('file', '')} | {size_mb} | {row.get('loaded')} | {row.get('exit_code', '')} | {row.get('load_time_ms', '')} | {row.get('onnxruntime_version', '')} | {', '.join(row.get('providers') or [])} | {inputs} | {outputs} | {str(row.get('error') or '')[:160]} |"
         )
     return "\n".join(lines) + "\n"
 
