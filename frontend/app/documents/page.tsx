@@ -53,6 +53,9 @@ function DocumentsContent() {
   const [grouping, setGrouping] = useState<DocumentGroupingMode>("document_type");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set());
+  const [selectionScopeDocuments, setSelectionScopeDocuments] = useState<DocumentListResponse["items"]>([]);
+  const [selectingAllDocuments, setSelectingAllDocuments] = useState(false);
+  const [allDocumentCount, setAllDocumentCount] = useState<number | null>(null);
   const [filters, setFilters] = useState({
     search: searchParams.get("search") ?? "",
     category: "",
@@ -69,6 +72,7 @@ function DocumentsContent() {
 
   useEffect(() => {
     api.categories().then(setCategories).catch(() => setCategories([]));
+    api.stats().then((stats) => setAllDocumentCount(stats.total)).catch(() => setAllDocumentCount(null));
     setGrouping(loadDocumentGroupingMode());
   }, []);
 
@@ -123,19 +127,33 @@ function DocumentsContent() {
   const duplicateHints = useMemo(() => duplicateUploadHints(data?.items || []), [data?.items]);
   const duplicateHintCount = useMemo(() => duplicateFilenameCount(data?.items || []), [data?.items]);
   const visibleDocuments = useMemo(() => data?.items || [], [data?.items]);
-  const visibleDocumentIds = useMemo(() => new Set(visibleDocuments.map((document) => document.id)), [visibleDocuments]);
-  const allVisibleSelected = visibleDocuments.length > 0 && visibleDocuments.every((document) => selectedDocuments.has(document.id));
+  const totalDocumentCount = allDocumentCount ?? data?.total ?? visibleDocuments.length;
+  const selectionScopeById = useMemo(() => {
+    const combined = new Map<string, DocumentListResponse["items"][number]>();
+    visibleDocuments.forEach((document) => combined.set(document.id, document));
+    selectionScopeDocuments.forEach((document) => combined.set(document.id, document));
+    return Array.from(combined.values());
+  }, [selectionScopeDocuments, visibleDocuments]);
+  const allDocumentsSelected = totalDocumentCount > 0 && selectedDocuments.size >= totalDocumentCount;
 
-  useEffect(() => {
-    setSelectedDocuments((current) => new Set(Array.from(current).filter((id) => visibleDocumentIds.has(id))));
-  }, [visibleDocumentIds]);
-
-  function selectAllVisibleDocuments() {
-    setSelectedDocuments(new Set(visibleDocuments.map((document) => document.id)));
+  async function selectAllDocuments() {
+    setSelectingAllDocuments(true);
+    try {
+      const documents = await loadAllDocumentPages();
+      setSelectionScopeDocuments(documents);
+      setSelectedDocuments(new Set(documents.map((document) => document.id)));
+      setAllDocumentCount(documents.length);
+      toast.success(`전체 문서 ${documents.length}건을 선택했습니다`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "전체 문서 선택에 실패했습니다");
+    } finally {
+      setSelectingAllDocuments(false);
+    }
   }
 
   function clearSelectedDocuments() {
     setSelectedDocuments(new Set());
+    setSelectionScopeDocuments([]);
   }
 
   return (
@@ -201,12 +219,12 @@ function DocumentsContent() {
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3">
           <div>
             <p className="text-sm font-semibold">문서 선택</p>
-            <p className="text-xs text-muted-foreground">현재 필터와 검색 결과에 보이는 문서 기준으로 선택합니다.</p>
+            <p className="text-xs text-muted-foreground">필터/그룹과 관계없이 저장된 모든 문서를 한 번에 선택합니다.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-muted-foreground">선택됨: {selectedDocuments.size} / 보이는 문서 {visibleDocuments.length}개</span>
-            <Button type="button" variant="outline" size="sm" disabled={!visibleDocuments.length || allVisibleSelected} onClick={selectAllVisibleDocuments}>
-              보이는 문서 전체 선택
+            <span className="text-sm text-muted-foreground">선택됨: {selectedDocuments.size} / 전체 문서 {totalDocumentCount}개</span>
+            <Button type="button" variant="outline" size="sm" disabled={!totalDocumentCount || allDocumentsSelected || selectingAllDocuments} onClick={selectAllDocuments}>
+              {selectingAllDocuments ? "전체 문서 선택 중..." : "전체 문서 선택"}
             </Button>
             <Button type="button" variant="ghost" size="sm" disabled={!selectedDocuments.size} onClick={clearSelectedDocuments}>
               전체 선택 해제
@@ -233,7 +251,7 @@ function DocumentsContent() {
                 duplicateHintsOverride={duplicateHints}
                 selected={selectedDocuments}
                 onSelectedChange={setSelectedDocuments}
-                selectionScopeDocuments={visibleDocuments}
+                selectionScopeDocuments={selectionScopeById}
                 onChanged={() => api.list(params).then(setData)}
                 returnTo="/documents"
               />
@@ -247,6 +265,28 @@ function DocumentsContent() {
       )}
     </main>
   );
+}
+
+async function loadAllDocumentPages() {
+  const pageSize = 100;
+  const documents: DocumentListResponse["items"] = [];
+  let page = 1;
+  let total = 0;
+
+  do {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+      sort_by: "updated_at",
+      order: "desc",
+    });
+    const response = await api.list(params);
+    documents.push(...response.items);
+    total = response.total;
+    page += 1;
+  } while (documents.length < total);
+
+  return documents;
 }
 
 function duplicateFilenameCount(documents: DocumentListResponse["items"]) {
