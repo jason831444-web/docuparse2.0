@@ -19,6 +19,7 @@ import type {
 } from "@/types/document";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001/api";
+const BULK_DOCUMENT_CHUNK_SIZE = 100;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -63,24 +64,28 @@ export const api = {
     const response = await fetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
     if (!response.ok) throw new Error("문서를 삭제하지 못했습니다");
   },
-  bulkDelete: async (ids: string[]) =>
-    request<{ deleted: number }>("/documents/bulk/delete", { method: "POST", body: JSON.stringify({ ids }) }),
+  bulkDelete: async (ids: string[]) => {
+    let deleted = 0;
+    for (const chunk of chunkArray(ids, BULK_DOCUMENT_CHUNK_SIZE)) {
+      const result = await request<{ deleted: number }>("/documents/bulk/delete", { method: "POST", body: JSON.stringify({ ids: chunk }) });
+      deleted += result.deleted;
+    }
+    return { deleted };
+  },
   bulkDownload: async (ids: string[]) => {
-    const response = await fetch(`${API_BASE}/documents/bulk/download`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
-    if (!response.ok) throw new Error("선택한 파일을 다운로드하지 못했습니다");
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "docuparse-originals.zip";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    const chunks = chunkArray(ids, BULK_DOCUMENT_CHUNK_SIZE);
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      const response = await fetch(`${API_BASE}/documents/bulk/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: chunk }),
+      });
+      if (!response.ok) throw new Error("선택한 파일을 다운로드하지 못했습니다");
+      const blob = await response.blob();
+      const suffix = chunks.length > 1 ? `-${index + 1}-of-${chunks.length}` : "";
+      downloadBlob(blob, `docuparse-originals${suffix}.zip`);
+    }
   },
   reprocess: (id: string) => request<DocumentRecord>(`/documents/${id}/reprocess`, { method: "POST" }),
   confirm: (id: string, payload?: { approval_note?: string | null }) =>
@@ -123,3 +128,22 @@ export const api = {
     clear: () => request<{ deleted_items: number; deleted_aliases: number }>("/item-master", { method: "DELETE" }),
   }
 };
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
