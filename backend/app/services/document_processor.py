@@ -20,6 +20,7 @@ from app.services.ocr import OCRService
 from app.services.parser import DocumentParser
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.quality_evaluation import DocumentQualityEvaluator, QualityEvaluation
+from app.services.table_layout import BBoxTableReconstructor
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 
 
@@ -40,6 +41,7 @@ class DocumentProcessor:
         self.workflow_enrichment = DocumentWorkflowEnrichmentService()
         self.item_master_matcher = ItemMasterMatcher()
         self.ai_merger = AIResultMerger()
+        self.bbox_table_reconstructor = BBoxTableReconstructor()
 
     def process(self, db: Session, document: Document) -> Document:
         document.processing_status = ProcessingStatus.processing
@@ -207,7 +209,17 @@ class DocumentProcessor:
             document.key_dates = sanitize_for_postgres(workflow.key_dates)
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
-            document.workflow_metadata = sanitize_for_postgres(workflow.workflow_metadata or None)
+            workflow_metadata = workflow.workflow_metadata or {}
+            layout_debug = self._bbox_layout_debug_metadata(normalized, document, workflow_metadata)
+            if layout_debug:
+                workflow_metadata["layout_debug"] = layout_debug
+                layout_issue = self._bbox_layout_review_issue(layout_debug)
+                if layout_issue:
+                    issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                    if not any(issue.get("code") == layout_issue["code"] for issue in issues if isinstance(issue, dict)):
+                        issues.append(layout_issue)
+                    workflow_metadata["normalized_review_issues"] = issues
+            document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             workflow_review_required = bool((workflow.workflow_metadata or {}).get("review_required"))
             document.review_required = workflow_review_required if self._is_manufacturing_type(document) else document.review_required or workflow_review_required
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
@@ -222,6 +234,197 @@ class DocumentProcessor:
         db.commit()
         db.refresh(document)
         return document
+
+    def _bbox_layout_debug_metadata(
+        self,
+        normalized: NormalizedDocument,
+        document: Document,
+        workflow_metadata: dict,
+    ) -> dict | None:
+        line_candidates = self._ocr_line_candidates(normalized)
+        bbox_count = sum(1 for candidate in line_candidates if candidate.get("bbox") or all(key in candidate for key in ("x_min", "y_min", "x_max", "y_max")))
+        if bbox_count < 6:
+            return None
+        rows = self.bbox_table_reconstructor.group_rows_by_y(line_candidates)
+        if not rows:
+            return None
+        columns = self.bbox_table_reconstructor.infer_columns(rows)
+        structured_rows = self.bbox_table_reconstructor.map_tokens_to_columns(rows, columns)
+        if not structured_rows:
+            return None
+        profile = (
+            workflow_metadata.get("document_profile")
+            or (workflow_metadata.get("taxonomy") or {}).get("document_profile")
+            or workflow_metadata.get("content_profile")
+        )
+        candidates = self.bbox_table_reconstructor.build_line_item_candidates(structured_rows, str(profile or "priced_document"))
+        confirmed_count = len(document.line_items or [])
+        profile_values = self._metadata_profile_values(workflow_metadata, profile)
+        layout_attention_flags = {
+            "missing_item_name_from_ocr",
+            "row_boundary_uncertain",
+            "fax_row_boundary_uncertain",
+            "low_ocr_confidence",
+        }
+        extra_candidates = candidates[confirmed_count:] if len(candidates) > confirmed_count else []
+        stored_candidates = [
+            candidate for candidate in extra_candidates
+            if self._should_store_bbox_extra_candidate(candidate, profile_values, layout_attention_flags)
+        ]
+        stored_candidates = self._dedupe_layout_candidates(stored_candidates)[:10]
+        review_flags = sorted({
+            str(flag)
+            for candidate in stored_candidates
+            for flag in candidate.get("review_flags", [])
+            if flag
+        })
+        if not stored_candidates and len(candidates) <= confirmed_count:
+            return {
+                "source": "bbox_table_reconstructor",
+                "parser_integrated": False,
+                "bbox_line_candidate_count": bbox_count,
+                "grouped_row_count": len(rows),
+                "column_count": len(columns),
+                "candidate_count": len(candidates),
+                "confirmed_line_item_count": confirmed_count,
+                "uncertain_count": 0,
+                "bbox_review_flags": [],
+                "bbox_table_candidates": [],
+            }
+        return {
+            "source": "bbox_table_reconstructor",
+            "parser_integrated": False,
+            "bbox_line_candidate_count": bbox_count,
+            "grouped_row_count": len(rows),
+            "column_count": len(columns),
+            "candidate_count": len(candidates),
+            "confirmed_line_item_count": confirmed_count,
+            "uncertain_count": len(stored_candidates),
+            "bbox_review_flags": review_flags,
+            "bbox_table_candidates": [self._compact_layout_candidate(candidate) for candidate in stored_candidates],
+        }
+
+    def _metadata_profile_values(self, workflow_metadata: dict, profile: object | None = None) -> set[str]:
+        taxonomy = workflow_metadata.get("taxonomy") if isinstance(workflow_metadata.get("taxonomy"), dict) else {}
+        values: set[str] = set()
+        for value in (
+            profile,
+            workflow_metadata.get("document_profile"),
+            workflow_metadata.get("content_profile"),
+            taxonomy.get("document_profile"),
+        ):
+            if value:
+                values.add(str(value))
+        for key in ("document_profiles", "profiles"):
+            for source in (workflow_metadata, taxonomy):
+                profile_list = source.get(key) if isinstance(source, dict) else None
+                if isinstance(profile_list, list):
+                    values.update(str(item) for item in profile_list if item)
+        return values
+
+    def _should_store_bbox_layout_candidate(
+        self,
+        candidate: dict,
+        profile_values: set[str],
+        layout_attention_flags: set[str],
+    ) -> bool:
+        flags = {str(flag) for flag in candidate.get("review_flags", []) if flag}
+        if not candidate.get("item_name"):
+            return True
+        if flags & layout_attention_flags:
+            return True
+        if candidate.get("missing_fields"):
+            return True
+        return False
+
+    def _should_store_bbox_extra_candidate(
+        self,
+        candidate: dict,
+        profile_values: set[str],
+        layout_attention_flags: set[str],
+    ) -> bool:
+        flags = {str(flag) for flag in candidate.get("review_flags", []) if flag}
+        no_price_profiles = {"no_price_document", "inventory_movement_document", "quality_document"}
+        if profile_values & no_price_profiles:
+            return bool((flags & layout_attention_flags) or not candidate.get("item_name") or candidate.get("missing_fields"))
+        if self._should_store_bbox_layout_candidate(candidate, profile_values, layout_attention_flags):
+            return True
+        return bool(
+            candidate.get("item_name")
+            or any(candidate.get(field) is not None for field in ("quantity", "unit_price", "supply_amount", "tax_amount", "line_total"))
+        )
+
+    def _ocr_line_candidates(self, normalized: NormalizedDocument) -> list[dict]:
+        candidates: list[dict] = []
+        for block in normalized.raw_extracted_blocks or []:
+            if not isinstance(block, dict):
+                continue
+            page = block.get("page")
+            for candidate in block.get("line_candidates") or []:
+                if not isinstance(candidate, dict):
+                    continue
+                enriched = dict(candidate)
+                if page and not enriched.get("page"):
+                    enriched["page"] = page
+                candidates.append(enriched)
+        return candidates
+
+    def _dedupe_layout_candidates(self, candidates: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: set[tuple] = set()
+        for candidate in candidates:
+            bbox = candidate.get("bbox_span") or {}
+            key = (
+                candidate.get("item_name"),
+                candidate.get("line_total"),
+                candidate.get("supply_amount"),
+                round(float(bbox.get("y_min") or 0), 1),
+                round(float(bbox.get("y_max") or 0), 1),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(candidate)
+        return deduped
+
+    def _compact_layout_candidate(self, candidate: dict) -> dict:
+        source_tokens = candidate.get("source_tokens") or []
+        return {
+            "source": "bbox_table_reconstructor",
+            "item_name": candidate.get("item_name"),
+            "document_item_code": candidate.get("document_item_code"),
+            "internal_item_code": candidate.get("internal_item_code"),
+            "specification": candidate.get("specification"),
+            "quantity": candidate.get("quantity"),
+            "unit": candidate.get("unit"),
+            "unit_price": candidate.get("unit_price"),
+            "supply_amount": candidate.get("supply_amount"),
+            "tax_amount": candidate.get("tax_amount"),
+            "line_total": candidate.get("line_total"),
+            "confidence": candidate.get("confidence"),
+            "missing_fields": candidate.get("missing_fields") or [],
+            "untrusted_fields": candidate.get("untrusted_fields") or [],
+            "review_flags": candidate.get("review_flags") or [],
+            "bbox_span": candidate.get("bbox_span"),
+            "source_text": " ".join(str(token.get("text") or "") for token in source_tokens if isinstance(token, dict)).strip(),
+        }
+
+    def _bbox_layout_review_issue(self, layout_debug: dict) -> dict | None:
+        if not layout_debug.get("uncertain_count"):
+            return None
+        flags = layout_debug.get("bbox_review_flags") or []
+        if layout_debug.get("candidate_count", 0) <= layout_debug.get("confirmed_line_item_count", 0):
+            return None
+        if "missing_item_name_from_ocr" not in flags and "fax_row_boundary_uncertain" not in flags:
+            return None
+        return {
+            "code": "bbox_table_candidate_uncertain",
+            "message_ko": f"OCR 위치 기반 추가 표 후보 {layout_debug.get('uncertain_count')}건이 있습니다. 원본 문서를 확인하세요.",
+            "field": "workflow_metadata.layout_debug.bbox_table_candidates",
+            "severity": "info",
+            "blocking": False,
+            "flags": flags,
+        }
 
     def _interpret_document(
         self,

@@ -203,3 +203,47 @@ def test_export_without_taxonomy_metadata_still_works():
     assert "document_subtype" in csv
     assert payload["canonical_export"]["document"]["document_type"] == "invoice"
     assert payload["canonical_export"]["policy"]["export_policy"] in {"priced_document", "tax_document_consistency"}
+
+
+def test_export_includes_bbox_layout_candidate_summary_without_line_item_promotion():
+    document = _document("FAX-PO-2026-0921", "오성테크", Decimal("418000"))
+    document.document_type = DocumentType.purchase_order
+    document.processing_status = ProcessingStatus.needs_review
+    document.review_required = True
+    document.line_items = [
+        {"item_name": "베어링하우징", "line_total": Decimal("176000")},
+        {"item_name": "S45C PIN 8X60", "line_total": Decimal("66000")},
+    ]
+    document.workflow_metadata = {
+        "layout_debug": {
+            "source": "bbox_table_reconstructor",
+            "parser_integrated": False,
+            "candidate_count": 3,
+            "confirmed_line_item_count": 2,
+            "uncertain_count": 1,
+            "bbox_review_flags": ["missing_item_name_from_ocr", "row_boundary_uncertain", "untrusted_ocr_amount"],
+            "bbox_table_candidates": [
+                {
+                    "source": "bbox_table_reconstructor",
+                    "item_name": None,
+                    "supply_amount": 176000,
+                    "review_flags": ["missing_item_name_from_ocr", "row_boundary_uncertain", "untrusted_ocr_amount"],
+                    "missing_fields": ["item_name"],
+                    "source_text": "16000 1600C 176000",
+                }
+            ],
+        }
+    }
+
+    payload = json.loads(document_to_json(document))
+    csv = documents_to_csv([document])
+
+    assert len(payload["canonical_export"]["line_items"]) == 2
+    assert payload["canonical_export"]["review_candidates"]["bbox_candidate_summary"]["candidate_count"] == 3
+    assert payload["canonical_export"]["review_candidates"]["bbox_candidate_summary"]["uncertain_count"] == 1
+    assert payload["canonical_export"]["review_candidates"]["bbox_table_candidates"][0]["item_name"] is None
+    assert "missing_item_name_from_ocr" in payload["canonical_export"]["review_candidates"]["bbox_table_candidates"][0]["review_flags"]
+    assert "bbox_candidate_count" in csv
+    assert "bbox_uncertain_candidate_count" in csv
+    assert "bbox_review_flags" in csv
+    assert "missing_item_name_from_ocr" in csv

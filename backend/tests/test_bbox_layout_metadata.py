@@ -1,0 +1,123 @@
+from decimal import Decimal
+import sys
+from types import SimpleNamespace
+
+sys.modules.setdefault(
+    "pytesseract",
+    SimpleNamespace(
+        Output=SimpleNamespace(DICT="dict"),
+        image_to_string=lambda image: "",
+        image_to_data=lambda image, output_type=None: {"conf": []},
+    ),
+)
+
+from app.models.document import Document, DocumentType
+from app.services.document_processor import DocumentProcessor
+from app.services.file_ingestion import NormalizedDocument
+
+
+def _candidate(text: str, x_min: float, y_min: float, x_max: float, y_max: float, confidence: float = 0.95):
+    return {
+        "text": text,
+        "confidence": confidence,
+        "page": 1,
+        "bbox": [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]],
+        "x_min": x_min,
+        "y_min": y_min,
+        "x_max": x_max,
+        "y_max": y_max,
+    }
+
+
+def test_bbox_layout_candidates_are_metadata_only_and_do_not_promote_line_items():
+    processor = DocumentProcessor()
+    document = Document(
+        original_filename="fax.pdf",
+        stored_file_path="/tmp/fax.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.purchase_order,
+        document_number="FAX-PO-2026-0921",
+        extracted_amount=Decimal("418000"),
+        currency="KRW",
+        line_items=[
+            {"item_name": "베어링하우징", "line_total": 176000},
+            {"item_name": "S45C PIN 8X60", "line_total": 66000},
+        ],
+    )
+    normalized = NormalizedDocument(
+        source_file_type="pdf",
+        mime_type="application/pdf",
+        extraction_method="pdf_scanned_page_ocr",
+        normalized_text="",
+        raw_extracted_blocks=[{
+            "type": "pdf_page_ocr",
+            "page": 1,
+            "line_candidates": [
+                _candidate("품목명", 270, 400, 340, 420),
+                _candidate("공급가액", 770, 400, 840, 420),
+                _candidate("베어링하우징", 270, 430, 360, 450),
+                _candidate("16000", 770, 430, 820, 450),
+                _candidate("176000", 950, 430, 1010, 450),
+                _candidate("S45C PIN 8X6Q", 270, 460, 390, 480),
+                _candidate("6000", 770, 460, 820, 480),
+                _candidate("66000", 950, 460, 1010, 480),
+                _candidate("16000", 770, 490, 820, 510),
+                _candidate("1600C", 870, 490, 920, 510),
+                _candidate("176000", 950, 490, 1010, 510),
+            ],
+        }],
+    )
+
+    metadata = processor._bbox_layout_debug_metadata(normalized, document, {"document_profile": "priced_document"})
+
+    assert len(document.line_items) == 2
+    assert metadata is not None
+    assert metadata["parser_integrated"] is False
+    assert metadata["candidate_count"] == 3
+    assert metadata["confirmed_line_item_count"] == 2
+    assert metadata["uncertain_count"] == 1
+    assert metadata["bbox_table_candidates"][0]["item_name"] is None
+    assert "missing_item_name_from_ocr" in metadata["bbox_table_candidates"][0]["review_flags"]
+
+
+def test_bbox_layout_metadata_does_not_create_amount_candidates_for_no_price_documents():
+    processor = DocumentProcessor()
+    document = Document(
+        original_filename="transfer.pdf",
+        stored_file_path="/tmp/transfer.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.general_document,
+        document_number="TRF-2026-0922-002",
+        currency=None,
+        extracted_amount=None,
+        line_items=[{"item_name": "내부 이동품", "quantity": 25, "unit": "EA"}],
+    )
+    normalized = NormalizedDocument(
+        source_file_type="pdf",
+        mime_type="application/pdf",
+        extraction_method="pdf_scanned_page_ocr",
+        normalized_text="",
+        raw_extracted_blocks=[{
+            "type": "pdf_page_ocr",
+            "page": 1,
+            "line_candidates": [
+                _candidate("품목명", 100, 100, 160, 120),
+                _candidate("요청수량", 300, 100, 380, 120),
+                _candidate("내부 이동품", 100, 150, 190, 170),
+                _candidate("25", 300, 150, 330, 170),
+                _candidate("창고 이동", 100, 200, 170, 220),
+                _candidate("비고", 420, 100, 460, 120),
+            ],
+        }],
+    )
+
+    metadata = processor._bbox_layout_debug_metadata(
+        normalized,
+        document,
+        {"document_profile": "inventory_movement_document", "document_profiles": ["inventory_movement_document", "no_price_document"]},
+    )
+
+    assert metadata is not None
+    assert metadata["parser_integrated"] is False
+    assert metadata["bbox_table_candidates"] == []
+    assert metadata["bbox_review_flags"] == []

@@ -26,6 +26,18 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("DOCUPARSE_FIXTURE_TIMEOUT_SECONDS", "300")))
     parser.add_argument("--progress", action="store_true")
     parser.add_argument(
+        "--detail-dump-dir",
+        type=Path,
+        default=Path(os.getenv("DOCUPARSE_DETAIL_DUMP_DIR", "")) if os.getenv("DOCUPARSE_DETAIL_DUMP_DIR") else None,
+        help="Optional directory where final API document detail JSON should be written per file.",
+    )
+    parser.add_argument(
+        "--export-dump-dir",
+        type=Path,
+        default=Path(os.getenv("DOCUPARSE_EXPORT_DUMP_DIR", "")) if os.getenv("DOCUPARSE_EXPORT_DUMP_DIR") else None,
+        help="Optional directory where final API JSON export should be written per file.",
+    )
+    parser.add_argument(
         "--detail-prefixes",
         default=os.getenv("DOCUPARSE_REGRESSION_DETAIL_PREFIXES", "06,07,08"),
         help="Comma-separated sample prefixes whose line items should be printed in detail.",

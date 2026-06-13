@@ -61,6 +61,18 @@ def main() -> None:
     parser.add_argument("--render-dir", type=Path, default=Path(os.getenv("DOCUPARSE_FIXTURE_RENDER_DIR", "/app/uploads/fixture_rendered_pages")))
     parser.add_argument("--cooldown-seconds", type=float, default=float(os.getenv("DOCUPARSE_FIXTURE_COOLDOWN_SECONDS", "1.0")))
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("DOCUPARSE_FIXTURE_TIMEOUT_SECONDS", "300")))
+    parser.add_argument(
+        "--detail-dump-dir",
+        type=Path,
+        default=Path(os.getenv("DOCUPARSE_DETAIL_DUMP_DIR", "")) if os.getenv("DOCUPARSE_DETAIL_DUMP_DIR") else None,
+        help="Optional directory where final API document detail JSON should be written per file.",
+    )
+    parser.add_argument(
+        "--export-dump-dir",
+        type=Path,
+        default=Path(os.getenv("DOCUPARSE_EXPORT_DUMP_DIR", "")) if os.getenv("DOCUPARSE_EXPORT_DUMP_DIR") else None,
+        help="Optional directory where final API JSON export should be written per file.",
+    )
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     summaries = extract_fixtures(args)
@@ -80,6 +92,7 @@ def extract_fixtures(args: argparse.Namespace) -> list[dict[str, Any]]:
                 payload = _process_with_backend_api(pdf_path, args.api_base, timeout_seconds=getattr(args, "timeout_seconds", 300.0))
             else:
                 payload = _process_with_worker_api(pdf_path, args.ocr_worker_url, args.render_dir)
+            _write_api_dumps(pdf_path, payload, getattr(args, "detail_dump_dir", None), getattr(args, "export_dump_dir", None))
             payload["processing_time_ms"] = int((time.monotonic() - started) * 1000)
             _write_fixture_set(args.fixture_dir, prefix, pdf_path.name, payload)
             summary = _summary(prefix, pdf_path.name, payload, ok=True)
@@ -107,6 +120,7 @@ def _process_with_backend_api(pdf_path: Path, api_base: str, *, timeout_seconds:
     document = _upload_document(pdf_path, api_base)
     document_id = document["id"]
     document = _poll_document(document_id, api_base, timeout_seconds=timeout_seconds)
+    export_json = _fetch_document_export(document_id, api_base)
     raw_text = document.get("raw_text") or ""
     metadata = document.get("ingestion_metadata") or {}
     raw_blocks = metadata.get("raw_extracted_blocks") or metadata.get("raw_blocks") or []
@@ -125,7 +139,29 @@ def _process_with_backend_api(pdf_path: Path, api_base: str, *, timeout_seconds:
             "api_review_required": document.get("review_required"),
         },
         "current_parsed": document,
+        "export_json": export_json,
     }
+
+
+def _fetch_document_export(document_id: str, api_base: str) -> dict[str, Any]:
+    try:
+        return _json_request(urllib.request.Request(f"{api_base.rstrip('/')}/documents/{document_id}/export/json"))
+    except Exception as exc:
+        return {"export_fetch_error": str(exc), "document_id": document_id}
+
+
+def _write_api_dumps(
+    pdf_path: Path,
+    payload: dict[str, Any],
+    detail_dump_dir: Path | None,
+    export_dump_dir: Path | None,
+) -> None:
+    if detail_dump_dir:
+        detail_dump_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(detail_dump_dir / f"{pdf_path.stem}.json", payload.get("current_parsed") or {})
+    if export_dump_dir:
+        export_dump_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(export_dump_dir / f"{pdf_path.stem}.json", payload.get("export_json") or {})
 
 
 def _process_with_worker_api(pdf_path: Path, worker_url: str, render_dir: Path) -> dict[str, Any]:

@@ -54,6 +54,10 @@ def serialize_document(document: Document) -> dict:
         },
         "policy": policy,
         "line_items": _canonical_line_items(document),
+        "review_candidates": {
+            "bbox_table_candidates": _layout_debug(document).get("bbox_table_candidates", []),
+            "bbox_candidate_summary": _layout_candidate_summary(document),
+        },
     }
     return data
 
@@ -154,6 +158,7 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
     for document in documents:
         taxonomy = _export_taxonomy(document)
         policy = _export_policy(document, taxonomy)
+        layout_summary = _layout_candidate_summary(document)
         review_reasons = _review_reason_text(document)
         line_items = document.line_items or [{}]
         for index, item in enumerate(line_items, start=1):
@@ -202,6 +207,9 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "approved_at": policy["approved_at"],
                 "approval_note": policy["approval_note"],
                 "taxonomy_evidence": ", ".join(taxonomy.get("evidence") or []),
+                "bbox_candidate_count": layout_summary["candidate_count"],
+                "bbox_uncertain_candidate_count": layout_summary["uncertain_count"],
+                "bbox_review_flags": ", ".join(layout_summary["review_flags"]),
             })
     return rows
 
@@ -328,6 +336,22 @@ def _review_metadata(document: Document) -> dict:
     metadata = document.workflow_metadata or {}
     review = metadata.get("review") if isinstance(metadata.get("review"), dict) else {}
     return review
+
+
+def _layout_debug(document: Document) -> dict:
+    metadata = document.workflow_metadata or {}
+    layout = metadata.get("layout_debug") if isinstance(metadata.get("layout_debug"), dict) else {}
+    return layout
+
+
+def _layout_candidate_summary(document: Document) -> dict:
+    layout = _layout_debug(document)
+    return {
+        "candidate_count": int(layout.get("candidate_count") or 0),
+        "uncertain_count": int(layout.get("uncertain_count") or 0),
+        "parser_integrated": bool(layout.get("parser_integrated")),
+        "review_flags": list(layout.get("bbox_review_flags") or []),
+    }
 
 
 def _line_review_flags(document: Document, item_index: int) -> str:
