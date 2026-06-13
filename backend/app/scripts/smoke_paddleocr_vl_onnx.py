@@ -4,6 +4,7 @@ import argparse
 import importlib
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -34,22 +35,40 @@ def main() -> None:
     parser.add_argument("--sample", action="append", type=Path, default=[])
     parser.add_argument("--download", action="store_true", help="Download the selected HF repo to --model-path.")
     parser.add_argument("--check-sessions", action="store_true", help="Try loading each ONNX file in a child process.")
+    parser.add_argument(
+        "--subprocess-session-check",
+        action="store_true",
+        help="Alias for --check-sessions. Kept explicit for Linux/runtime compatibility smoke runs.",
+    )
+    parser.add_argument(
+        "--onnxruntime-version-report",
+        action="store_true",
+        help="Include ONNX Runtime version/provider details in runtime and session reports.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("PADDLEOCR_VL_ONNX_TIMEOUT_SECONDS", "60")))
     parser.add_argument("--max-pages", type=int, default=int(os.getenv("PADDLEOCR_VL_ONNX_MAX_PAGES", "1")))
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/docuparse_e2e_logs/vl_onnx_smoke"))
     args = parser.parse_args()
 
     started = time.perf_counter()
+    if args.subprocess_session_check:
+        args.check_sessions = True
     report = smoke(args)
     report["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.output_dir / "vl_onnx_smoke_report.json"
     md_path = args.output_dir / "vl_onnx_smoke_report.md"
+    session_json_path = args.output_dir / "vl_onnx_session_report.json"
+    session_md_path = args.output_dir / "vl_onnx_session_report.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(_markdown(report), encoding="utf-8")
+    session_json_path.write_text(json.dumps(_session_only_report(report), ensure_ascii=False, indent=2), encoding="utf-8")
+    session_md_path.write_text(_session_markdown(report), encoding="utf-8")
     print(f"Wrote {json_path}")
     print(f"Wrote {md_path}")
+    print(f"Wrote {session_json_path}")
+    print(f"Wrote {session_md_path}")
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
 
 
@@ -108,6 +127,7 @@ def smoke(args: argparse.Namespace) -> dict[str, Any]:
         },
         "repo": repo,
         "download": download_result,
+        "environment": _environment_info(),
         "bundle": bundle,
         "runtime": runtime,
         "onnx_session_load": session_load,
@@ -173,6 +193,15 @@ def _bundle_info(model_path: Path) -> dict[str, Any]:
 
 def _runtime_info(runner_module: str) -> dict[str, Any]:
     onnxruntime_available = importlib.util.find_spec("onnxruntime") is not None
+    onnxruntime_version = None
+    onnxruntime_providers: list[str] = []
+    if onnxruntime_available:
+        try:
+            ort = importlib.import_module("onnxruntime")
+            onnxruntime_version = getattr(ort, "__version__", None)
+            onnxruntime_providers = list(ort.get_available_providers())
+        except Exception:
+            onnxruntime_providers = []
     runner_available = False
     runner_error = None
     if runner_module:
@@ -185,9 +214,22 @@ def _runtime_info(runner_module: str) -> dict[str, Any]:
             runner_error = str(exc)
     return {
         "onnxruntime_available": onnxruntime_available,
+        "onnxruntime_version": onnxruntime_version,
+        "onnxruntime_providers": onnxruntime_providers,
         "runner_module": runner_module or None,
         "runner_available": runner_available,
         "runner_error": runner_error,
+    }
+
+
+def _environment_info() -> dict[str, Any]:
+    return {
+        "os": platform.system(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "python_version": platform.python_version(),
+        "executable": sys.executable,
     }
 
 
@@ -203,7 +245,7 @@ import json
 import time
 import onnxruntime as ort
 started = time.perf_counter()
-row = {{"file": {str(path.relative_to(model_path))!r}, "loaded": False, "load_time_ms": None, "inputs": [], "outputs": [], "error": None}}
+row = {{"file": {str(path.relative_to(model_path))!r}, "loaded": False, "load_time_ms": None, "inputs": [], "outputs": [], "error": None, "onnxruntime_version": getattr(ort, "__version__", None), "providers": ort.get_available_providers()}}
 try:
     opts = ort.SessionOptions()
     opts.enable_mem_pattern = False
@@ -313,6 +355,20 @@ def _download_commands(repo_id: str, model_path: Path) -> list[str]:
     ]
 
 
+def _session_only_report(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": report["summary"],
+        "environment": report.get("environment"),
+        "runtime": report.get("runtime"),
+        "bundle": {
+            "path": report.get("bundle", {}).get("path"),
+            "onnx_files": report.get("bundle", {}).get("onnx_files"),
+            "onnx_file_count": report.get("bundle", {}).get("onnx_file_count"),
+        },
+        "onnx_session_load": report.get("onnx_session_load") or [],
+    }
+
+
 def _markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
     lines = [
@@ -335,6 +391,8 @@ def _markdown(report: dict[str, Any]) -> str:
         "## Runtime",
         "",
         f"- onnxruntime available: `{report['runtime']['onnxruntime_available']}`",
+        f"- onnxruntime version: `{report['runtime'].get('onnxruntime_version')}`",
+        f"- onnxruntime providers: `{', '.join(report['runtime'].get('onnxruntime_providers') or []) or 'none'}`",
         f"- runner module: `{report['runtime']['runner_module']}`",
         f"- runner available: `{report['runtime']['runner_available']}`",
         f"- runner error: `{report['runtime']['runner_error']}`",
@@ -365,6 +423,33 @@ def _markdown(report: dict[str, Any]) -> str:
         )
     lines.extend(["", "## Download Commands", ""])
     lines.extend(f"```bash\n{command}\n```" for command in report["download_commands"])
+    return "\n".join(lines) + "\n"
+
+
+def _session_markdown(report: dict[str, Any]) -> str:
+    env = report.get("environment") or {}
+    runtime = report.get("runtime") or {}
+    lines = [
+        "# PaddleOCR-VL ONNX Session Report",
+        "",
+        f"- OS: `{env.get('platform')}`",
+        f"- Machine: `{env.get('machine')}`",
+        f"- Python: `{env.get('python_version')}`",
+        f"- Executable: `{env.get('executable')}`",
+        f"- ONNX Runtime: `{runtime.get('onnxruntime_version')}`",
+        f"- Providers: `{', '.join(runtime.get('onnxruntime_providers') or []) or 'none'}`",
+        f"- Provider available: `{report['summary'].get('provider_used') == 'paddleocr_vl_onnx_quantized'}`",
+        f"- Fallback reason: `{report['summary'].get('fallback_reason')}`",
+        "",
+        "| file | loaded | exit | time_ms | onnxruntime | providers | inputs | outputs | error |",
+        "|---|---:|---:|---:|---|---|---|---|---|",
+    ]
+    for row in report.get("onnx_session_load") or []:
+        inputs = ", ".join(item.get("name", "") for item in row.get("inputs") or [])
+        outputs = ", ".join(item.get("name", "") for item in row.get("outputs") or [])
+        lines.append(
+            f"| {row.get('file', '')} | {row.get('loaded')} | {row.get('exit_code', '')} | {row.get('load_time_ms', '')} | {row.get('onnxruntime_version', '')} | {', '.join(row.get('providers') or [])} | {inputs} | {outputs} | {str(row.get('error') or '')[:160]} |"
+        )
     return "\n".join(lines) + "\n"
 
 
