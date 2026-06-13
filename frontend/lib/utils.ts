@@ -701,11 +701,21 @@ export function reviewIssuesForLineItem(issues: NormalizedReviewIssue[], itemInd
   return issues.filter((issue) => issue.item_index === itemIndex || (issue.item_index === undefined && itemIndex === 0));
 }
 
+const REVIEW_ACTIONABLE_STATUSES = new Set(["needs_review", "ready", "confirmed", "completed"]);
+
+export function isReviewActionable(document: {
+  review_required?: boolean | null;
+  processing_status?: string | null;
+}) {
+  if (document.processing_status === "needs_review") return true;
+  return Boolean(document.review_required && document.processing_status && REVIEW_ACTIONABLE_STATUSES.has(document.processing_status));
+}
+
 export function requiresReviewExportConfirmation(document: {
   review_required?: boolean | null;
   processing_status?: string | null;
 }) {
-  return Boolean(document.review_required || document.processing_status === "needs_review");
+  return isReviewActionable(document);
 }
 
 export function reviewIssueDescription(issue: NormalizedReviewIssue) {

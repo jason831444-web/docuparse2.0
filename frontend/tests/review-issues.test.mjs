@@ -129,6 +129,9 @@ assert.deepEqual(reviewIssuesForLineItem(reviewTableIssues, 1).map((issue) => is
 assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "ready" }), true);
 assert.equal(requiresReviewExportConfirmation({ review_required: false, processing_status: "needs_review" }), true);
 assert.equal(requiresReviewExportConfirmation({ review_required: false, processing_status: "confirmed" }), false);
+assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "processing" }), false);
+assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "queued" }), false);
+assert.equal(requiresReviewExportConfirmation({ review_required: true, processing_status: "uploaded" }), false);
 
 const noPriceIssues = normalizedReviewIssues({
   workflow_metadata: {

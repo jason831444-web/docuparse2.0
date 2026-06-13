@@ -7,7 +7,7 @@ import { CalendarDays, Clock3, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, preferredCalendarItems, primaryCategoryLabel } from "@/lib/utils";
+import { formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, isReviewActionable, preferredCalendarItems, primaryCategoryLabel } from "@/lib/utils";
 import type { DocumentCalendarItem } from "@/types/document";
 
 function toneFor(item: DocumentCalendarItem) {
@@ -109,7 +109,7 @@ function CalendarRow({ item }: { item: DocumentCalendarItem }) {
         <Badge className={toneFor(item)}>{item.status}</Badge>
         <Badge variant="outline">{schedule.label}</Badge>
         {schedule.fallback ? <Badge variant="outline">fallback</Badge> : null}
-        {item.review_required ? <Badge className="bg-amber-100 text-amber-800">검토 필요</Badge> : null}
+        {isReviewActionable(item) ? <Badge className="bg-amber-100 text-amber-800">검토 필요</Badge> : null}
       </div>
     </Link>
   );

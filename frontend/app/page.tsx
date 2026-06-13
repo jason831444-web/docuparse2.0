@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { cn, documentSummaryShort, formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, preferredCalendarItems, titleCaseLabel } from "@/lib/utils";
+import { cn, documentSummaryShort, formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, isReviewActionable, preferredCalendarItems, titleCaseLabel } from "@/lib/utils";
 import type { ActivitySummary, DocumentCalendarItem, DocumentStats } from "@/types/document";
 
 export default function DashboardPage() {
@@ -264,7 +264,7 @@ function DashboardScheduleRow({ item }: { item: DocumentCalendarItem }) {
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Badge variant="outline">{item.status}</Badge>
-        {item.review_required ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">검토 필요</Badge> : <Badge className="border-emerald-300 bg-emerald-50 text-emerald-800">입력 준비</Badge>}
+        {isReviewActionable(item) ? <Badge className="border-amber-300 bg-amber-50 text-amber-800">검토 필요</Badge> : <Badge className="border-emerald-300 bg-emerald-50 text-emerald-800">입력 준비</Badge>}
         {schedule.fallback ? <Badge variant="outline">발행일 기준</Badge> : null}
       </div>
     </Link>
