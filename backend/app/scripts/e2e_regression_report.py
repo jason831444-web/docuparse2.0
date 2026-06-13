@@ -112,6 +112,7 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
     if result.get("error"):
         reasons.append(str(result["error"]))
         status = "FAIL"
+    review_reasons = _review_reason_counts(result.get("review_reasons") or [])
 
     return {
         "filename": result.get("filename"),
@@ -131,6 +132,8 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         "actual_line_items_count": actual_count,
         "processing_status": result.get("processing_status"),
         "review_required": result.get("review_required"),
+        "review_reasons": result.get("review_reasons") or [],
+        "review_reason_summary": review_reasons,
         "status": status,
         "reasons": reasons,
         "source": source,
@@ -185,22 +188,83 @@ def _decimal(value: Any) -> Decimal | None:
         return None
 
 
+def _review_reason_counts(values: list[Any]) -> str:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value or "").strip()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return ""
+    return ", ".join(f"{key} x{count}" if count > 1 else key for key, count in sorted(counts.items()))
+
+
 def _markdown_report(rows: list[dict[str, Any]]) -> str:
+    summary = _report_summary(rows)
     lines = [
         "# DocuParse E2E Regression Report",
         "",
-        "| Status | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Reasons |",
-        "|---|---|---|---|---|---|---:|---|---:|---|",
+        "Review Reasons may include non-blocking informational codes; use Status and Review Required for pass/fail gating.",
+        "",
+        "## Operational Summary",
+        "",
+        f"- Documents: {summary['total']}",
+        f"- PASS/WARN/FAIL: {summary['pass']} / {summary['warn']} / {summary['fail']}",
+        f"- Review Required: {summary['review_required']} ({summary['review_required_ratio']}%)",
+        f"- Processing Statuses: {summary['processing_statuses'] or '-'}",
+        f"- Top Review Signals: {summary['top_review_signals'] or '-'}",
+        "",
+        "## Document Results",
+        "",
+        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Review Reasons | Report Reasons |",
+        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|",
     ]
     for row in rows:
         reasons = "<br>".join(row.get("reasons") or [])
+        values = {key: row.get(key) if row.get(key) is not None else "" for key in row}
+        values["reasons"] = reasons
         lines.append(
-            "| {status} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {reasons} |".format(
-                **{key: row.get(key) if row.get(key) is not None else "" for key in row}
+            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {review_reason_summary} | {reasons} |".format(
+                **values,
             )
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
+    processing_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    review_required = 0
+    for row in rows:
+        status = str(row.get("status") or "")
+        if status in status_counts:
+            status_counts[status] += 1
+        processing = str(row.get("processing_status") or "unknown")
+        processing_counts[processing] = processing_counts.get(processing, 0) + 1
+        if row.get("review_required"):
+            review_required += 1
+        for reason in row.get("review_reasons") or []:
+            key = str(reason or "").strip()
+            if key:
+                reason_counts[key] = reason_counts.get(key, 0) + 1
+    total = len(rows)
+    processing_summary = ", ".join(f"{key} x{value}" for key, value in sorted(processing_counts.items()))
+    top_reasons = ", ".join(
+        f"{key} x{value}" for key, value in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    )
+    return {
+        "total": total,
+        "pass": status_counts["PASS"],
+        "warn": status_counts["WARN"],
+        "fail": status_counts["FAIL"],
+        "review_required": review_required,
+        "review_required_ratio": round((review_required / total * 100) if total else 0, 1),
+        "processing_statuses": processing_summary,
+        "top_review_signals": top_reasons,
+    }
 
 
 if __name__ == "__main__":

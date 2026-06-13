@@ -103,6 +103,7 @@ services:
     volumes:
       - uploaded_files:/app/uploads
       - paddleocr_cache:/root/.paddlex
+      - paddleocr_whl_cache:/root/.paddleocr
       - model_cache:/app/models
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3).read()"]
@@ -115,9 +116,11 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8001/api
+        NEXT_PUBLIC_API_BASE_URL: /api
+        DOCUPARSE_BACKEND_INTERNAL_URL: http://backend:8000
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8001/api
+      NEXT_PUBLIC_API_BASE_URL: /api
+      DOCUPARSE_BACKEND_INTERNAL_URL: http://backend:8000
     ports:
       - "3001:3000"
 
@@ -126,3 +129,4 @@ volumes:
   uploaded_files:
   model_cache:
   paddleocr_cache:
+  paddleocr_whl_cache:

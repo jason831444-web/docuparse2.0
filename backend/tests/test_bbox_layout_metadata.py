@@ -73,7 +73,8 @@ def test_bbox_layout_candidates_are_metadata_only_and_do_not_promote_line_items(
     assert len(document.line_items) == 2
     assert metadata is not None
     assert metadata["parser_integrated"] is False
-    assert metadata["candidate_count"] == 3
+    assert metadata["reconstructed_candidate_count"] == 3
+    assert metadata["candidate_count"] == 1
     assert metadata["confirmed_line_item_count"] == 2
     assert metadata["uncertain_count"] == 1
     assert metadata["bbox_table_candidates"][0]["item_name"] is None
@@ -121,3 +122,90 @@ def test_bbox_layout_metadata_does_not_create_amount_candidates_for_no_price_doc
     assert metadata["parser_integrated"] is False
     assert metadata["bbox_table_candidates"] == []
     assert metadata["bbox_review_flags"] == []
+
+
+def test_bbox_layout_metadata_filters_candidates_that_duplicate_confirmed_items():
+    processor = DocumentProcessor()
+    document = Document(
+        original_filename="return.pdf",
+        stored_file_path="/tmp/return.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.general_document,
+        document_number="RTN-2026-0919-011",
+        extracted_amount=Decimal("12100"),
+        currency="KRW",
+        line_items=[
+            {"item_name": "베어링하우징", "line_total": 8000},
+        ],
+    )
+    normalized = NormalizedDocument(
+        source_file_type="pdf",
+        mime_type="application/pdf",
+        extraction_method="pdf_scanned_page_ocr",
+        normalized_text="",
+        raw_extracted_blocks=[{
+            "type": "pdf_page_ocr",
+            "page": 1,
+            "line_candidates": [
+                _candidate("품목명", 270, 400, 340, 420),
+                _candidate("공급가액", 770, 400, 840, 420),
+                _candidate("베어링하우징", 270, 430, 360, 450),
+                _candidate("8000", 770, 430, 820, 450),
+                _candidate("8800", 950, 430, 1010, 450),
+                _candidate("베어링하우징 100mm B80C", 270, 460, 470, 480),
+                _candidate("8000", 770, 460, 820, 480),
+                _candidate("880C", 950, 460, 1010, 480),
+            ],
+        }],
+    )
+
+    metadata = processor._bbox_layout_debug_metadata(normalized, document, {"document_profile": "priced_document"})
+
+    assert metadata is not None
+    assert metadata["parser_integrated"] is False
+    assert metadata["reconstructed_candidate_count"] >= 2
+    assert metadata["candidate_count"] == 0
+    assert metadata["bbox_table_candidates"] == []
+
+
+def test_bbox_layout_metadata_filters_ocr_variant_duplicate_confirmed_items():
+    processor = DocumentProcessor()
+    document = Document(
+        original_filename="return.pdf",
+        stored_file_path="/tmp/return.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.general_document,
+        document_number="RTN-2026-0919-011",
+        extracted_amount=Decimal("12100"),
+        currency="KRW",
+        line_items=[
+            {"item_name": "S45C PIN 8X6 C3000", "line_total": 12100},
+        ],
+    )
+    normalized = NormalizedDocument(
+        source_file_type="pdf",
+        mime_type="application/pdf",
+        extraction_method="pdf_scanned_page_ocr",
+        normalized_text="",
+        raw_extracted_blocks=[{
+            "type": "pdf_page_ocr",
+            "page": 1,
+            "line_candidates": [
+                _candidate("품목명", 270, 400, 340, 420),
+                _candidate("공급가액", 770, 400, 840, 420),
+                _candidate("S45C PIN 8X6 C3000", 270, 430, 430, 450),
+                _candidate("3000", 770, 430, 820, 450),
+                _candidate("3300", 950, 430, 1010, 450),
+                _candidate("S45C PIN 8X6C 8X60", 270, 460, 470, 480),
+                _candidate("3000", 770, 460, 820, 480),
+                _candidate("330C", 950, 460, 1010, 480),
+            ],
+        }],
+    )
+
+    metadata = processor._bbox_layout_debug_metadata(normalized, document, {"document_profile": "priced_document"})
+
+    assert metadata is not None
+    assert metadata["reconstructed_candidate_count"] >= 2
+    assert metadata["candidate_count"] == 0
+    assert metadata["bbox_table_candidates"] == []

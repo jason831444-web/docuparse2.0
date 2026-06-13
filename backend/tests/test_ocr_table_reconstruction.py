@@ -1147,6 +1147,63 @@ def test_no_price_delivery_quantity_table_does_not_promote_quantities_to_amounts
     assert all("supply_amount" not in item for item in parsed.line_items)
 
 
+def test_horizontal_no_price_delivery_prefers_delivery_quantity_over_backorder():
+    text = "\n".join([
+        "납품서",
+        "공급업체: 대영부품",
+        "고객사: 오성테크",
+        "납품번호: DN-2026-1001-WH",
+        "납품일: 2026-10-01",
+        "입고창고: 2공장 자재창고",
+        "",
+        "No 품목명 문서품목코드 규격 납품수량 잔량 단위",
+        "1 고정 브라켓 BRK-FIX-40X60 40x60x3T 120 0 EA",
+        "2 스페이서 SPC-AL-05 5mm 300 20 EA",
+        "3 M8 육각 볼트 BOLT-M8-20 M8x20 500 100 EA",
+        "",
+        "* 금액 정보 없이 수량 확인용 납품서입니다.",
+    ])
+
+    parsed = DocumentParser().parse(text, "synthetic_delivery_note.txt")
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert [item["item_name"] for item in parsed.line_items[:3]] == ["고정 브라켓", "스페이서", "M8 육각 볼트"]
+    assert [item["quantity"] for item in parsed.line_items[:3]] == [120, 300, 500]
+    assert [item.get("specification") for item in parsed.line_items[:3]] == ["40x60x3T", "5mm", "M8x20"]
+    assert all(item.get("line_total") is None for item in parsed.line_items[:3])
+
+
+def test_horizontal_no_price_delivery_prefers_delivery_quantity_over_order_and_balance():
+    text = "\n".join([
+        "납품서",
+        "문서번호: DN-2026-1202-RCV",
+        "공급업체: 대영부품",
+        "고객사: 오성테크",
+        "납품일자: 2026-12-02",
+        "입고창고: 오성테크 2공장 자재창고",
+        "",
+        "No 품목명 문서품목코드 규격 발주수량 납품수량 잔량 단위",
+        "1 베어링 하우징 BRG-H-100 100mm 20 12 8 EA",
+        "2 S45C PIN 8X60 PIN-S45C-0860 8x60 100 60 40 EA",
+        "3 M8 육각 볼트 BOLT-M8-20 M8x20 500 500 0 EA",
+        "",
+        "본 문서는 수량 확인용 납품서이며 단가/금액 정보는 없습니다.",
+        "담당 검토 승인",
+    ])
+
+    parsed = DocumentParser().parse(text, "synthetic_delivery_note_with_order_qty.txt")
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert [item["item_name"] for item in parsed.line_items[:3]] == ["베어링 하우징", "S45C PIN 8X60", "M8 육각 볼트"]
+    assert [item["quantity"] for item in parsed.line_items[:3]] == [12, 60, 500]
+    assert [item.get("specification") for item in parsed.line_items[:3]] == ["100mm", "8x60", "M8x20"]
+    assert all(item.get("line_total") is None for item in parsed.line_items[:3])
+
+
 def test_split_invoice_number_prefers_long_strong_candidate_over_short_label_value():
     text = "\n".join([
         "전자세금계산서",

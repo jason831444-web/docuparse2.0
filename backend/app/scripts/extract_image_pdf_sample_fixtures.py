@@ -73,6 +73,12 @@ def main() -> None:
         default=Path(os.getenv("DOCUPARSE_EXPORT_DUMP_DIR", "")) if os.getenv("DOCUPARSE_EXPORT_DUMP_DIR") else None,
         help="Optional directory where final API JSON export should be written per file.",
     )
+    parser.add_argument(
+        "--delete-after-dump",
+        action="store_true",
+        default=os.getenv("DOCUPARSE_DELETE_AFTER_DUMP", "").lower() in {"1", "true", "yes"},
+        help="Delete uploaded API documents after detail/export dumps are written. API mode only.",
+    )
     parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     summaries = extract_fixtures(args)
@@ -96,9 +102,19 @@ def extract_fixtures(args: argparse.Namespace) -> list[dict[str, Any]]:
             payload["processing_time_ms"] = int((time.monotonic() - started) * 1000)
             _write_fixture_set(args.fixture_dir, prefix, pdf_path.name, payload)
             summary = _summary(prefix, pdf_path.name, payload, ok=True)
+            cleanup_error = _cleanup_api_document_if_requested(payload, args)
+            if cleanup_error is not None:
+                summary["cleanup_deleted"] = False
+                summary["cleanup_error"] = cleanup_error
+            elif getattr(args, "delete_after_dump", False) and args.mode == "api":
+                summary["cleanup_deleted"] = True
             summaries.append(summary)
             if getattr(args, "progress", False):
                 print("[fixture] done {prefix} {filename}: id={document_id} type={document_type} profile={profile} doc={document_number} currency={currency} total={extracted_amount} items={line_items_count} item_sum={line_items_total} provider={ocr_provider_succeeded} fallback={ocr_fallback_used}".format(**summary), flush=True)
+                if summary.get("cleanup_deleted"):
+                    print(f"[fixture] cleanup deleted uploaded document {summary.get('document_id')}", flush=True)
+                if summary.get("cleanup_error"):
+                    print(f"[fixture] cleanup failed for {summary.get('document_id')}: {summary['cleanup_error']}", flush=True)
         except Exception as exc:
             payload = {
                 "ocr_text": "",
@@ -148,6 +164,31 @@ def _fetch_document_export(document_id: str, api_base: str) -> dict[str, Any]:
         return _json_request(urllib.request.Request(f"{api_base.rstrip('/')}/documents/{document_id}/export/json"))
     except Exception as exc:
         return {"export_fetch_error": str(exc), "document_id": document_id}
+
+
+def _cleanup_api_document_if_requested(payload: dict[str, Any], args: argparse.Namespace) -> str | None:
+    if not getattr(args, "delete_after_dump", False) or getattr(args, "mode", None) != "api":
+        return None
+    document_id = (payload.get("provider_metadata") or {}).get("api_document_id")
+    if not document_id:
+        return "missing api_document_id"
+    try:
+        _delete_document(document_id, args.api_base)
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def _delete_document(document_id: str, api_base: str) -> None:
+    request = urllib.request.Request(f"{api_base.rstrip('/')}/documents/{document_id}", method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            if response.status not in {200, 202, 204}:
+                body = response.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"HTTP {response.status} for {request.full_url}: {body}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} for {request.full_url}: {body}") from exc
 
 
 def _write_api_dumps(

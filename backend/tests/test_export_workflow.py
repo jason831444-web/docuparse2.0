@@ -1,7 +1,8 @@
 import json
+import csv
 from decimal import Decimal
 from datetime import date
-from io import BytesIO
+from io import BytesIO, StringIO
 from zipfile import ZipFile
 
 import pytest
@@ -137,6 +138,7 @@ def test_internal_transfer_export_treats_missing_amounts_as_policy_not_fake_tota
 
     assert payload["canonical_export"]["policy"]["amount_required"] is False
     assert payload["canonical_export"]["policy"]["party_required"] is False
+    assert payload["canonical_export"]["policy"]["review_required"] is True
     assert payload["canonical_export"]["document"]["currency"] is None
     assert payload["canonical_export"]["document"]["total"] == ""
     assert "inventory_movement_no_price" in csv
@@ -175,8 +177,36 @@ def test_credit_note_export_preserves_review_warning_and_related_document():
 
     assert payload["canonical_export"]["document"]["document_subtype"] == "credit_note"
     assert payload["canonical_export"]["policy"]["related_document_number"] == "DN-2026-0914-2F"
+    assert payload["canonical_export"]["policy"]["review_required"] is True
     assert "amount_direction_requires_review" in payload["canonical_export"]["policy"]["export_warning"]
     assert "return_or_credit_review" in csv
+
+
+def test_csv_export_does_not_copy_document_total_into_untrusted_line_amounts():
+    document = _document("INV-US-2026-0916-EX", "NeoFactory Korea", Decimal("650"))
+    document.currency = "USD"
+    document.workflow_metadata = {
+        "taxonomy": {
+            "document_subtype": "commercial_invoice",
+            "document_profile": "foreign_currency_document",
+            "document_profiles": ["foreign_currency_document", "priced_document"],
+        }
+    }
+    document.line_items = [
+        {
+            "item_name": "Linear Guide Rail HGW20",
+            "quantity": 10,
+            "unit": "EA",
+            "document_item_code": "HGW20-1000",
+            "validation_warnings": ["untrusted_ocr_amount"],
+        }
+    ]
+
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert rows[0]["합계금액"] == ""
+    assert rows[0]["document_total"] == "650"
+    assert rows[0]["export_policy"] == "foreign_currency_document"
 
 
 def test_excel_export_contains_taxonomy_columns_in_combined_sheet():
@@ -218,7 +248,8 @@ def test_export_includes_bbox_layout_candidate_summary_without_line_item_promoti
         "layout_debug": {
             "source": "bbox_table_reconstructor",
             "parser_integrated": False,
-            "candidate_count": 3,
+            "reconstructed_candidate_count": 3,
+            "candidate_count": 1,
             "confirmed_line_item_count": 2,
             "uncertain_count": 1,
             "bbox_review_flags": ["missing_item_name_from_ocr", "row_boundary_uncertain", "untrusted_ocr_amount"],
@@ -239,7 +270,7 @@ def test_export_includes_bbox_layout_candidate_summary_without_line_item_promoti
     csv = documents_to_csv([document])
 
     assert len(payload["canonical_export"]["line_items"]) == 2
-    assert payload["canonical_export"]["review_candidates"]["bbox_candidate_summary"]["candidate_count"] == 3
+    assert payload["canonical_export"]["review_candidates"]["bbox_candidate_summary"]["candidate_count"] == 1
     assert payload["canonical_export"]["review_candidates"]["bbox_candidate_summary"]["uncertain_count"] == 1
     assert payload["canonical_export"]["review_candidates"]["bbox_table_candidates"][0]["item_name"] is None
     assert "missing_item_name_from_ocr" in payload["canonical_export"]["review_candidates"]["bbox_table_candidates"][0]["review_flags"]

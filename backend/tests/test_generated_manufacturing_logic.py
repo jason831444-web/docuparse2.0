@@ -90,6 +90,40 @@ def test_tax_invoice_classification_customer_and_workflow_labels_are_invoice_spe
     assert "tax_document" in workflow.workflow_metadata["document_profiles"]
 
 
+def test_tax_invoice_taxonomy_uses_raw_text_when_cleaned_text_loses_header_signals():
+    raw_text = "\n".join([
+        "전자세금계산서",
+        "승인번호 20261202-0001-ADJ",
+        "계산서번호 INV-2026-1202-ADJ",
+        "작성일자 2026-12-02",
+        "공급자 성진전자부품",
+        "공급받는자 네오팩토리",
+        "No 품목명 문서품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "1 Cable Harness 500 CBL-HAR-500 500mm 10 EA 2200 22000 2200 24200",
+        "2 PCB Connector 12P CON-PCB-12P 12P 100 EA 300 30000 3000 33000",
+        "3 ROUND-ADJ 조정 - 1 EA -520 -520 -52 -572",
+        "공급가액 51480",
+        "세액 5148",
+        "합계금액 56628",
+    ])
+    cleaned_text = "\n".join([
+        "계산서번호 INV-2026-1202-ADJ",
+        "1 Cable Harness 500 CBL-HAR-500 500mm 10 EA 2200 22000 2200 24200",
+        "2 PCB Connector 12P CON-PCB-12P 12P 100 EA 300 30000 3000 33000",
+        "3 ROUND-ADJ 조정 - 1 EA -520 -520 -52 -572",
+        "합계금액 56628",
+    ])
+    parsed = DocumentParser().parse(raw_text, "synthetic_tax_invoice_negative_adjustment_variant.txt")
+    document = _document(parsed, "synthetic_tax_invoice_negative_adjustment_variant.txt", raw_text)
+    document.raw_text = raw_text
+
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, cleaned_text)
+
+    assert workflow.workflow_metadata["document_subtype"] == "tax_invoice"
+    assert workflow.workflow_metadata["document_profile"] == "tax_document"
+    assert "tax_document" in workflow.workflow_metadata["document_profiles"]
+
+
 def test_regular_us_invoice_is_not_overclassified_as_tax_invoice():
     text = "\n".join([
         "COMMERCIAL INVOICE",
@@ -154,6 +188,35 @@ def test_return_credit_signals_are_preserved_as_subtype_without_delivery_note_ov
     assert parsed.document_number == "RTN-2026-0919-011"
     assert workflow.workflow_metadata["document_subtype"] in {"return_note", "credit_note"}
     assert workflow.workflow_metadata["document_profile"] == "return_document"
+    assert workflow.workflow_metadata["review_required"] is True
+    assert "amount_direction_requires_review" in {
+        issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]
+    }
+
+
+def test_return_credit_with_related_document_on_next_line_keeps_return_number():
+    text = "\n".join([
+        "반품 / Credit Memo",
+        "문서번호: RTN-2026-1204-CR",
+        "공급업체: 대영부품",
+        "고객사: 오성테크",
+        "관련 원 납품서:",
+        "DN-2026-1202-RCV",
+        "No 반품품목 규격 수량 단위 단가 차감공급가액 세액 차감합계",
+        "1 베어링 하우징 100mm 1 EA 8000 8000 800 8800",
+        "2 S45C PIN 8X60 8x60 5 EA 600 3000 300 3300",
+        "차감 합계 12,100",
+    ])
+    parsed = DocumentParser().parse(text, "return_credit_related_next_line_variant.txt")
+    document = _document(parsed, "return_credit_related_next_line_variant.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+
+    assert parsed.document_type == DocumentType.general_document
+    assert parsed.document_number == "RTN-2026-1204-CR"
+    assert parsed.business_fields["related_document_number"] == "DN-2026-1202-RCV"
+    assert workflow.workflow_metadata["document_subtype"] == "credit_note"
+    assert workflow.workflow_metadata["document_profile"] == "return_document"
+    assert workflow.workflow_metadata["review_required"] is True
 
 
 def test_internal_transfer_taxonomy_suppresses_party_and_price_blockers():
@@ -180,8 +243,277 @@ def test_internal_transfer_taxonomy_suppresses_party_and_price_blockers():
     assert "missing_vendor_name" not in codes
     assert "missing_customer_name" not in codes
     assert "missing_price_or_total" not in codes
+
+
+def test_internal_transfer_inline_quantity_rows_are_no_price_inventory_document():
+    text = "\n".join([
+        "내부 자재 이동 요청서",
+        "문서번호: TRF-2026-1205-003",
+        "출고창고: 본사 원자재 창고",
+        "입고창고: 2공장 생산라인 A",
+        "No 품목명 내부품목코드 규격 요청수량 단위 비고",
+        "1 SUS304 2T PLATE M-PLT-SUS304-2T-1000X2000 1000x2000 3 EA 긴급",
+        "2 M8 육각 볼트 P-BOLT-M8-20-ZN M8x20 800 EA",
+        "3 SUS304 평와셔 M8 P-WASH-SUS304-M8 M8 800 EA",
+        "사내 이동 문서이며 거래처/금액 정보 없음",
+    ])
+    parsed = DocumentParser().parse(text, "internal_transfer_quantity_only_variant2.txt")
+    document = _document(parsed, "internal_transfer_quantity_only_variant2.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    codes = [issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]]
+
+    assert parsed.document_type == DocumentType.general_document
+    assert parsed.document_number == "TRF-2026-1205-003"
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) == 3
+    assert parsed.line_items[0]["item_name"] == "SUS304 2T PLATE"
+    assert parsed.line_items[0]["quantity"] == 3
+    assert parsed.line_items[1]["quantity"] == 800
+    assert workflow.workflow_metadata["document_subtype"] == "internal_transfer"
+    assert workflow.workflow_metadata["document_profile"] == "inventory_movement_document"
+    assert "no_price_document" in workflow.workflow_metadata["document_profiles"]
+    assert "missing_vendor_name" not in codes
+    assert "missing_customer_name" not in codes
+    assert "missing_price_or_total" not in codes
     assert document.extracted_amount is None
     assert document.currency is None
+    assert "공급업체 미확인" not in (workflow.workflow_summary or "")
+    assert "고객사 미확인" not in (workflow.workflow_summary or "")
+    assert "합계금액 미확인" not in (workflow.workflow_summary or "")
+    assert "내부" in (workflow.workflow_summary or "")
+    assert "금액/통화 정보 없이 수량 중심" in (workflow.workflow_summary or "")
+
+
+def test_internal_transfer_pipe_table_extracts_quantity_only_rows_without_amounts():
+    text = "\n".join([
+        "사업장간 자재 이동 요청서",
+        "문서번호",
+        "TRF-2026-1104-003",
+        "출고창고",
+        "본사 자재창고",
+        "입고창고",
+        "2공장 조립라인",
+        "No | 품목명 | 내부품목코드 | 규격 | 요청수량 | 단위 | 비고",
+        "1 | SUS304 2T PLATE | M-PLT-SUS304-2T-1000X2000 | 1000x2000 | 4 | EA | 라인 투입",
+        "2 | M8 육각 볼트 | P-BOLT-M8-20-ZN | M8x20 | 1200 | EA | 생산 보충",
+        "3 | SUS WASHER M8 | P-WASH-SUS304-M8 | M8 | 1200 | EA | 생산 보충",
+        "금액 정보 없음",
+    ])
+    parsed = DocumentParser().parse(text, "internal_transfer_variant.txt")
+    document = _document(parsed, "internal_transfer_variant.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    issue_codes = {issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]}
+
+    assert parsed.document_type == DocumentType.general_document
+    assert parsed.document_number == "TRF-2026-1104-003"
+    assert parsed.currency is None
+    assert parsed.extracted_amount is None
+    assert parsed.category == "internal_transfer"
+    assert len(parsed.line_items) == 3
+    assert [item["item_name"] for item in parsed.line_items] == [
+        "SUS304 2T PLATE",
+        "M8 육각 볼트",
+        "SUS WASHER M8",
+    ]
+    assert [item["quantity"] for item in parsed.line_items] == [4, 1200, 1200]
+    assert all(item.get("line_total") is None for item in parsed.line_items)
+    assert workflow.workflow_metadata["document_subtype"] == "internal_transfer"
+    assert "no_price_document" in workflow.workflow_metadata["document_profiles"]
+    assert "missing_price_or_total" not in issue_codes
+    assert "공급업체 미확인" not in (workflow.workflow_summary or "")
+    assert "고객사 미확인" not in (workflow.workflow_summary or "")
+    assert "합계금액 미확인" not in (workflow.workflow_summary or "")
+    assert "금액/통화 정보 없이 수량 중심" in (workflow.workflow_summary or "")
+
+
+def test_delivery_note_pipe_table_preserves_document_item_codes_without_amounts():
+    text = "\n".join([
+        "납품서",
+        "문서번호",
+        "DN-2026-1101-WH",
+        "납품일",
+        "2026-11-01",
+        "공급업체",
+        "대영부품",
+        "고객사",
+        "오성테크",
+        "입고창고",
+        "2공장 입고장",
+        "수령자",
+        "김현장",
+        "No | 품목명 | 문서품목코드 | 규격 | 발주수량 | 납품수량 | 잔량 | 단위",
+        "1 | 베어링 하우징 | BRG-H-100 | 100mm | 20 | 12 | 8 | EA",
+        "2 | S45C PIN 8X60 | PIN-S45C-8X60 | 8x60 | 50 | 50 | 0 | EA",
+        "3 | M8 볼트 SET | BOLT-SET-M8 | M8 | 100 | 80 | 20 | SET",
+        "금액 정보 없음",
+    ])
+    parsed = DocumentParser().parse(text, "delivery_note_no_price_variant.txt")
+    document = _document(parsed, "delivery_note_no_price_variant.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    issue_codes = {issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]}
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.document_number == "DN-2026-1101-WH"
+    assert parsed.currency is None
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 3
+    assert [item["document_item_code"] for item in parsed.line_items] == [
+        "BRG-H-100",
+        "PIN-S45C-8X60",
+        "BOLT-SET-M8",
+    ]
+    assert [item["quantity"] for item in parsed.line_items] == [12, 50, 80]
+    assert all(item.get("line_total") is None for item in parsed.line_items)
+    assert workflow.workflow_metadata.get("document_subtype") != "internal_transfer"
+    assert workflow.workflow_metadata["document_profile"] == "no_price_document"
+    assert "missing_document_item_code" not in issue_codes
+    assert "missing_price_or_total" not in issue_codes
+
+
+def test_delivery_note_with_receiving_warehouse_is_not_internal_transfer():
+    text = "\n".join([
+        "납품서",
+        "납품번호: DN-2026-1206-004",
+        "공급업체: 대영부품",
+        "고객사: 오성테크",
+        "입고창고: 2공장 입고장",
+        "수령자: 김현장",
+        "No | 품목명 | 문서품목코드 | 규격 | 발주수량 | 납품수량 | 잔량 | 단위",
+        "1 | 베어링 하우징 | BRG-H-100 | 100mm | 20 | 12 | 8 | EA",
+        "2 | S45C PIN 8X60 | PIN-S45C-8X60 | 8x60 | 50 | 50 | 0 | EA",
+        "금액 정보 없음",
+    ])
+
+    parsed = DocumentParser().parse(text, "delivery_note_receiving_warehouse_variant.txt")
+    document = _document(parsed, "delivery_note_receiving_warehouse_variant.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.category == "delivery_note"
+    assert parsed.currency is None
+    assert parsed.extracted_amount is None
+    assert workflow.workflow_metadata.get("document_subtype") != "internal_transfer"
+    assert workflow.workflow_metadata["document_profile"] == "no_price_document"
+
+
+def test_vertical_transaction_statement_table_skips_transaction_date_column():
+    text = "\n".join([
+        "거 래 명 세 서",
+        "공급업체",
+        "태성금속",
+        "고객사",
+        "세진기계",
+        "명세서번호",
+        "TS-2026-0913-MON",
+        "발행일",
+        "2026-09-13",
+        "전월이월",
+        "1,240,000",
+        "No",
+        "거래일",
+        "품목명",
+        "규격",
+        "수량",
+        "단위",
+        "공급가액",
+        "합계",
+        "1",
+        "09-03",
+        "SUS304 3T PLATE",
+        "1000x2000",
+        "3",
+        "EA",
+        "105,000",
+        "115,500",
+        "2",
+        "09-05",
+        "AL6061 환봉 10파이",
+        "3000mm",
+        "12",
+        "EA",
+        "216,000",
+        "237,600",
+        "3",
+        "09-08",
+        "M8 육각볼트",
+        "M8x20",
+        "2,000",
+        "EA",
+        "240,000",
+        "264,000",
+        "4",
+        "09-12",
+        "SUS WASHER M8",
+        "M8",
+        "2,000",
+        "EA",
+        "80,000",
+        "88,000",
+        "금월 합계",
+        "705,100",
+        "총 미수금",
+        "1,945,100",
+    ])
+    parsed = DocumentParser().parse(text, "transaction_statement_vertical.txt")
+    document = _document(parsed, "transaction_statement_vertical.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    issue_codes = {issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]}
+
+    assert parsed.document_type == DocumentType.transaction_statement
+    assert parsed.document_number == "TS-2026-0913-MON"
+    assert parsed.issue_date and parsed.issue_date.isoformat() == "2026-09-13"
+    assert parsed.extracted_amount == Decimal("705100")
+    assert len(parsed.line_items) == 4
+    assert [item["item_name"] for item in parsed.line_items] == [
+        "SUS304 3T PLATE",
+        "AL6061 환봉 10파이",
+        "M8 육각볼트",
+        "SUS WASHER M8",
+    ]
+    assert [item["quantity"] for item in parsed.line_items] == [3, 12, 2000, 2000]
+    assert [item["line_total"] for item in parsed.line_items] == [115500, 237600, 264000, 88000]
+    assert "statement_balance_summary_requires_review" in issue_codes
+    assert "missing_issue_date" not in issue_codes
+    assert workflow.workflow_metadata["review_required"] is True
+
+
+def test_return_credit_pipe_table_extracts_items_and_related_original_document():
+    text = "\n".join([
+        "반품 / 차감 / Credit Memo",
+        "문서번호",
+        "RTN-2026-1103-MIX",
+        "관련 원문서",
+        "DN-2026-1101-WH",
+        "공급업체",
+        "대영부품",
+        "고객사",
+        "오성테크",
+        "No | 반품품목 | 규격 | 수량 | 단위 | 단가 | 공급가액 | 세액 | 차감합계",
+        "1 | 베어링 하우징 | 100mm | 1 | EA | 8000 | 8000 | 800 | 8800",
+        "2 | S45C PIN 8X60 | 8x60 | 5 | EA | 600 | 3000 | 300 | 3300",
+        "차감 공급가액 11000",
+        "차감 세액 1100",
+        "차감 합계 12100",
+        "금액 방향은 회계 확인 필요",
+    ])
+    parsed = DocumentParser().parse(text, "return_credit_variant.txt")
+    document = _document(parsed, "return_credit_variant.txt", text)
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    issue_codes = {issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]}
+
+    assert parsed.document_type == DocumentType.general_document
+    assert parsed.document_number == "RTN-2026-1103-MIX"
+    assert parsed.business_fields["related_document_number"] == "DN-2026-1101-WH"
+    assert parsed.extracted_amount == Decimal("12100")
+    assert len(parsed.line_items) == 2
+    assert [item["item_name"] for item in parsed.line_items] == ["베어링 하우징", "S45C PIN 8X60"]
+    assert [item["line_total"] for item in parsed.line_items] == [8800, 3300]
+    assert workflow.workflow_metadata["document_subtype"] in {"return_note", "credit_note"}
+    assert workflow.workflow_metadata["document_profile"] == "return_document"
+    assert workflow.workflow_metadata["review_required"] is True
+    assert "amount_direction_requires_review" in issue_codes
+    assert "related_document_missing" not in issue_codes
 
 
 def test_malformed_amounts_create_review_issue_without_corrupting_numeric_fields():

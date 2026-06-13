@@ -109,6 +109,209 @@ def test_bbox_reconstructor_does_not_hallucinate_missing_fax_item_name():
     assert items[2]["supply_amount"] == 176000
 
 
+def test_bbox_reconstructor_excludes_tax_summary_and_bank_memo_candidates():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("품목명", 100, 100, 160, 120),
+        _candidate("수량", 300, 100, 340, 120),
+        _candidate("합계", 520, 100, 580, 120),
+        _candidate("M8 볼트", 100, 150, 170, 170),
+        _candidate("10", 300, 150, 325, 170),
+        _candidate("11000", 520, 150, 580, 170),
+        _candidate("부가세:", 420, 210, 480, 230),
+        _candidate("1100", 520, 210, 580, 230),
+        _candidate("Bank: Chase", 100, 250, 190, 270),
+        _candidate("Swift: CHASUS33", 220, 250, 340, 270),
+        _candidate("Memo: invoice number required", 360, 250, 560, 270),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "priced_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "M8 볼트"
+    source_text = " ".join(
+        token["text"]
+        for item in items
+        for token in item.get("source_tokens", [])
+    )
+    assert "부가세" not in source_text
+    assert "Bank" not in source_text
+    assert "Memo" not in source_text
+
+
+def test_bbox_reconstructor_excludes_customs_accounting_note_candidates():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("Description", 100, 100, 190, 120),
+        _candidate("Amount", 520, 100, 580, 120),
+        _candidate("Cable Harness 500", 100, 150, 230, 170),
+        _candidate("110.00", 520, 150, 580, 170),
+        _candidate("*통관/회계입력시원화환산기준일확인필요", 100, 230, 420, 250),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "foreign_currency_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "Cable Harness 500"
+    source_text = " ".join(
+        token["text"]
+        for item in items
+        for token in item.get("source_tokens", [])
+    )
+    assert "통관" not in source_text
+    assert "회계입력" not in source_text
+
+
+def test_bbox_reconstructor_excludes_tax_invoice_adjustment_note_and_approval_ocr_noise():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("품목명", 100, 100, 160, 120),
+        _candidate("문서품목코드", 240, 100, 340, 120),
+        _candidate("공급가액", 520, 100, 600, 120),
+        _candidate("Cable Harness 500", 100, 150, 230, 170),
+        _candidate("CBL-HAR-500", 240, 150, 340, 170),
+        _candidate("169477", 520, 150, 580, 170),
+        _candidate("원단위 철사조정금액포함", 100, 230, 310, 250),
+        _candidate("음수라인을임의삭제하지말것", 330, 230, 560, 250),
+        _candidate("담등", 700, 500, 740, 520),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "tax_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "Cable Harness 500"
+    source_text = " ".join(
+        token["text"]
+        for item in items
+        for token in item.get("source_tokens", [])
+    )
+    assert "음수라인" not in source_text
+    assert "담등" not in source_text
+
+
+def test_bbox_reconstructor_marks_amount_only_tax_candidates_as_uncertain():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("품목명", 100, 100, 160, 120),
+        _candidate("문서품목코드", 240, 100, 340, 120),
+        _candidate("공급가액", 520, 100, 600, 120),
+        _candidate("Cable Harness 500", 100, 150, 230, 170),
+        _candidate("CBL-HAR-500", 240, 150, 340, 170),
+        _candidate("169477", 520, 150, 580, 170),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "tax_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "Cable Harness 500"
+    assert items[0]["supply_amount"] == 169477
+    assert "quantity" in items[0]["missing_fields"]
+    assert "missing_quantity_from_ocr" in items[0]["review_flags"]
+    assert "row_boundary_uncertain" in items[0]["review_flags"]
+    assert "untrusted_ocr_amount" in items[0]["review_flags"]
+    assert "supply_amount" in items[0]["untrusted_fields"]
+
+
+def test_bbox_reconstructor_excludes_statement_summary_balance_rows():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("품목명", 100, 100, 160, 120),
+        _candidate("공급가액", 420, 100, 500, 120),
+        _candidate("SUS WASHER M8", 100, 150, 220, 170),
+        _candidate("80000", 420, 150, 480, 170),
+        _candidate("금월합계", 100, 220, 170, 240),
+        _candidate("705100", 420, 220, 480, 240),
+        _candidate("총미수금", 100, 260, 170, 280),
+        _candidate("1945100", 420, 260, 500, 280),
+        _candidate("*전월이월금액은품목합계에포함하지말것", 100, 300, 450, 320),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "priced_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "SUS WASHER M8"
+    source_text = " ".join(
+        token["text"]
+        for item in items
+        for token in item.get("source_tokens", [])
+    )
+    assert "금월합계" not in source_text
+    assert "총미수금" not in source_text
+    assert "전월이월" not in source_text
+
+
+def test_bbox_reconstructor_excludes_option_quote_summary_rows():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("품목명", 100, 100, 160, 120),
+        _candidate("수량", 300, 100, 340, 120),
+        _candidate("합계", 520, 100, 580, 120),
+        _candidate("스텐판2T 옵션A", 100, 150, 220, 170),
+        _candidate("1", 300, 150, 325, 170),
+        _candidate("100000", 520, 150, 590, 170),
+        _candidate("선택시합계", 100, 220, 190, 240),
+        _candidate("옵션별상이", 220, 220, 310, 240),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "priced_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "스텐판2T 옵션A"
+    source_text = " ".join(
+        token["text"]
+        for item in items
+        for token in item.get("source_tokens", [])
+    )
+    assert "선택시합계" not in source_text
+    assert "옵션별상이" not in source_text
+
+
+def test_bbox_reconstructor_excludes_quantity_correction_note_rows():
+    reconstructor = BBoxTableReconstructor()
+    candidates = [
+        _candidate("품목명", 100, 100, 160, 120),
+        _candidate("수량", 300, 100, 340, 120),
+        _candidate("합계", 520, 100, 580, 120),
+        _candidate("고정브라켓", 100, 150, 180, 170),
+        _candidate("10", 300, 150, 325, 170),
+        _candidate("11000", 520, 150, 580, 170),
+        _candidate("*1번수량은담당자수기정정:4에서5로변경", 100, 220, 390, 240),
+    ]
+
+    rows = reconstructor.group_rows_by_y(candidates)
+    columns = reconstructor.infer_columns(rows)
+    structured = reconstructor.map_tokens_to_columns(rows, columns)
+    items = reconstructor.build_line_item_candidates(structured, "priced_document")
+
+    assert len(items) == 1
+    assert items[0]["item_name"] == "고정브라켓"
+    source_text = " ".join(
+        token["text"]
+        for item in items
+        for token in item.get("source_tokens", [])
+    )
+    assert "수기정정" not in source_text
+    assert "4에서5로변경" not in source_text
+
+
 def test_bbox_reconstructor_does_not_create_amount_for_no_price_profile():
     reconstructor = BBoxTableReconstructor()
     candidates = [

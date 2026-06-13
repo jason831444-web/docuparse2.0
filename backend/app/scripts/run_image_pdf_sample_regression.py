@@ -27,15 +27,23 @@ def main() -> None:
     parser.add_argument("--progress", action="store_true")
     parser.add_argument(
         "--detail-dump-dir",
+        "--detail-output-dir",
         type=Path,
         default=Path(os.getenv("DOCUPARSE_DETAIL_DUMP_DIR", "")) if os.getenv("DOCUPARSE_DETAIL_DUMP_DIR") else None,
         help="Optional directory where final API document detail JSON should be written per file.",
     )
     parser.add_argument(
         "--export-dump-dir",
+        "--export-output-dir",
         type=Path,
         default=Path(os.getenv("DOCUPARSE_EXPORT_DUMP_DIR", "")) if os.getenv("DOCUPARSE_EXPORT_DUMP_DIR") else None,
         help="Optional directory where final API JSON export should be written per file.",
+    )
+    parser.add_argument(
+        "--delete-after-dump",
+        action="store_true",
+        default=os.getenv("DOCUPARSE_DELETE_AFTER_DUMP", "").lower() in {"1", "true", "yes"},
+        help="Delete uploaded API documents after detail/export dumps are written. API mode only.",
     )
     parser.add_argument(
         "--detail-prefixes",
