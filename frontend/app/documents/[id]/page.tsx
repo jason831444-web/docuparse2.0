@@ -61,6 +61,22 @@ function itemMasterStatusClass(status: string | null | undefined) {
   return "border-slate-200 bg-white text-slate-600";
 }
 
+const lineItemIdentityFields: Array<[keyof ManufacturingLineItem, string]> = [
+  ["item_name", "품목명"],
+  ["item_code", "문서 품목코드"],
+  ["internal_item_code", "내부 품목코드"],
+  ["specification", "규격"],
+];
+
+const lineItemAmountFields: Array<[keyof ManufacturingLineItem, string]> = [
+  ["quantity", "수량"],
+  ["unit", "단위"],
+  ["unit_price", "단가"],
+  ["supply_amount", "공급가액"],
+  ["tax_amount", "세액"],
+  ["line_total", "합계금액"],
+];
+
 function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string } {
   const businessFields = (document.workflow_metadata?.business_fields ?? {}) as Record<string, unknown>;
   const transactionDate = typeof businessFields.transaction_date === "string" ? businessFields.transaction_date : document.extracted_date;
@@ -207,6 +223,7 @@ function ErpReadinessBanner({
 
 function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
   const isPdf = document.mime_type === "application/pdf";
+  const previewUrl = isPdf ? `${document.file_url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH` : document.file_url;
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -222,7 +239,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
           </div>
         ) : isPdf ? (
           <iframe
-            src={document.file_url}
+            src={previewUrl}
             title={document.original_filename}
             className="h-[72rem] w-full rounded-lg border bg-white"
           />
@@ -243,6 +260,52 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         />
       </CardContent>
     </Card>
+  );
+}
+
+function LineItemField({
+  index,
+  field,
+  label,
+  item,
+  low,
+  blockingIssues,
+  infoIssues,
+  onChange,
+}: {
+  index: number;
+  field: keyof ManufacturingLineItem;
+  label: string;
+  item: ManufacturingLineItem;
+  low: boolean;
+  blockingIssues: ReturnType<typeof blockingReviewIssues>;
+  infoIssues: ReturnType<typeof informationalReviewIssues>;
+  onChange: (index: number, field: keyof ManufacturingLineItem, value: string) => void;
+}) {
+  return (
+    <label className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
+      {label}
+      <Input
+        aria-label={`${index + 1}행 ${label}`}
+        className={low ? "border-amber-400 bg-amber-50" : ""}
+        value={String(item?.[field] ?? "")}
+        onChange={(event) => onChange(index, field, event.target.value)}
+      />
+      {blockingIssues.length || infoIssues.length ? (
+        <div className="flex flex-wrap gap-1">
+          {blockingIssues.map((issue) => (
+            <Badge key={`${issue.code}-${issue.message_ko}`} className="border-amber-300 bg-amber-50 text-[11px] text-amber-800">
+              {numericLineItemFields.has(field) ? "확인 필요" : issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
+            </Badge>
+          ))}
+          {infoIssues.map((issue) => (
+            <Badge key={`${issue.code}-${issue.message_ko}`} variant="outline" className="bg-white text-[11px] text-slate-600">
+              {issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
+            </Badge>
+          ))}
+        </div>
+      ) : low ? <p className="text-[11px] text-amber-700">확인 필요</p> : null}
+    </label>
   );
 }
 
@@ -576,6 +639,26 @@ export default function DocumentDetailPage() {
   const reviewIssueProgress = reviewIssueProgressCounts(reviewMetadata, blockingIssues.length);
   const openIssueCount = reviewIssueProgress.open;
   const resolvedIssueCount = reviewIssueProgress.resolved;
+  function lineItemFieldState(index: number, field: keyof ManufacturingLineItem) {
+    const itemCode = `item_${index + 1}`;
+    const structuredLowCodes = [
+      field === "item_code" ? `missing_item_code:${itemCode}` : null,
+      field === "internal_item_code" ? `item_master_match_required:${itemCode}` : null,
+      field === "internal_item_code" ? `item_master_unmatched:${itemCode}` : null,
+      field === "internal_item_code" ? "item_matching_skipped" : null,
+      field === "item_name" ? `missing_item_name:${itemCode}` : null,
+      field === "quantity" ? `missing_quantity:${itemCode}` : null,
+      field === "unit_price" || field === "line_total" ? `missing_price_or_total:${itemCode}` : null,
+    ].filter(Boolean);
+    const fieldBlockingIssues = blockingIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
+    const fieldInfoIssues = infoIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
+    const low =
+      fieldBlockingIssues.length > 0 ||
+      structuredLowCodes.some((code) => lowConfidenceFields.includes(code as string)) ||
+      lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) ||
+      (field === "line_total" && lowConfidenceFields.includes("missing_line_items"));
+    return { fieldBlockingIssues, fieldInfoIssues, low };
+  }
   const exportNotice = document.review_required && !reviewMetadata.approved
     ? "검토 필요 상태입니다. 내보내기 파일에는 review_required와 경고 정보가 함께 포함됩니다."
     : isConfirmed
@@ -885,111 +968,97 @@ export default function DocumentDetailPage() {
                   <Button type="button" variant="outline" size="sm" onClick={addLineItem}>품목 추가</Button>
                 </div>
                 {lineItems.length ? (
-                  <div className="overflow-x-auto rounded-lg border">
-                    <table className="min-w-[1180px] w-full text-sm">
-                      <thead className="bg-slate-50 text-left text-xs text-muted-foreground">
-                        <tr>
-                          {["품목명", "문서 품목코드", "내부 품목코드", "규격", "수량", "단위", "단가", "공급가액", "세액", "합계금액", "매칭 상태", ""].map((header) => (
-                            <th key={header} className="px-2 py-2 font-medium">{header}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {lineItems.map((item, index) => (
-                          <tr key={index} className="border-t">
-                            {([
-                              ["item_name", "품목명"],
-                              ["item_code", "문서 품목코드"],
-                              ["internal_item_code", "내부 품목코드"],
-                              ["specification", "규격"],
-                              ["quantity", "수량"],
-                              ["unit", "단위"],
-                              ["unit_price", "단가"],
-                              ["supply_amount", "공급가액"],
-                              ["tax_amount", "세액"],
-                              ["line_total", "합계금액"],
-                            ] as Array<[keyof ManufacturingLineItem, string]>).map(([field, label]) => {
-                              const itemCode = `item_${index + 1}`;
-                              const structuredLowCodes = [
-                                field === "item_code" ? `missing_item_code:${itemCode}` : null,
-                                field === "internal_item_code" ? `item_master_match_required:${itemCode}` : null,
-                                field === "internal_item_code" ? `item_master_unmatched:${itemCode}` : null,
-                                field === "internal_item_code" ? "item_matching_skipped" : null,
-                                field === "item_name" ? `missing_item_name:${itemCode}` : null,
-                                field === "quantity" ? `missing_quantity:${itemCode}` : null,
-                                field === "unit_price" || field === "line_total" ? `missing_price_or_total:${itemCode}` : null,
-                              ].filter(Boolean);
-                              const fieldBlockingIssues = blockingIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
-                              const fieldInfoIssues = infoIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
-                              const low =
-                                fieldBlockingIssues.length > 0 ||
-                                structuredLowCodes.some((code) => lowConfidenceFields.includes(code as string)) ||
-                                lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) ||
-                                (field === "line_total" && lowConfidenceFields.includes("missing_line_items"));
+                  <div className="grid gap-4">
+                    {lineItems.map((item, index) => (
+                      <div key={index} className="rounded-xl border bg-slate-50/50 p-4">
+                        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-950">품목 {index + 1}</p>
+                            <p className="mt-1 break-words text-xs text-muted-foreground">{String(item.item_name || item.document_item_code || item.item_code || "품목명 미확인")}</p>
+                          </div>
+                          <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>삭제</Button>
+                        </div>
+
+                        <div className="grid gap-3">
+                          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            {lineItemIdentityFields.map(([field, label]) => {
+                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(index, field);
                               return (
-                                <td key={field} className="px-2 py-2 align-top">
-                                  <Input
-                                    aria-label={`${index + 1}행 ${label}`}
-                                    className={low ? "border-amber-400 bg-amber-50" : ""}
-                                    value={String(item?.[field] ?? "")}
-                                    onChange={(event) => updateLineItem(index, field, event.target.value)}
-                                  />
-                                  {fieldBlockingIssues.length || fieldInfoIssues.length ? (
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {fieldBlockingIssues.map((issue) => (
-                                        <Badge key={`${issue.code}-${issue.message_ko}`} className="border-amber-300 bg-amber-50 text-[11px] text-amber-800">
-                                          {numericLineItemFields.has(field) ? "확인 필요" : issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
-                                        </Badge>
-                                      ))}
-                                      {fieldInfoIssues.map((issue) => (
-                                        <Badge key={`${issue.code}-${issue.message_ko}`} variant="outline" className="bg-white text-[11px] text-slate-600">
-                                          {issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
-                                        </Badge>
-                                      ))}
-                                    </div>
-                                  ) : low ? <p className="mt-1 text-[11px] text-amber-700">확인 필요</p> : null}
-                                </td>
+                                <LineItemField
+                                  key={field}
+                                  index={index}
+                                  field={field}
+                                  label={label}
+                                  item={item}
+                                  low={low}
+                                  blockingIssues={fieldBlockingIssues}
+                                  infoIssues={fieldInfoIssues}
+                                  onChange={updateLineItem}
+                                />
                               );
                             })}
-                            <td className="px-2 py-2 align-top">
-                              <Badge variant="outline" className={itemMasterStatusClass(item.item_master_match_status)}>
-                                {itemMasterStatusLabel(item.item_master_match_status)}
-                              </Badge>
-                              {item.item_master_match_confidence ? (
-                                <p className="mt-1 text-[11px] text-muted-foreground">신뢰도 {Math.round(Number(item.item_master_match_confidence) * 100)}%</p>
-                              ) : null}
-                              {item.item_master_candidates?.length ? (
-                                <div className="mt-2 grid gap-1">
-                                  <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                                    <input
-                                      type="checkbox"
-                                      checked={aliasSaveRows[index] ?? true}
-                                      onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [index]: event.target.checked })}
-                                    />
-                                    이 선택을 별칭으로 저장
-                                  </label>
-                                  {item.item_master_candidates.slice(0, 3).map((candidate) => (
-                                    <div key={candidate.internal_item_code} className="rounded-md border bg-white p-2 text-xs">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <span className="font-semibold">{candidate.internal_item_code}</span>
-                                        <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(index, candidate)}>
-                                          이 품목으로 선택
-                                        </Button>
+                          </div>
+
+                          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                            {lineItemAmountFields.map(([field, label]) => {
+                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(index, field);
+                              return (
+                                <LineItemField
+                                  key={field}
+                                  index={index}
+                                  field={field}
+                                  label={label}
+                                  item={item}
+                                  low={low}
+                                  blockingIssues={fieldBlockingIssues}
+                                  infoIssues={fieldInfoIssues}
+                                  onChange={updateLineItem}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 rounded-lg border bg-white p-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className={itemMasterStatusClass(item.item_master_match_status)}>
+                              {itemMasterStatusLabel(item.item_master_match_status)}
+                            </Badge>
+                            {item.item_master_match_confidence ? (
+                              <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(item.item_master_match_confidence) * 100)}%</span>
+                            ) : null}
+                          </div>
+                          {item.item_master_candidates?.length ? (
+                            <div className="mt-3 grid gap-2">
+                              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={aliasSaveRows[index] ?? true}
+                                  onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [index]: event.target.checked })}
+                                />
+                                이 선택을 별칭으로 저장
+                              </label>
+                              <div className="grid gap-2">
+                                {item.item_master_candidates.slice(0, 3).map((candidate) => (
+                                  <div key={candidate.internal_item_code} className="rounded-lg border bg-white p-3 text-xs">
+                                    <div className="flex flex-wrap items-start justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <p className="break-words font-semibold text-slate-950">{candidate.internal_item_code}</p>
+                                        <p className="mt-1 break-words text-muted-foreground">{candidate.item_name} · {candidate.spec || "규격 없음"} · {candidate.unit || "단위 없음"}</p>
+                                        <p className="mt-1 text-muted-foreground">후보 신뢰도 {Math.round(Number(candidate.score) * 100)}%</p>
                                       </div>
-                                      <p className="mt-1 text-muted-foreground">{candidate.item_name} · {candidate.spec || "규격 없음"} · {candidate.unit || "단위 없음"}</p>
-                                      <p className="mt-1 text-muted-foreground">후보 신뢰도 {Math.round(Number(candidate.score) * 100)}%</p>
+                                      <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(index, candidate)}>
+                                        선택
+                                      </Button>
                                     </div>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </td>
-                            <td className="px-2 py-2 align-top">
-                              <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>삭제</Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
