@@ -217,14 +217,14 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
       </CardHeader>
       <CardContent className="space-y-4">
         {isImage ? (
-          <div className="relative h-[48rem] max-h-[78vh] w-full rounded-lg border bg-white">
+          <div className="relative h-[72rem] w-full rounded-lg border bg-white">
             <Image src={document.file_url} alt={document.original_filename} fill unoptimized className="object-contain" />
           </div>
         ) : isPdf ? (
           <iframe
             src={document.file_url}
             title={document.original_filename}
-            className="h-[48rem] max-h-[78vh] w-full rounded-lg border bg-white"
+            className="h-[72rem] w-full rounded-lg border bg-white"
           />
         ) : (
           <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center">
@@ -876,63 +876,6 @@ export default function DocumentDetailPage() {
                 </p>
               </section>
 
-              <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">
-                <div>
-                  <p className="text-sm font-semibold">문서 기본 정보</p>
-                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 날짜, 금액을 ERP 입력 기준으로 수정하세요.</p>
-                </div>
-                <label className="grid gap-2 text-sm font-medium">
-                  제목
-                  <Input {...form.register("title")} />
-                </label>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="grid gap-2 text-sm font-medium">
-                    {fieldLabels.issueDate}
-                    <Input type="date" {...form.register("issue_date")} />
-                    <span className="text-xs font-normal text-muted-foreground">캘린더에 표시됨</span>
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium">
-                    {fieldLabels.dueDate}
-                    <Input type="date" {...form.register("due_date")} />
-                    <span className="text-xs font-normal text-muted-foreground">알림/일정 카드에 반영됨</span>
-                  </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="grid gap-2 text-sm font-medium">
-                    공급업체
-                    <Input {...form.register("vendor_name")} />
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium">
-                    고객사
-                    <Input {...form.register("customer_name")} />
-                  </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="grid gap-2 text-sm font-medium">
-                    {fieldLabels.documentNumber}
-                    <Input {...form.register("document_number")} />
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium">
-                    합계금액
-                    <Input type="number" min="0" step="0.01" {...form.register("extracted_amount")} />
-                  </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <label className="grid gap-2 text-sm font-medium">
-                    공급가액
-                    <Input type="number" min="0" step="0.01" {...form.register("subtotal")} />
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium">
-                    세액
-                    <Input type="number" min="0" step="0.01" {...form.register("tax")} />
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium">
-                    통화
-                    <Input placeholder="KRW" {...form.register("currency")} />
-                  </label>
-                </div>
-              </section>
-
               <section className="grid gap-4 rounded-lg border bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -1053,6 +996,63 @@ export default function DocumentDetailPage() {
                     품목 정보가 추출되지 않았습니다. 사람이 확인해야 합니다.
                   </div>
                 )}
+              </section>
+
+              <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">
+                <div>
+                  <p className="text-sm font-semibold">문서 기본 정보</p>
+                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 날짜, 금액을 ERP 입력 기준으로 수정하세요.</p>
+                </div>
+                <label className="grid gap-2 text-sm font-medium">
+                  제목
+                  <Input {...form.register("title")} />
+                </label>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    {fieldLabels.issueDate}
+                    <Input type="date" {...form.register("issue_date")} />
+                    <span className="text-xs font-normal text-muted-foreground">캘린더에 표시됨</span>
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    {fieldLabels.dueDate}
+                    <Input type="date" {...form.register("due_date")} />
+                    <span className="text-xs font-normal text-muted-foreground">알림/일정 카드에 반영됨</span>
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    공급업체
+                    <Input {...form.register("vendor_name")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    고객사
+                    <Input {...form.register("customer_name")} />
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    {fieldLabels.documentNumber}
+                    <Input {...form.register("document_number")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    합계금액
+                    <Input type="number" min="0" step="0.01" {...form.register("extracted_amount")} />
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <label className="grid gap-2 text-sm font-medium">
+                    공급가액
+                    <Input type="number" min="0" step="0.01" {...form.register("subtotal")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    세액
+                    <Input type="number" min="0" step="0.01" {...form.register("tax")} />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    통화
+                    <Input placeholder="KRW" {...form.register("currency")} />
+                  </label>
+                </div>
               </section>
 
               <section className="grid gap-4 rounded-lg border bg-white p-4">
