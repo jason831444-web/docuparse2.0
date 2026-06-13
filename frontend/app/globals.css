@@ -36,7 +36,7 @@ body {
 }
 
 .shell {
-  width: min(1320px, calc(100% - 32px));
+  width: calc(100% - clamp(16px, 1.4vw, 28px));
   margin: 0 auto;
 }
 
