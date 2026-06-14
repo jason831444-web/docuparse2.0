@@ -43,11 +43,12 @@ export PADDLEOCR_VL_GGUF_HOST_MODEL_DIR=/root/docuparse_models/paddleocr_vl_1_6_
 docker compose --profile backend --profile vl up -d vl-worker-gguf
 ```
 
-Check the local server:
+Check the compose worker from Docker, because it is intentionally not published
+on the host network:
 
 ```bash
-curl -s http://127.0.0.1:8080/health
-curl -s http://127.0.0.1:8080/v1/models
+docker compose ps vl-worker-gguf
+docker inspect --format='{{json .State.Health}}' docuparse20-vl-worker-gguf-1
 ```
 
 The backend reaches it through:
@@ -56,17 +57,17 @@ The backend reaches it through:
 http://vl-worker-gguf:8080/v1
 ```
 
-## Smoke 08 First
+## Server-Isolated Smoke 08 First
 
-Run only the first smoke sample:
+The GGUF inference smoke must be run on Linux only. The helper below refuses to
+run on macOS, starts a host-local `llama-server` on `127.0.0.1:8081`, optionally
+stops the compose candidate worker to free memory, and restores it with the same
+model mount after the smoke.
 
 ```bash
 cd /root/docuparse2.0
-PYTHONPATH=backend PADDLEOCR_VL_GGUF_MODEL_DIR=/root/docuparse_models/paddleocr_vl_1_6_gguf \
-PADDLEOCR_VL_GGUF_SERVER_URL=http://127.0.0.1:8080/v1 \
-timeout 600s python3 -m app.scripts.smoke_paddleocr_vl_gguf \
-  --sample samples/pdf_samples/docuparse_image_based_pdf_samples_10/08_image_quote_missing_quantity.pdf \
-  --output-dir /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke
+PADDLEOCR_VL_GGUF_MODEL_DIR=/root/docuparse_models/paddleocr_vl_1_6_gguf \
+scripts/run_paddleocr_vl_gguf_server_smoke.sh
 ```
 
 Expected validation terms include:
@@ -78,6 +79,25 @@ Expected validation terms include:
 - `473,000`
 
 The first item quantity is blank in the source PDF and should stay blank/null.
+
+Manual visual verification should be provided with `MANUAL_VISUAL_CHECK_FILE`
+when promoting a smoke result beyond quick diagnostics:
+
+```bash
+MANUAL_VISUAL_CHECK_FILE=/tmp/08_manual_visual_check.json \
+PADDLEOCR_VL_GGUF_MODEL_DIR=/root/docuparse_models/paddleocr_vl_1_6_gguf \
+scripts/run_paddleocr_vl_gguf_server_smoke.sh
+```
+
+For targeted follow-up samples, override `SAMPLE`, `OUTPUT_DIR`, and optionally
+`PADDLEOCR_VL_GGUF_RENDER_SCALE`:
+
+```bash
+SAMPLE=samples/pdf_samples/docuparse_realistic_photographed_pdf_samples/pdfs/21_photo_fax_po_misaligned_amounts.pdf \
+PADDLEOCR_VL_GGUF_RENDER_SCALE=3.0 \
+PADDLEOCR_VL_GGUF_MODEL_DIR=/root/docuparse_models/paddleocr_vl_1_6_gguf \
+scripts/run_paddleocr_vl_gguf_server_smoke.sh
+```
 
 ## Enabling Candidate Health
 
