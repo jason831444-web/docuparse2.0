@@ -1258,6 +1258,19 @@ class DocumentParser:
                     if warning not in warnings:
                         warnings.append(warning)
                 item["validation_warnings"] = warnings
+            for item in safe_items:
+                if item.get("quantity") in (None, "", []) or item.get("unit_price") in (None, "", []):
+                    continue
+                raw_window = self._item_context_window(item, lines)
+                if self._numeric_value_appears_in_text(item["quantity"], raw_window) and self._numeric_value_appears_in_text(item["unit_price"], raw_window):
+                    continue
+                item.pop("quantity", None)
+                item.pop("unit_price", None)
+                warnings = list(item.get("validation_warnings") or [])
+                for warning in ["missing_quantity", "ocr_quantity_price_unverified"]:
+                    if warning not in warnings:
+                        warnings.append(warning)
+                item["validation_warnings"] = warnings
         return safe_items
 
     def _numeric_value_appears_in_text(self, value: Any, text: str) -> bool:
