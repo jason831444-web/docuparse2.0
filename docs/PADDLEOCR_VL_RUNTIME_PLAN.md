@@ -80,6 +80,10 @@ Current strict validation issue codes:
 - `vl_candidate_missing_row_anchor`: a visually verified item/row anchor from
   the source PDF is missing in VL output. This catches fax/photo row recall loss
   without promoting missing rows into confirmed ERP data.
+- `vl_candidate_missing_row_fragment`: a visually verified row text fragment is
+  missing or degraded in VL output.
+- `vl_candidate_missing_row_cell`: a visually verified row cell is missing from
+  its output row, even when the row anchor itself appears.
 - `vl_candidate_hallucinated_blank_quantity`: a blank source quantity appears
   to have been filled by VL output. This is a FAIL condition.
 - `vl_candidate_exchange_rate_as_amount`: an exchange-rate note appears in a

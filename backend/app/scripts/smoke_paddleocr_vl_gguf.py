@@ -233,6 +233,55 @@ def _structured_manual_issues(text: str, manual_visual_check: dict[str, Any]) ->
                 }
             )
 
+    for fragment in checks.get("expected_row_fragments") or []:
+        if isinstance(fragment, dict):
+            fragment_text = str(fragment.get("text") or fragment.get("contains") or "").strip()
+            label = str(fragment.get("label") or fragment_text).strip()
+        else:
+            fragment_text = str(fragment or "").strip()
+            label = fragment_text
+        if fragment_text and fragment_text not in text:
+            issues.append(
+                {
+                    "code": "vl_candidate_missing_row_fragment",
+                    "severity": "warn",
+                    "expected_value": fragment_text,
+                    "label": label,
+                    "message": "A visually verified row fragment from the source PDF is missing or degraded in the VL output.",
+                }
+            )
+
+    for row_check in checks.get("expected_row_cells") or []:
+        if not isinstance(row_check, dict):
+            continue
+        row_contains = str(row_check.get("row_contains") or "").strip()
+        expected_cells = [str(cell).strip() for cell in row_check.get("cells") or [] if str(cell).strip()]
+        if not row_contains or not expected_cells:
+            continue
+        line = _line_containing(text, row_contains)
+        if line is None:
+            issues.append(
+                {
+                    "code": "vl_candidate_missing_row_anchor",
+                    "severity": "warn",
+                    "expected_value": row_contains,
+                    "message": "A visually verified row anchor from the source PDF is missing in the VL output.",
+                }
+            )
+            continue
+        for cell in expected_cells:
+            if cell not in line:
+                issues.append(
+                    {
+                        "code": "vl_candidate_missing_row_cell",
+                        "severity": "warn",
+                        "row_contains": row_contains,
+                        "expected_value": cell,
+                        "line": line,
+                        "message": "A visually verified row cell from the source PDF is missing from its VL output row.",
+                    }
+                )
+
     for guard in checks.get("blank_quantity_rows") or []:
         row_contains = str(guard.get("row_contains") or "").strip()
         unit = str(guard.get("unit") or "").strip()

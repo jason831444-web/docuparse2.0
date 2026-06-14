@@ -245,6 +245,8 @@ export function vlCandidateIssueLabel(value?: string | null) {
     vl_candidate_missing_line_amount: "품목 금액 누락",
     vl_candidate_missing_document_total: "문서 합계 누락",
     vl_candidate_missing_row_anchor: "품목 행 누락",
+    vl_candidate_missing_row_fragment: "품목 행 텍스트 불완전",
+    vl_candidate_missing_row_cell: "품목 행 값 누락",
     vl_candidate_hallucinated_blank_quantity: "빈 수량 추정 위험",
     vl_candidate_exchange_rate_as_amount: "환율/금액 혼동 위험",
     vl_candidate_missing_required_value: "필수 원문 값 누락",

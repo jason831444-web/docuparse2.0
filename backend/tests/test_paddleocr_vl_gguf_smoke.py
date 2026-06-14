@@ -160,6 +160,31 @@ def test_gguf_manual_check_flags_missing_visually_verified_row_anchor():
     assert result["issue_codes"].count("vl_candidate_missing_row_anchor") == 2
 
 
+def test_gguf_manual_check_flags_degraded_row_fragment_and_cell():
+    text = (
+        "FAX-PO-2026-0921\n"
+        "3 M8 볼트/와서 SEM8 1,000 1,000 SET 160 160,000 16,000 176,000"
+    )
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "structured_checks": {
+            "expected_row_fragments": [
+                {"text": "M8 볼트 / 와셔 SET", "label": "row 3 item name"}
+            ],
+            "expected_row_cells": [
+                {"row_contains": "M8", "cells": ["와셔", "M8", "SET", "176,000"]}
+            ],
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "warn"
+    assert "vl_candidate_missing_row_fragment" in result["issue_codes"]
+    assert "vl_candidate_missing_row_cell" in result["issue_codes"]
+
+
 def test_gguf_smoke_report_builds_candidate_only_docuparse_metadata():
     report = {
         "provider_available_candidate": False,
