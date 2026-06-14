@@ -120,6 +120,22 @@ def extract_text(output: Any) -> str:
     return "\n".join(lines)
 
 
+def _json_safe(value: Any, *, depth: int = 0) -> Any:
+    if depth > 6:
+        return repr(value)[:300]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    if isinstance(value, dict):
+        return {str(key): _json_safe(nested, depth=depth + 1) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(nested, depth=depth + 1) for nested in value[:200]]
+    return repr(value)[:1000]
+
+
 def summarize_output(output: Any, *, max_items: int = 80) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
     for index, item in enumerate(output or []):
@@ -133,7 +149,7 @@ def summarize_output(output: Any, *, max_items: int = 80) -> list[dict[str, Any]
             if isinstance(value, str):
                 entry[attr] = value[:1000]
             else:
-                entry[attr] = value
+                entry[attr] = _json_safe(value)
         summary.append(entry)
     return summary
 
@@ -245,7 +261,7 @@ def _render_first_page(sample: Path, output_dir: Path, *, scale: float = 2.0) ->
 def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "paddleocr_vl_gguf_smoke_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2),
+        json.dumps(report, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
     lines = [
@@ -263,7 +279,7 @@ def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
         "## Manual Visual Check",
         "",
         "```json",
-        json.dumps(report.get("manual_visual_check") or {}, ensure_ascii=False, indent=2),
+        json.dumps(report.get("manual_visual_check") or {}, ensure_ascii=False, indent=2, default=str),
         "```",
         "",
         "## Output Preview",
@@ -401,7 +417,7 @@ def main() -> None:
         expected_terms=args.expected_term,
         render_scale=args.render_scale,
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     raise SystemExit(0 if report.get("ok") else 1)
 
 
