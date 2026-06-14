@@ -599,6 +599,14 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
                 "message": str(limitation),
             }
         )
+    if not manual_visual_check.get("pdf_opened_and_visually_checked"):
+        issues.append(
+            {
+                "code": "manual_visual_check_not_performed",
+                "severity": "fail",
+                "message": "The source PDF/rendered page was not visually checked, so the VL smoke cannot be promoted.",
+            }
+        )
     severity = "pass"
     if any(issue.get("severity") == "fail" for issue in issues):
         severity = "fail"

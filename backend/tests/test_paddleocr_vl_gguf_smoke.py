@@ -117,6 +117,24 @@ def test_gguf_manual_visual_check_template_requires_human_visual_confirmation():
     assert reason == "manual_visual_check_failed"
 
 
+def test_gguf_manual_check_marks_unopened_pdf_as_failure():
+    manual = {
+        "pdf_opened_and_visually_checked": False,
+        "expected_from_pdf": {
+            "document_number": "QT-2026-0808-009",
+            "total_amount": "473,000",
+        },
+        "required_vl_output_values": ["QT-2026-0808-009", "473,000"],
+    }
+
+    result = _evaluate_manual_visual_check("QT-2026-0808-009\n총액 473,000", manual)
+
+    assert result is not None
+    assert result["ok"] is False
+    assert result["severity"] == "fail"
+    assert "manual_visual_check_not_performed" in result["issue_codes"]
+
+
 def test_gguf_manual_visual_check_template_writer(tmp_path):
     output = tmp_path / "manual" / "21.json"
 
