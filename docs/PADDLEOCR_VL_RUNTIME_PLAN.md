@@ -40,7 +40,7 @@ paddleocr_vl_official_full = memory_blocked_on_8gb_cpu
 
 ## GGUF Server Smoke Result
 
-The official GGUF path succeeded on the same server:
+The official GGUF path succeeded on the same server for the first gated sample:
 
 - repo: `PaddlePaddle/PaddleOCR-VL-1.6-GGUF`
 - model path: `/root/docuparse_models/paddleocr_vl_1_6_gguf`
@@ -57,6 +57,19 @@ The official GGUF path succeeded on the same server:
 The output contained real document terms including `QT-2026-0808-009`,
 `고정 플레이트`, `스테인리스`, and `473,000`, and it preserved the first
 row quantity as blank.
+
+Follow-up smoke results show why the GGUF path must remain candidate-only for
+now:
+
+| Sample | Result | Product decision |
+| --- | --- | --- |
+| `08_image_quote_missing_quantity.pdf` | PASS. Readable output, document number and total present, blank quantity preserved. | Good candidate evidence; still not confirmed ERP truth. |
+| `16_real_commercial_invoice_exchange_rate.pdf` | WARN. Readable output, invoice number/rows/total present, exchange rate not used as total. Row amount column was not fully preserved. | Candidate evidence only; row-level ERP export still needs existing parser/review guardrails. |
+| `21_photo_fax_po_misaligned_amounts.pdf` | WARN. Readable output and three row candidates, but total `418,000` is missing and row 3 text/columns are unstable. | Review candidate only; do not mark provider available from this sample. |
+
+The smoke report now gates `provider_available_candidate` on both readable VL
+output and a manual visual check severity of `pass`. A readable output with
+manual severity `warn` remains unavailable for provider promotion.
 
 ## Environment
 
@@ -123,6 +136,8 @@ Health distinguishes:
 2. `16_real_commercial_invoice_exchange_rate.pdf`
    - Verify 3 rows.
    - Verify exchange rate is not treated as total.
+   - Verify row amount values are present before treating it as a pass.
 3. `21_photo_fax_po_misaligned_amounts.pdf`
    - Verify row evidence improves or remains review candidate only.
+   - Missing total or unstable row 3 keeps the provider candidate unavailable.
 4. Only after those pass, compare against the 34-PDF regression set.
