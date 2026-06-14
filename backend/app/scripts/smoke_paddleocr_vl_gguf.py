@@ -41,6 +41,76 @@ EXPECTED_TERMS_BY_SAMPLE = {
     ],
 }
 
+MANUAL_VISUAL_CHECK_TEMPLATES_BY_SAMPLE: dict[str, dict[str, Any]] = {
+    "08_image_quote_missing_quantity.pdf": {
+        "pdf_opened_and_visually_checked": False,
+        "expected_from_pdf": {
+            "document_number": "QT-2026-0808-009",
+            "total_amount": "473,000",
+            "currency": "KRW",
+            "row_count": "2",
+            "special_cases": "first item quantity is visually blank",
+        },
+        "required_vl_output_values": ["QT-2026-0808-009", "473,000"],
+        "structured_checks": {
+            "blank_quantity_rows": [
+                {"row_contains": "고정 플레이트", "spec": "120x60x5T", "unit": "EA"},
+            ],
+        },
+        "hallucinations_found": [],
+        "dangerous_errors_found": [],
+        "notes": "Set pdf_opened_and_visually_checked=true only after opening the rendered PDF/image.",
+    },
+    "16_real_commercial_invoice_exchange_rate.pdf": {
+        "pdf_opened_and_visually_checked": False,
+        "expected_from_pdf": {
+            "document_number": "INV-US-2026-0916-EX",
+            "total_amount": "650.00",
+            "currency": "USD",
+            "row_count": "3",
+            "special_cases": "Exchange rate 1,370 KRW is a note, not a document amount.",
+        },
+        "required_vl_output_values": ["INV-US-2026-0916-EX", "650.00", "Linear", "Cable", "PCB"],
+        "structured_checks": {
+            "expected_line_amounts": ["450.00", "110.00", "90.00"],
+            "exchange_rate_value": "1,370",
+            "expected_row_cells": [
+                {"row_contains": "Linear", "cells": ["10", "45.00", "450.00"]},
+                {"row_contains": "Cable", "cells": ["50", "2.20", "110.00"]},
+                {"row_contains": "PCB", "cells": ["300", "0.30", "90.00"]},
+            ],
+        },
+        "hallucinations_found": [],
+        "dangerous_errors_found": [],
+        "notes": "Set pdf_opened_and_visually_checked=true only after opening the rendered PDF/image.",
+    },
+    "21_photo_fax_po_misaligned_amounts.pdf": {
+        "pdf_opened_and_visually_checked": False,
+        "expected_from_pdf": {
+            "document_number": "FAX-PO-2026-0921",
+            "total_amount": "418,000",
+            "currency": "KRW",
+            "row_count": "3",
+            "special_cases": "Fax/photo row boundaries are weak; raw evidence missing must remain review candidate only.",
+        },
+        "required_vl_output_values": ["FAX-PO-2026-0921", "베어링", "S45C"],
+        "structured_checks": {
+            "expected_document_total": "418,000",
+            "expected_row_fragments": [
+                {"text": "M8 볼트 / 와셔 SET", "label": "row 3 item name"},
+            ],
+            "expected_row_cells": [
+                {"row_contains": "베어링", "cells": ["20", "8,000", "176,000"]},
+                {"row_contains": "S45C", "cells": ["100", "600", "66,000"]},
+                {"row_contains": "M8", "cells": ["1,000", "SET", "160", "176,000"]},
+            ],
+        },
+        "hallucinations_found": [],
+        "dangerous_errors_found": [],
+        "notes": "Set pdf_opened_and_visually_checked=true only after opening the rendered PDF/image.",
+    },
+}
+
 MANUAL_EXPECTED_VALUE_REQUIRED_KEYS = {
     "document_number",
     "invoice_number",
@@ -362,6 +432,30 @@ def _structured_manual_issues(text: str, manual_visual_check: dict[str, Any]) ->
 
 def _expected_terms_for_sample(sample: Path) -> list[str]:
     return EXPECTED_TERMS_BY_SAMPLE.get(sample.name, [])
+
+
+def manual_visual_check_template_for_sample(sample: Path) -> dict[str, Any]:
+    template = MANUAL_VISUAL_CHECK_TEMPLATES_BY_SAMPLE.get(
+        sample.name,
+        {
+            "pdf_opened_and_visually_checked": False,
+            "expected_from_pdf": {},
+            "required_vl_output_values": _expected_terms_for_sample(sample),
+            "structured_checks": {},
+            "hallucinations_found": [],
+            "dangerous_errors_found": [],
+            "notes": "Fill this template after opening the rendered PDF/image. Do not mark true from filename or fixture memory.",
+        },
+    )
+    return json.loads(json.dumps(template, ensure_ascii=False))
+
+
+def write_manual_visual_check_template(sample: Path, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(manual_visual_check_template_for_sample(sample), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _load_manual_visual_check(path: Path | None) -> dict[str, Any] | None:
@@ -728,6 +822,11 @@ def main() -> None:
         help="JSON object recording PDF values verified by looking at the rendered source PDF.",
     )
     parser.add_argument(
+        "--write-manual-visual-check-template",
+        type=Path,
+        help="Write a sample-specific manual visual check template and exit without running VL inference.",
+    )
+    parser.add_argument(
         "--expected-term",
         action="append",
         default=None,
@@ -762,6 +861,10 @@ def main() -> None:
         help="Override PADDLEOCR_VL_GGUF_CONCURRENCY for this smoke run.",
     )
     args = parser.parse_args()
+    if args.write_manual_visual_check_template:
+        write_manual_visual_check_template(args.sample, args.write_manual_visual_check_template)
+        print(f"Wrote {args.write_manual_visual_check_template}")
+        return
     apply_cli_runtime_overrides(
         model_dir=args.model_dir,
         model_file=args.model_file,

@@ -1,9 +1,14 @@
+import json
+from pathlib import Path
+
 from app.scripts.smoke_paddleocr_vl_gguf import (
     _evaluate_manual_visual_check,
     apply_cli_runtime_overrides,
     build_docuparse_vl_candidate_metadata,
     classify_smoke_exception,
     decide_provider_available_candidate,
+    manual_visual_check_template_for_sample,
+    write_manual_visual_check_template,
 )
 from app.core.config import get_settings
 
@@ -66,6 +71,33 @@ def test_gguf_manual_check_flags_blank_quantity_hallucination():
     assert result is not None
     assert result["severity"] == "fail"
     assert "vl_candidate_hallucinated_blank_quantity" in result["issue_codes"]
+
+
+def test_gguf_manual_visual_check_template_requires_human_visual_confirmation():
+    template = manual_visual_check_template_for_sample(Path("08_image_quote_missing_quantity.pdf"))
+
+    assert template["pdf_opened_and_visually_checked"] is False
+    assert template["expected_from_pdf"]["document_number"] == "QT-2026-0808-009"
+    assert template["expected_from_pdf"]["total_amount"] == "473,000"
+    assert template["structured_checks"]["blank_quantity_rows"][0]["row_contains"] == "고정 플레이트"
+
+    validation = {"ok": True, "status": "official_gguf_smoke_success"}
+    manual_validation = {"ok": False, "severity": "pass"}
+    available, reason = decide_provider_available_candidate(validation, template, manual_validation)
+
+    assert available is False
+    assert reason == "manual_visual_check_failed"
+
+
+def test_gguf_manual_visual_check_template_writer(tmp_path):
+    output = tmp_path / "manual" / "21.json"
+
+    write_manual_visual_check_template(Path("21_photo_fax_po_misaligned_amounts.pdf"), output)
+
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert data["pdf_opened_and_visually_checked"] is False
+    assert data["expected_from_pdf"]["document_number"] == "FAX-PO-2026-0921"
+    assert data["structured_checks"]["expected_document_total"] == "418,000"
 
 
 def test_gguf_manual_check_accepts_blank_quantity_when_unit_follows_spec():
