@@ -15,7 +15,31 @@ from typing import Any
 from app.core.config import get_settings
 
 
-EXPECTED_TERMS = ["견적서", "QT-2026-0808-009", "고정", "플레이트", "스테인리스", "473,000"]
+EXPECTED_TERMS_BY_SAMPLE = {
+    "08_image_quote_missing_quantity.pdf": [
+        "견적서",
+        "QT-2026-0808-009",
+        "고정",
+        "플레이트",
+        "스테인리스",
+        "473,000",
+    ],
+    "16_real_commercial_invoice_exchange_rate.pdf": [
+        "COMMERCIAL",
+        "INV-US-2026-0916-EX",
+        "Linear",
+        "Cable",
+        "PCB",
+        "650",
+    ],
+    "21_photo_fax_po_misaligned_amounts.pdf": [
+        "팩스",
+        "FAX-PO-2026-0921",
+        "베어링",
+        "S45C",
+        "418,000",
+    ],
+}
 
 
 def _configure_runtime_env() -> None:
@@ -121,6 +145,52 @@ def validate_output_text(text: str, expected_terms: list[str] | None = None) -> 
     return {"ok": ok, "status": status, "text_length": len(stripped), "matched_terms": matched_terms}
 
 
+def _expected_terms_for_sample(sample: Path) -> list[str]:
+    return EXPECTED_TERMS_BY_SAMPLE.get(sample.name, [])
+
+
+def _load_manual_visual_check(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("manual_visual_check_file_must_contain_json_object")
+    data.setdefault("pdf_opened_and_visually_checked", False)
+    data.setdefault("hallucinations_found", [])
+    data.setdefault("dangerous_errors_found", [])
+    return data
+
+
+def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not manual_visual_check:
+        return None
+    expected = manual_visual_check.get("expected_from_pdf") or {}
+    expected_values = {
+        key: value
+        for key, value in expected.items()
+        if isinstance(value, str) and value.strip() and key not in {"notes"}
+    }
+    matched_expected_values = {
+        key: value for key, value in expected_values.items() if value in text
+    }
+    dangerous_errors = list(manual_visual_check.get("dangerous_errors_found") or [])
+    hallucinations = list(manual_visual_check.get("hallucinations_found") or [])
+    ok = (
+        bool(manual_visual_check.get("pdf_opened_and_visually_checked"))
+        and not dangerous_errors
+        and not hallucinations
+    )
+    return {
+        "ok": ok,
+        "matched_expected_values": matched_expected_values,
+        "missing_expected_values": {
+            key: value for key, value in expected_values.items() if key not in matched_expected_values
+        },
+        "dangerous_error_count": len(dangerous_errors),
+        "hallucination_count": len(hallucinations),
+    }
+
+
 def _render_first_page(sample: Path, output_dir: Path) -> dict[str, Any]:
     import fitz
 
@@ -151,6 +221,12 @@ def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
         f"- Error: `{report.get('error')}`",
         f"- Matched terms: `{', '.join((report.get('validation') or {}).get('matched_terms') or [])}`",
         "",
+        "## Manual Visual Check",
+        "",
+        "```json",
+        json.dumps(report.get("manual_visual_check") or {}, ensure_ascii=False, indent=2),
+        "```",
+        "",
         "## Output Preview",
         "",
         "```text",
@@ -160,7 +236,13 @@ def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
     (output_dir / "paddleocr_vl_gguf_smoke_report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def run_smoke(sample: Path, output_dir: Path) -> dict[str, Any]:
+def run_smoke(
+    sample: Path,
+    output_dir: Path,
+    *,
+    manual_visual_check: dict[str, Any] | None = None,
+    expected_terms: list[str] | None = None,
+) -> dict[str, Any]:
     _configure_runtime_env()
     settings = get_settings()
     started = time.perf_counter()
@@ -181,6 +263,12 @@ def run_smoke(sample: Path, output_dir: Path) -> dict[str, Any]:
         "runtime": "paddleocr.PaddleOCRVL+llama-cpp-server",
         "error": None,
         "provider_available_candidate": False,
+        "manual_visual_check": manual_visual_check
+        or {
+            "sample": str(sample),
+            "pdf_opened_and_visually_checked": False,
+            "notes": "No manual visual check file was provided.",
+        },
     }
     try:
         if not sample.exists():
@@ -208,12 +296,15 @@ def run_smoke(sample: Path, output_dir: Path) -> dict[str, Any]:
         output = pipeline.predict(render["image_path"])
         report["predict_ms"] = int((time.perf_counter() - predict_started) * 1000)
         text = extract_text(output)
-        validation = validate_output_text(text, EXPECTED_TERMS if "08_image_quote_missing_quantity" in sample.name else [])
+        terms = expected_terms if expected_terms is not None else _expected_terms_for_sample(sample)
+        validation = validate_output_text(text, terms)
+        manual_validation = _evaluate_manual_visual_check(text, manual_visual_check)
         report.update(
             {
                 "ok": bool(validation["ok"]),
                 "classification": validation["status"],
                 "validation": validation,
+                "manual_visual_check_validation": manual_validation,
                 "output_type": str(type(output)),
                 "text_preview": text[:5000],
                 "provider_available_candidate": bool(validation["ok"]),
@@ -244,8 +335,24 @@ def main() -> None:
         default=Path("samples/pdf_samples/docuparse_image_based_pdf_samples_10/08_image_quote_missing_quantity.pdf"),
     )
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke"))
+    parser.add_argument(
+        "--manual-visual-check-file",
+        type=Path,
+        help="JSON object recording PDF values verified by looking at the rendered source PDF.",
+    )
+    parser.add_argument(
+        "--expected-term",
+        action="append",
+        default=None,
+        help="Expected text fragment for output validation. Repeat to override sample defaults.",
+    )
     args = parser.parse_args()
-    report = run_smoke(args.sample, args.output_dir)
+    report = run_smoke(
+        args.sample,
+        args.output_dir,
+        manual_visual_check=_load_manual_visual_check(args.manual_visual_check_file),
+        expected_terms=args.expected_term,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     raise SystemExit(0 if report.get("ok") else 1)
 
