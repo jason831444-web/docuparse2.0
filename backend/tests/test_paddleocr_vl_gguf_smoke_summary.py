@@ -82,3 +82,34 @@ def test_gguf_smoke_summary_surfaces_missing_report_paths(tmp_path):
     assert summary["missing_report_paths"] == [str(missing)]
     assert summary["production_active_recommended"] is False
     assert summary["production_active_reason"] == "missing_smoke_reports"
+
+
+def test_gguf_smoke_summary_parses_resource_monitor_peak_usage(tmp_path):
+    report = tmp_path / "08" / "paddleocr_vl_gguf_smoke_report.json"
+    _write_report(report, sample="08_image_quote_missing_quantity.pdf", severity="pass", candidate=True)
+    (report.parent / "resource_monitor.log").write_text(
+        "\n".join(
+            [
+                "2026-06-14T00:00:00+00:00",
+                "               total        used        free      shared  buff/cache   available",
+                "Mem:           7.8Gi       3.5Gi       1.0Gi       1.0Mi       3.3Gi       4.0Gi",
+                "Swap:          8.0Gi       458Mi       7.6Gi",
+                "---",
+                "2026-06-14T00:00:05+00:00",
+                "               total        used        free      shared  buff/cache   available",
+                "Mem:           7.8Gi       4.1Gi       900Mi       1.0Mi       2.8Gi       3.6Gi",
+                "Swap:          8.0Gi       1.2Gi       6.8Gi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_reports([report])
+    resource = summary["rows"][0]["resource_monitor"]
+
+    assert resource["samples"] == 2
+    assert resource["max_mem_used_mib"] == 4198.4
+    assert resource["max_swap_used_mib"] == 1228.8
+
+    markdown = markdown_summary(summary)
+    assert "mem=4198.4MiB swap=1228.8MiB" in markdown

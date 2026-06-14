@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,7 @@ def _summarize_one(report: dict[str, Any]) -> dict[str, Any]:
     validation = report.get("validation") or {}
     sample = Path(str(report.get("sample") or "")).name or str(report.get("sample") or "")
     issue_codes = [str(code) for code in manual_validation.get("issue_codes") or [] if code]
+    resource_monitor = _resource_monitor_summary(report.get("_source_report"))
     return {
         "sample": sample,
         "source_report": report.get("_source_report"),
@@ -103,8 +105,61 @@ def _summarize_one(report: dict[str, Any]) -> dict[str, Any]:
         "dangerous_error_count": int(manual_validation.get("dangerous_error_count") or 0),
         "hallucination_count": int(manual_validation.get("hallucination_count") or 0),
         "elapsed_ms": report.get("elapsed_ms"),
+        "resource_monitor": resource_monitor,
         "error": report.get("error"),
     }
+
+
+def _resource_monitor_summary(source_report: Any) -> dict[str, Any] | None:
+    if not source_report:
+        return None
+    path = Path(str(source_report)).parent / "resource_monitor.log"
+    if not path.exists():
+        return None
+    max_mem_used_mib: float | None = None
+    max_swap_used_mib: float | None = None
+    samples = 0
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        if parts[0] == "Mem:":
+            value = _human_size_to_mib(parts[2])
+            if value is not None:
+                max_mem_used_mib = value if max_mem_used_mib is None else max(max_mem_used_mib, value)
+                samples += 1
+        elif parts[0] == "Swap:":
+            value = _human_size_to_mib(parts[2])
+            if value is not None:
+                max_swap_used_mib = value if max_swap_used_mib is None else max(max_swap_used_mib, value)
+    return {
+        "samples": samples,
+        "max_mem_used_mib": round(max_mem_used_mib, 1) if max_mem_used_mib is not None else None,
+        "max_swap_used_mib": round(max_swap_used_mib, 1) if max_swap_used_mib is not None else None,
+        "source": str(path),
+    }
+
+
+def _human_size_to_mib(value: str) -> float | None:
+    value = value.strip()
+    if not value:
+        return None
+    match = re.match(r"(?i)^([0-9]+(?:\.[0-9]+)?)([kmgtp]?i?)?$", value)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = (match.group(2) or "m").lower().rstrip("i")
+    multiplier = {
+        "k": 1 / 1024,
+        "m": 1,
+        "g": 1024,
+        "t": 1024 * 1024,
+        "p": 1024 * 1024 * 1024,
+        "": 1 / (1024 * 1024),
+    }.get(unit)
+    if multiplier is None:
+        return None
+    return amount * multiplier
 
 
 def _production_active_reason(rows: list[dict[str, Any]], missing_paths: list[str]) -> str:
@@ -140,14 +195,22 @@ def markdown_summary(summary: dict[str, Any]) -> str:
         "|---|---|---:|---|---|---:|---|",
     ]
     for row in summary["rows"]:
+        resource = row.get("resource_monitor") or {}
+        resource_text = ""
+        if resource:
+            resource_text = " mem={mem}MiB swap={swap}MiB".format(
+                mem=resource.get("max_mem_used_mib"),
+                swap=resource.get("max_swap_used_mib"),
+            )
         lines.append(
-            "| {sample} | {manual_severity} | {provider_available_candidate} | {provider_available_decision_reason} | {issues} | {elapsed_ms} | {source_report} |".format(
+            "| {sample} | {manual_severity} | {provider_available_candidate} | {provider_available_decision_reason} | {issues} | {elapsed_ms}{resource_text} | {source_report} |".format(
                 sample=row["sample"],
                 manual_severity=row["manual_severity"],
                 provider_available_candidate=row["provider_available_candidate"],
                 provider_available_decision_reason=row.get("provider_available_decision_reason") or "",
                 issues=", ".join(row["unique_issue_codes"]),
                 elapsed_ms=row.get("elapsed_ms") or "",
+                resource_text=resource_text,
                 source_report=row.get("source_report") or "",
             )
         )
