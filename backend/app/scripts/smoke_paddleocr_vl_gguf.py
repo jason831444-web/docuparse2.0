@@ -102,7 +102,7 @@ MANUAL_VISUAL_CHECK_TEMPLATES_BY_SAMPLE: dict[str, dict[str, Any]] = {
             "expected_row_cells": [
                 {"row_contains": "베어링", "cells": ["20", "8,000", "176,000"]},
                 {"row_contains": "S45C", "cells": ["100", "600", "66,000"]},
-                {"row_contains": "M8", "cells": ["1,000", "SET", "160", "176,000"]},
+                {"row_contains": "M8", "cells": ["와셔", "1,000", "SET", "160", "176,000"]},
             ],
         },
         "hallucinations_found": [],

@@ -98,6 +98,7 @@ def test_gguf_manual_visual_check_template_writer(tmp_path):
     assert data["pdf_opened_and_visually_checked"] is False
     assert data["expected_from_pdf"]["document_number"] == "FAX-PO-2026-0921"
     assert data["structured_checks"]["expected_document_total"] == "418,000"
+    assert data["structured_checks"]["expected_row_cells"][2]["cells"][0] == "와셔"
 
 
 def test_gguf_commercial_invoice_template_records_text_layer_render_gap():
