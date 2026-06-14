@@ -89,9 +89,11 @@ ENABLE_PADDLEOCR_VL_ONNX=true
 AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized
 PADDLEOCR_VL_ONNX_MODEL_NAME=PaddleOCR-VL-1.5-ONNX-quantized
 PADDLEOCR_VL_ONNX_MODEL_PATH=/app/models/paddleocr_vl_onnx_quantized
+PADDLEOCR_VL_ONNX_REPO_ID=lbm364dl/PaddleOCR-VL-1.5-ONNX
 PADDLEOCR_VL_ONNX_DEVICE=cpu
 PADDLEOCR_VL_ONNX_TIMEOUT_SECONDS=60
-PADDLEOCR_VL_ONNX_RUNNER_MODULE=docuparse_vl_onnx_runner
+PADDLEOCR_VL_ONNX_RUNTIME_VERSION=1.23.2
+PADDLEOCR_VL_ONNX_RUNNER_MODULE=
 OCR_WORKER_URL=http://ocr-worker:8010
 PREFER_OCR_WORKER=true
 ```
@@ -107,8 +109,9 @@ When using Docker named volumes, verify that
 required tokenizer/processor files. A named volume can shadow files copied into
 the image.
 
-DocuParse also requires an executable runner module named by
-`PADDLEOCR_VL_ONNX_RUNNER_MODULE`. The module must expose:
+DocuParse includes a minimal experimental runner at
+`app.services.paddleocr_vl_onnx_runner`. A custom executable runner module can
+be named by `PADDLEOCR_VL_ONNX_RUNNER_MODULE`. The module must expose:
 
 ```python
 def predict(*, image_path: str, model_path: str, model_files: list[str], device: str, timeout_seconds: float, max_pages: int) -> dict:
@@ -117,8 +120,10 @@ def predict(*, image_path: str, model_path: str, model_files: list[str], device:
 
 The returned dict should contain optional `text`, `line_candidates`,
 `table_candidates`, `layout_elements`, and `raw_blocks` fields. Without this
-runner module, health intentionally reports
-`paddleocr_vl_onnx_runner_missing` and continues with PP-OCRv4 fallback.
+runner path, health intentionally reports a runner/import error and continues
+with PP-OCRv4 fallback. Even with a runner, health remains unavailable until a
+real sample inference produces validated text and a validation marker is
+written under the model directory.
 
 ## CPU Cost Expectations
 
@@ -138,7 +143,9 @@ active. Activation requires:
 
 - `/health.providers.primary_provider_available=true`
 - `/health.providers.ocr_engine=PaddleOCR-VL ONNX`
-- `/health.providers.paddleocr_vl_onnx_probe.runner_module` is configured and importable
+- `/health.providers.paddleocr_vl_onnx_probe.runner_module` is importable
+- `/health.providers.paddleocr_vl_onnx_probe.validation_marker` exists and
+  records `output_validation_status=candidate_text_generated`
 - provider metadata contains `document_ai_succeeded=true`
 - provider chain contains `paddleocr_vl_onnx_quantized` without
   `paddleocr_vl_onnx_quantized_unavailable`

@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     enable_paddleocr_vl_onnx: bool = False
     paddleocr_vl_onnx_model_path: Path | None = None
     paddleocr_vl_onnx_model_name: str = "PaddleOCR-VL-1.5-ONNX-quantized"
+    paddleocr_vl_onnx_repo_id: str = "lbm364dl/PaddleOCR-VL-1.5-ONNX"
     paddleocr_vl_onnx_device: str = "cpu"
     paddleocr_vl_onnx_timeout_seconds: float = 60.0
     paddleocr_vl_onnx_max_pages: int = 1
     paddleocr_vl_onnx_mode: str = "primary_with_fallback"
+    paddleocr_vl_onnx_runtime_version: str = "1.23.2"
     paddleocr_vl_onnx_runner_module: str | None = None
     ocr_fallback_provider: str = "paddleocr_ppocrv4"
     enable_paddleocr_vl: bool = False

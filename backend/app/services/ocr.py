@@ -468,10 +468,12 @@ def _paddleocr_vl_onnx_status() -> dict[str, Any]:
         "enabled": settings.enable_paddleocr_vl_onnx,
         "usable": False,
         "error": None,
+        "repo_id": getattr(settings, "paddleocr_vl_onnx_repo_id", None),
         "model": settings.paddleocr_vl_onnx_model_name,
         "model_path": str(model_path),
         "device": settings.paddleocr_vl_onnx_device,
         "runtime": "onnxruntime",
+        "expected_runtime_version": getattr(settings, "paddleocr_vl_onnx_runtime_version", None),
     }
     if not settings.enable_paddleocr_vl_onnx:
         payload["error"] = "paddleocr_vl_onnx_disabled"
@@ -485,22 +487,40 @@ def _paddleocr_vl_onnx_status() -> dict[str, Any]:
     onnx_files = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.onnx") if path.is_file())
     payload["onnx_model_files"] = onnx_files[:8]
     payload["onnx_model_file_count"] = len(onnx_files)
-    if not onnx_files:
+    required_onnx_files = [
+        "onnx/decoder_model_merged.onnx",
+        "onnx/embed_tokens.onnx",
+        "onnx/vision_encoder.onnx",
+    ]
+    missing_onnx_files = [name for name in required_onnx_files if not (model_path / name).exists()]
+    payload["missing_onnx_files"] = missing_onnx_files
+    if missing_onnx_files:
         payload["error"] = "paddleocr_vl_onnx_model_missing"
         return payload
-    processor_files = ["tokenizer.json", "tokenizer.model", "processor_config.json", "preprocessor_config.json"]
+    processor_files = ["tokenizer.json", "tokenizer.model", "config.json", "processor_config.json", "preprocessor_config.json"]
     missing_processor_files = [name for name in processor_files if not (model_path / name).exists()]
     payload["missing_processor_files"] = missing_processor_files
     if missing_processor_files:
         payload["error"] = "paddleocr_vl_onnx_processor_missing"
         return payload
-    runner_module = getattr(settings, "paddleocr_vl_onnx_runner_module", None)
+    runner_module = getattr(settings, "paddleocr_vl_onnx_runner_module", None) or "app.services.paddleocr_vl_onnx_runner"
     payload["runner_module"] = runner_module
-    if not runner_module:
-        payload["error"] = "paddleocr_vl_onnx_runner_missing"
-        return payload
     if not _module_available(str(runner_module)):
         payload["error"] = "paddleocr_vl_onnx_runner_import_failed"
+        return payload
+    marker_path = model_path / ".docuparse_vl_onnx_validated.json"
+    payload["validation_marker_path"] = str(marker_path)
+    if not marker_path.exists():
+        payload["error"] = "paddleocr_vl_onnx_inference_not_validated"
+        return payload
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        payload["error"] = f"paddleocr_vl_onnx_validation_marker_invalid: {exc}"
+        return payload
+    payload["validation_marker"] = marker
+    if marker.get("provider_used") != "paddleocr_vl_onnx_quantized" or marker.get("output_validation_status") != "candidate_text_generated":
+        payload["error"] = marker.get("fallback_reason") or marker.get("output_validation_status") or "paddleocr_vl_onnx_inference_not_validated"
         return payload
     payload["usable"] = True
     return payload

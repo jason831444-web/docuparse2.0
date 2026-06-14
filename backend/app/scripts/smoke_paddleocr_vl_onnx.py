@@ -14,6 +14,7 @@ from typing import Any
 from huggingface_hub import HfApi, snapshot_download
 
 from app.core.config import get_settings
+from app.services.paddleocr_vl_onnx_runner import validate_generated_text
 
 
 DEFAULT_REPO_ID = "lbm364dl/PaddleOCR-VL-1.5-ONNX"
@@ -32,6 +33,11 @@ def main() -> None:
     parser.add_argument("--repo-id", default=os.getenv("PADDLEOCR_VL_ONNX_REPO_ID", DEFAULT_REPO_ID))
     parser.add_argument("--model-path", type=Path, default=_default_model_path())
     parser.add_argument("--runner-module", default=os.getenv("PADDLEOCR_VL_ONNX_RUNNER_MODULE", ""))
+    parser.add_argument(
+        "--run-inference",
+        action="store_true",
+        help="Run the built-in minimal ONNX runner against --sample inputs when dependencies are available.",
+    )
     parser.add_argument("--sample", action="append", type=Path, default=[])
     parser.add_argument("--download", action="store_true", help="Download the selected HF repo to --model-path.")
     parser.add_argument("--check-sessions", action="store_true", help="Try loading each ONNX file in a child process.")
@@ -47,14 +53,25 @@ def main() -> None:
     )
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("PADDLEOCR_VL_ONNX_TIMEOUT_SECONDS", "60")))
     parser.add_argument("--max-pages", type=int, default=int(os.getenv("PADDLEOCR_VL_ONNX_MAX_PAGES", "1")))
+    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument("--prompt", default=os.getenv("PADDLEOCR_VL_ONNX_PROMPT", "OCR:"))
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/docuparse_e2e_logs/vl_onnx_smoke"))
+    parser.add_argument(
+        "--write-validation-marker",
+        action="store_true",
+        help="Write a small marker into the model directory only when a sample produces validated candidate text.",
+    )
     args = parser.parse_args()
 
     started = time.perf_counter()
     if args.subprocess_session_check:
         args.check_sessions = True
+    if args.run_inference and not args.runner_module:
+        args.runner_module = "app.services.paddleocr_vl_onnx_runner"
     report = smoke(args)
     report["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+    if args.write_validation_marker:
+        _write_validation_marker(report, args.model_path)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.output_dir / "vl_onnx_smoke_report.json"
@@ -70,6 +87,28 @@ def main() -> None:
     print(f"Wrote {session_json_path}")
     print(f"Wrote {session_md_path}")
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
+
+
+def _write_validation_marker(report: dict[str, Any], model_path: Path) -> None:
+    successful = [
+        sample
+        for sample in report.get("samples", [])
+        if sample.get("provider_used") == "paddleocr_vl_onnx_quantized"
+        and sample.get("output_validation_status") == "candidate_text_generated"
+        and not sample.get("fallback_used")
+    ]
+    if not successful:
+        return
+    marker = {
+        "provider_used": "paddleocr_vl_onnx_quantized",
+        "output_validation_status": "candidate_text_generated",
+        "validated_at_unix": int(time.time()),
+        "sample_count": len(successful),
+        "onnxruntime_version": report.get("runtime", {}).get("onnxruntime_version"),
+        "model_path": str(model_path),
+    }
+    marker_path = model_path / ".docuparse_vl_onnx_validated.json"
+    marker_path.write_text(json.dumps(marker, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def smoke(args: argparse.Namespace) -> dict[str, Any]:
@@ -92,6 +131,8 @@ def smoke(args: argparse.Namespace) -> dict[str, Any]:
                 runner_module=args.runner_module,
                 timeout_seconds=args.timeout_seconds,
                 max_pages=args.max_pages,
+                max_new_tokens=args.max_new_tokens,
+                prompt=args.prompt,
                 can_infer=can_infer,
             )
         )
@@ -110,7 +151,15 @@ def smoke(args: argparse.Namespace) -> dict[str, Any]:
     elif not runtime["runner_available"]:
         blocked_reasons.append("runner_module_unavailable")
 
-    status = "ready" if can_infer else "blocked"
+    successful_samples = [sample for sample in samples if sample.get("provider_used") == "paddleocr_vl_onnx_quantized" and not sample.get("fallback_used")]
+    sample_failure_reasons = sorted({str(sample.get("fallback_reason")) for sample in samples if sample.get("fallback_reason")})
+    status = "ready" if successful_samples else "blocked"
+    fallback_required = not successful_samples
+    fallback_reason = ",".join(blocked_reasons) if blocked_reasons else None
+    if fallback_required and sample_failure_reasons:
+        fallback_reason = ",".join(sample_failure_reasons)
+    if fallback_required and not fallback_reason and can_infer:
+        fallback_reason = "paddleocr_vl_onnx_inference_not_validated"
     return {
         "summary": {
             "status": status,
@@ -118,12 +167,13 @@ def smoke(args: argparse.Namespace) -> dict[str, Any]:
             "model_path": str(model_path),
             "license": repo.get("license"),
             "commercial_saas_use": "allowed_by_apache_2_0" if repo.get("license") == "apache-2.0" else "review_required",
-            "model_loaded": can_infer and any(sample.get("model_loaded") for sample in samples),
-            "provider_used": "paddleocr_vl_onnx_quantized" if can_infer else None,
-            "fallback_required": not can_infer,
+            "model_loaded": bool(successful_samples),
+            "provider_used": "paddleocr_vl_onnx_quantized" if successful_samples else None,
+            "fallback_required": fallback_required,
             "fallback_provider": "paddleocr_ppocrv4",
-            "fallback_reason": ",".join(blocked_reasons) if blocked_reasons else None,
+            "fallback_reason": fallback_reason,
             "sample_count": len(samples),
+            "successful_sample_count": len(successful_samples),
         },
         "repo": repo,
         "download": download_result,
@@ -131,7 +181,13 @@ def smoke(args: argparse.Namespace) -> dict[str, Any]:
         "bundle": bundle,
         "runtime": runtime,
         "onnx_session_load": session_load,
-        "diagnostic_interpretation": _diagnostic_interpretation(bundle, runtime, session_load, can_infer),
+        "diagnostic_interpretation": _diagnostic_interpretation(
+            bundle,
+            runtime,
+            session_load,
+            can_infer=can_infer,
+            sample_validated=bool(successful_samples),
+        ),
         "samples": samples,
         "download_commands": _download_commands(args.repo_id, model_path),
     }
@@ -143,25 +199,36 @@ def _default_model_path() -> Path:
 
 
 def _repo_info(repo_id: str) -> dict[str, Any]:
-    api = HfApi()
-    info = api.model_info(repo_id, files_metadata=True)
-    siblings = sorted(info.siblings, key=lambda item: item.rfilename)
-    total_size = sum(item.size or 0 for item in siblings)
-    interesting = []
-    for item in siblings:
-        name = item.rfilename
-        lower = name.lower()
-        if any(token in lower for token in ["onnx", "tokenizer", "processor", "preprocessor", "config", "license", "readme"]):
-            interesting.append({"path": name, "size": item.size})
-    card_data = getattr(info, "card_data", None)
-    license_value = card_data.get("license") if card_data else None
-    return {
-        "repo_id": repo_id,
-        "license": license_value,
-        "total_size_bytes": total_size,
-        "total_size_gb": round(total_size / 1024**3, 3),
-        "files": interesting,
-    }
+    try:
+        api = HfApi()
+        info = api.model_info(repo_id, files_metadata=True)
+        siblings = sorted(info.siblings, key=lambda item: item.rfilename)
+        total_size = sum(item.size or 0 for item in siblings)
+        interesting = []
+        for item in siblings:
+            name = item.rfilename
+            lower = name.lower()
+            if any(token in lower for token in ["onnx", "tokenizer", "processor", "preprocessor", "config", "license", "readme"]):
+                interesting.append({"path": name, "size": item.size})
+        card_data = getattr(info, "card_data", None)
+        license_value = card_data.get("license") if card_data else None
+        return {
+            "repo_id": repo_id,
+            "license": license_value,
+            "total_size_bytes": total_size,
+            "total_size_gb": round(total_size / 1024**3, 3),
+            "files": interesting,
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "repo_id": repo_id,
+            "license": None,
+            "total_size_bytes": None,
+            "total_size_gb": None,
+            "files": [],
+            "error": str(exc),
+        }
 
 
 def _download_repo(repo_id: str, model_path: Path) -> dict[str, Any]:
@@ -285,7 +352,9 @@ def _diagnostic_interpretation(
     bundle: dict[str, Any],
     runtime: dict[str, Any],
     session_load: list[dict[str, Any]],
+    *,
     can_infer: bool,
+    sample_validated: bool,
 ) -> dict[str, Any]:
     decoder_rows = [row for row in session_load if str(row.get("file", "")).endswith("decoder_model_merged.onnx")]
     decoder_loaded = any(row.get("loaded") for row in decoder_rows)
@@ -297,10 +366,14 @@ def _diagnostic_interpretation(
         if str(row.get("file", "")).endswith((".onnx",))
     }
 
-    if can_infer:
+    if sample_validated:
         provider_available = True
         fallback_reason = None
-        artifact_status = "runner_available"
+        artifact_status = "validated_runner_output"
+    elif can_infer:
+        provider_available = False
+        fallback_reason = "paddleocr_vl_onnx_inference_not_validated"
+        artifact_status = "runner_available_output_not_validated"
     elif not bundle.get("usable"):
         provider_available = False
         fallback_reason = "model_bundle_missing_or_incomplete"
@@ -357,6 +430,8 @@ def _run_sample(
     runner_module: str,
     timeout_seconds: float,
     max_pages: int,
+    max_new_tokens: int,
+    prompt: str,
     can_infer: bool,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
@@ -390,20 +465,27 @@ def _run_sample(
             device="cpu",
             timeout_seconds=timeout_seconds,
             max_pages=max_pages,
+            max_new_tokens=max_new_tokens,
+            prompt=prompt,
         )
-        row["provider_used"] = "paddleocr_vl_onnx_quantized"
-        row["fallback_used"] = False
         row["model_loaded"] = True
         row["inference_time_ms"] = int((time.perf_counter() - started) * 1000)
-        row.update(_output_metrics(output))
+        row.update(_output_metrics(output, prompt=prompt))
+        if row["output_validation_status"] == "candidate_text_generated":
+            row["provider_used"] = "paddleocr_vl_onnx_quantized"
+            row["fallback_used"] = False
+        else:
+            row["provider_used"] = None
+            row["fallback_used"] = True
+            row["fallback_reason"] = row["output_validation_status"]
     except Exception as exc:
-        row["fallback_reason"] = "runner_inference_failed"
+        row["fallback_reason"] = getattr(exc, "reason", "runner_inference_failed")
         row["error"] = str(exc)
         row["inference_time_ms"] = int((time.perf_counter() - started) * 1000)
     return row
 
 
-def _output_metrics(output: Any) -> dict[str, Any]:
+def _output_metrics(output: Any, *, prompt: str = "") -> dict[str, Any]:
     payload = output if isinstance(output, dict) else {}
     text = str(payload.get("text") or payload.get("markdown") or payload.get("content") or "")
     lines = payload.get("line_candidates") or payload.get("lines") or []
@@ -411,10 +493,16 @@ def _output_metrics(output: Any) -> dict[str, Any]:
     preview = json.dumps(payload, ensure_ascii=False)[:1200] if payload else str(output)[:1200]
     return {
         "text_length": len(text),
+        "text_preview": text[:500],
+        "output_validation_status": _validate_output_text(text, prompt=prompt),
         "line_candidates_count": len(lines) if isinstance(lines, list) else 0,
         "table_candidates_count": len(tables) if isinstance(tables, list) else 0,
         "raw_output_preview": preview,
     }
+
+
+def _validate_output_text(text: str, *, prompt: str = "") -> str:
+    return validate_generated_text(text, prompt=prompt)
 
 
 def _download_commands(repo_id: str, model_path: Path) -> list[str]:

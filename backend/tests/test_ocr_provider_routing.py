@@ -413,13 +413,14 @@ def test_paddleocr_vl_onnx_status_reports_missing_onnxruntime(monkeypatch, tmp_p
     assert payload["error"] == "onnxruntime_missing"
 
 
-def test_paddleocr_vl_onnx_status_requires_runner_module(monkeypatch, tmp_path):
+def test_paddleocr_vl_onnx_status_requires_validated_inference_marker(monkeypatch, tmp_path):
     model_path = tmp_path / "model"
-    model_path.mkdir()
-    (model_path / "vision_encoder.onnx").write_text("stub", encoding="utf-8")
-    for filename in ["tokenizer.json", "tokenizer.model", "processor_config.json", "preprocessor_config.json"]:
+    (model_path / "onnx").mkdir(parents=True)
+    for filename in ["decoder_model_merged.onnx", "embed_tokens.onnx", "vision_encoder.onnx"]:
+        (model_path / "onnx" / filename).write_text("stub", encoding="utf-8")
+    for filename in ["tokenizer.json", "tokenizer.model", "config.json", "processor_config.json", "preprocessor_config.json"]:
         (model_path / filename).write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(ocr_module, "_module_available", lambda name: name == "onnxruntime")
+    monkeypatch.setattr(ocr_module, "_module_available", lambda name: name in {"onnxruntime", "app.services.paddleocr_vl_onnx_runner"})
     monkeypatch.setattr(
         ocr_module,
         "get_settings",
@@ -436,7 +437,42 @@ def test_paddleocr_vl_onnx_status_requires_runner_module(monkeypatch, tmp_path):
     payload = ocr_module._paddleocr_vl_onnx_status()
 
     assert payload["usable"] is False
-    assert payload["error"] == "paddleocr_vl_onnx_runner_missing"
+    assert payload["runner_module"] == "app.services.paddleocr_vl_onnx_runner"
+    assert payload["error"] == "paddleocr_vl_onnx_inference_not_validated"
+
+
+def test_paddleocr_vl_onnx_status_reports_available_after_validated_marker(monkeypatch, tmp_path):
+    model_path = tmp_path / "model"
+    (model_path / "onnx").mkdir(parents=True)
+    for filename in ["decoder_model_merged.onnx", "embed_tokens.onnx", "vision_encoder.onnx"]:
+        (model_path / "onnx" / filename).write_text("stub", encoding="utf-8")
+    for filename in ["tokenizer.json", "tokenizer.model", "config.json", "processor_config.json", "preprocessor_config.json"]:
+        (model_path / filename).write_text("{}", encoding="utf-8")
+    (model_path / ".docuparse_vl_onnx_validated.json").write_text(
+        '{"provider_used":"paddleocr_vl_onnx_quantized","output_validation_status":"candidate_text_generated"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ocr_module, "_module_available", lambda name: name in {"onnxruntime", "app.services.paddleocr_vl_onnx_runner"})
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            enable_paddleocr_vl_onnx=True,
+            paddleocr_vl_onnx_model_path=model_path,
+            ai_model_dir=tmp_path,
+            paddleocr_vl_onnx_model_name="PaddleOCR-VL-1.5-ONNX-quantized",
+            paddleocr_vl_onnx_device="cpu",
+            paddleocr_vl_onnx_runner_module=None,
+            paddleocr_vl_onnx_repo_id="lbm364dl/PaddleOCR-VL-1.5-ONNX",
+            paddleocr_vl_onnx_runtime_version="1.23.2",
+        ),
+    )
+
+    payload = ocr_module._paddleocr_vl_onnx_status()
+
+    assert payload["usable"] is True
+    assert payload["error"] is None
+    assert payload["validation_marker"]["output_validation_status"] == "candidate_text_generated"
 
 
 def test_ocr_worker_resets_provider_and_retries_paddle_runtime_error(monkeypatch, tmp_path):

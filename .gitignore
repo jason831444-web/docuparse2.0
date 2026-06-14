@@ -27,6 +27,7 @@ uploads/
 media/uploads/
 generated/
 tmp/
+models/
 backend/uploads/*
 !backend/uploads/.gitkeep
 backend/models/
@@ -37,5 +38,7 @@ backend/eval/reports/20*.md
 *.pt
 *.pth
 *.onnx
+*.onnx_data
 *.gguf
 *.bin
+*.safetensors

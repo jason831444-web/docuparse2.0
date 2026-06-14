@@ -4,7 +4,8 @@
 # PaddleOCR-VL ONNX quantized provider.
 # Keep this stack optional. The PP-OCRv4 OCR worker remains the production
 # fallback and must not install this file by default.
-onnxruntime>=1.20.0
+onnxruntime==1.23.2
+tokenizers>=0.20.0
 
 # PaddleOCR-VL 3.x/PaddleX provider experiments.
 # These are not installed in the ocr-worker because they can conflict with

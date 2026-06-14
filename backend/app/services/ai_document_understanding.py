@@ -956,25 +956,27 @@ class PaddleOCRVLOnnxQuantizedDocumentAIService(DocumentAIService):
         self.model_path = self.settings.paddleocr_vl_onnx_model_path or (self.settings.ai_model_dir / "paddleocr_vl_onnx_quantized")
         if not self.model_path.exists():
             raise RuntimeError(f"PaddleOCR-VL ONNX model path does not exist: {self.model_path}")
+        required_onnx_files = [
+            self.model_path / "onnx" / "decoder_model_merged.onnx",
+            self.model_path / "onnx" / "embed_tokens.onnx",
+            self.model_path / "onnx" / "vision_encoder.onnx",
+        ]
+        missing_onnx = [str(path.relative_to(self.model_path)) for path in required_onnx_files if not path.exists()]
+        if missing_onnx:
+            raise RuntimeError(f"PaddleOCR-VL ONNX model files are missing: {', '.join(missing_onnx)}")
         self.model_files = sorted(path for path in self.model_path.rglob("*.onnx") if path.is_file())
-        if not self.model_files:
-            raise RuntimeError(f"PaddleOCR-VL ONNX model files were not found under: {self.model_path}")
-        required_processor_files = ["tokenizer.json", "tokenizer.model", "processor_config.json", "preprocessor_config.json"]
+        required_processor_files = ["tokenizer.json", "tokenizer.model", "config.json", "processor_config.json", "preprocessor_config.json"]
         missing = [name for name in required_processor_files if not (self.model_path / name).exists()]
         if missing:
             raise RuntimeError(f"PaddleOCR-VL ONNX processor files are missing: {', '.join(missing)}")
-        runner_module = self.settings.paddleocr_vl_onnx_runner_module
-        if not runner_module:
-            raise RuntimeError(
-                "PaddleOCR-VL ONNX model files are present, but no executable runner module is configured. "
-                "Set PADDLEOCR_VL_ONNX_RUNNER_MODULE to a module exposing predict(...)."
-            )
+        runner_module = self.settings.paddleocr_vl_onnx_runner_module or "app.services.paddleocr_vl_onnx_runner"
         try:
             self.runner = importlib.import_module(runner_module)
         except Exception as exc:
             raise RuntimeError(f"PaddleOCR-VL ONNX runner import failed: {runner_module}") from exc
         if not hasattr(self.runner, "predict"):
             raise RuntimeError(f"PaddleOCR-VL ONNX runner module has no predict(...) function: {runner_module}")
+        self.runner_module = runner_module
 
     def analyze(
         self,
@@ -987,6 +989,9 @@ class PaddleOCRVLOnnxQuantizedDocumentAIService(DocumentAIService):
         output = self._run_inference(image_path)
         normalized = self._normalize_output(output)
         provider_text = normalized["text"]
+        validation_status = self._validate_provider_output(provider_text)
+        if validation_status != "candidate_text_generated":
+            raise RuntimeError(f"PaddleOCR-VL ONNX output validation failed: {validation_status}")
         if not provider_text and not normalized["line_candidates"] and not normalized["table_candidates"]:
             raise RuntimeError("PaddleOCR-VL ONNX output was empty.")
 
@@ -1040,10 +1045,18 @@ class PaddleOCRVLOnnxQuantizedDocumentAIService(DocumentAIService):
                 "model": self.settings.paddleocr_vl_onnx_model_name,
                 "runtime": "onnxruntime",
                 "device": self.settings.paddleocr_vl_onnx_device,
+                "runner_module": self.runner_module,
                 "line_candidates_count": len(line_candidates) if isinstance(line_candidates, list) else 0,
                 "table_candidates_count": len(table_candidates) if isinstance(table_candidates, list) else 0,
             },
         }
+
+    def _validate_provider_output(self, text: str) -> str:
+        try:
+            from app.services.paddleocr_vl_onnx_runner import validate_generated_text
+        except Exception:
+            return "runner_output_validator_missing"
+        return validate_generated_text(text, prompt="OCR:")
 
 
 class Qwen25VLDocumentAIService(DocumentAIService):
