@@ -194,6 +194,12 @@ services:
       PADDLE_DISABLE_SIGNAL_HANDLER: "1"
     expose:
       - "8020"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/health', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
     volumes:
       - uploaded_files:/app/uploads
       - ${PADDLEOCR_VL_GGUF_HOST_MODEL_DIR:-./models/paddleocr_vl_1_6_gguf}:/app/models/paddleocr_vl_1_6_gguf:ro
