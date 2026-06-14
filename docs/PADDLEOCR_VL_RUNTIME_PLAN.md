@@ -71,6 +71,30 @@ The smoke report now gates `provider_available_candidate` on both readable VL
 output and a manual visual check severity of `pass`. A readable output with
 manual severity `warn` remains unavailable for provider promotion.
 
+Current strict validation issue codes:
+
+- `vl_candidate_missing_line_amount`: a visible row amount from the source PDF
+  is missing in VL output. This keeps `16_real` as WARN/candidate-only.
+- `vl_candidate_missing_document_total`: the source document total is missing
+  in VL output. This keeps `21_photo` as WARN/candidate-only.
+- `vl_candidate_hallucinated_blank_quantity`: a blank source quantity appears
+  to have been filled by VL output. This is a FAIL condition.
+- `vl_candidate_exchange_rate_as_amount`: an exchange-rate note appears in a
+  total/amount context. This is a FAIL condition.
+
+When VL candidate evidence is stored in DocuParse metadata, it must remain
+separate from confirmed ERP fields:
+
+- `workflow_metadata.vl_candidates`
+- `workflow_metadata.vl_candidate_summary`
+- `canonical_export.review_candidates.vl_candidates`
+- `canonical_export.review_candidates.vl_candidate_summary`
+- CSV/XLSX summary columns such as `vl_candidate_count` and
+  `vl_candidate_issue_codes`
+
+Confirmed `line_items` and ERP export rows must continue to come from the
+validated parser/review workflow, not directly from VL output.
+
 ## Environment
 
 ```bash
