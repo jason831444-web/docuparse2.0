@@ -69,12 +69,14 @@ def summarize_reports(paths: list[Path]) -> dict[str, Any]:
         row["provider_available_candidate"] and row["manual_severity"] == "pass" for row in rows
     )
 
+    severity_counts_dict = dict(sorted(severity_counts.items()))
     return {
         "report_count": len(rows),
         "missing_report_paths": missing_paths,
         "provider_available_candidate_count": candidate_count,
         "manual_visual_checked_count": visual_checked_count,
-        "manual_severity_counts": dict(sorted(severity_counts.items())),
+        "manual_severity_counts": severity_counts_dict,
+        "severity_counts": severity_counts_dict,
         "classification_counts": dict(sorted(classification_counts.items())),
         "issue_counts": dict(sorted(issue_counts.items())),
         "production_active_recommended": production_active_recommended,

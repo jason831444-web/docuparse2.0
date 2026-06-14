@@ -48,6 +48,7 @@ def test_gguf_smoke_summary_blocks_production_active_when_any_report_warns(tmp_p
     assert summary["manual_visual_checked_count"] == 2
     assert summary["provider_available_candidate_count"] == 1
     assert summary["manual_severity_counts"] == {"pass": 1, "warn": 1}
+    assert summary["severity_counts"] == {"pass": 1, "warn": 1}
     assert summary["issue_counts"] == {
         "vl_candidate_missing_line_amount": 1,
         "vl_candidate_missing_row_cell": 1,
