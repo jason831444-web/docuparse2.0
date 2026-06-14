@@ -63,8 +63,8 @@ now:
 
 | Sample | Result | Product decision |
 | --- | --- | --- |
-| `08_image_quote_missing_quantity.pdf` | PASS. Latest strict smoke elapsed about 88s. Readable output, document number `QT-2026-0808-009`, total `473,000`, currency `KRW`, and blank first-row quantity were visually checked and preserved. | Good candidate evidence; still not confirmed ERP truth. |
-| `16_real_commercial_invoice_exchange_rate.pdf` | WARN. Latest strict smoke elapsed about 183s. Readable output, invoice number/rows/total present, exchange rate not used as total. Row amount values `450.00`, `110.00`, and `90.00` were missing from their row output. The text layer contains those values, but the rendered image used as VL input may omit the far-right Amount column. | Candidate evidence only; row-level ERP export still needs existing text-layer parser/review guardrails. |
+| `08_image_quote_missing_quantity.pdf` | PASS. Latest strict smoke elapsed about 107s. Readable output, document number `QT-2026-0808-009`, total `473,000`, currency `KRW`, and blank first-row quantity were visually checked and preserved. | Good candidate evidence; still not confirmed ERP truth. |
+| `16_real_commercial_invoice_exchange_rate.pdf` | WARN. Latest strict smoke elapsed about 191s at render scale 3.0. Readable output and invoice number/rows were present, exchange rate was not used as total, but row amount values `450.00`, `110.00`, and `90.00` were still missing and document total `650.00` was also omitted. The text layer contains those values, but the rendered image/VL path misses far-right Amount evidence; increasing render scale did not fix it. | Candidate evidence only; row-level ERP export still needs existing text-layer parser/review guardrails. |
 | `21_photo_fax_po_misaligned_amounts.pdf` | WARN. Latest strict smoke elapsed about 145s. Readable output and three row candidates, but total `418,000`/currency `KRW` are missing and row 3 text is degraded as `M8 볼트 / 와서 SEW18`. | Review candidate only; do not mark provider available from this sample. |
 
 The smoke report now gates `provider_available_candidate` on both readable VL
