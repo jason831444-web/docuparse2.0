@@ -272,6 +272,7 @@ export function vlCandidateIssueLabel(value?: string | null) {
     vl_candidate_known_input_limitation: "VL 입력 한계",
     vl_candidate_dangerous_manual_error: "위험 오류 확인됨",
     vl_candidate_manual_hallucination: "원문 없는 값 생성",
+    manual_visual_check_not_performed: "원본 육안 확인 필요",
   };
   return labels[value] || titleCaseLabel(value);
 }

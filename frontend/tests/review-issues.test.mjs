@@ -155,6 +155,7 @@ assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_fragment"), "품목
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_cell"), "품목 행 값 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_expected_pdf_value"), "원본 핵심 값 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_known_input_limitation"), "VL 입력 한계");
+assert.equal(vlCandidateIssueLabel("manual_visual_check_not_performed"), "원본 육안 확인 필요");
 assert.equal(vlCandidateHandlingLabel("candidate_evidence_only"), "참고 증거만");
 assert.equal(vlCandidateHandlingLabel("use_parser_primary_vl_auxiliary"), "기존 parser 우선");
 assert.equal(vlCandidateHandlingLabel("review_candidate_only"), "검토 후보만");
