@@ -64,7 +64,7 @@ now:
 | Sample | Result | Product decision |
 | --- | --- | --- |
 | `08_image_quote_missing_quantity.pdf` | PASS. Latest strict smoke elapsed about 88s. Readable output, document number `QT-2026-0808-009`, total `473,000`, currency `KRW`, and blank first-row quantity were visually checked and preserved. | Good candidate evidence; still not confirmed ERP truth. |
-| `16_real_commercial_invoice_exchange_rate.pdf` | WARN. Latest strict smoke elapsed about 199s. Readable output, invoice number/rows/total present, exchange rate not used as total. Row amount values `450.00`, `110.00`, and `90.00` were missing from their row output. | Candidate evidence only; row-level ERP export still needs existing parser/review guardrails. |
+| `16_real_commercial_invoice_exchange_rate.pdf` | WARN. Latest strict smoke elapsed about 183s. Readable output, invoice number/rows/total present, exchange rate not used as total. Row amount values `450.00`, `110.00`, and `90.00` were missing from their row output. The text layer contains those values, but the rendered image used as VL input may omit the far-right Amount column. | Candidate evidence only; row-level ERP export still needs existing text-layer parser/review guardrails. |
 | `21_photo_fax_po_misaligned_amounts.pdf` | WARN. Latest strict smoke elapsed about 145s. Readable output and three row candidates, but total `418,000`/currency `KRW` are missing and row 3 text is degraded as `M8 볼트 / 와서 SEW18`. | Review candidate only; do not mark provider available from this sample. |
 
 The smoke report now gates `provider_available_candidate` on both readable VL
@@ -84,6 +84,10 @@ Current strict validation issue codes:
   missing or degraded in VL output.
 - `vl_candidate_missing_row_cell`: a visually verified row cell is missing from
   its output row, even when the row anchor itself appears.
+- `vl_candidate_known_input_limitation`: a known source/input limitation
+  affected VL evidence. The current concrete case is `16_real`, where row
+  Amount values are present in the PDF text layer but may be absent from the
+  rendered image supplied to the VL smoke path.
 - `vl_candidate_missing_expected_pdf_value`: a core value from
   `manual_visual_check.expected_from_pdf` such as document number, total,
   currency, vendor/customer, tax, or related document number is missing from the
