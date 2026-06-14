@@ -175,6 +175,18 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
     }
     dangerous_errors = list(manual_visual_check.get("dangerous_errors_found") or [])
     hallucinations = list(manual_visual_check.get("hallucinations_found") or [])
+    required_values = [
+        str(value)
+        for value in manual_visual_check.get("required_vl_output_values") or []
+        if str(value).strip()
+    ]
+    matched_required_values = [value for value in required_values if value in text]
+    missing_required_values = [value for value in required_values if value not in text]
+    severity = "pass"
+    if dangerous_errors or hallucinations:
+        severity = "fail"
+    elif missing_required_values:
+        severity = "warn"
     ok = (
         bool(manual_visual_check.get("pdf_opened_and_visually_checked"))
         and not dangerous_errors
@@ -186,8 +198,11 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
         "missing_expected_values": {
             key: value for key, value in expected_values.items() if key not in matched_expected_values
         },
+        "matched_required_values": matched_required_values,
+        "missing_required_values": missing_required_values,
         "dangerous_error_count": len(dangerous_errors),
         "hallucination_count": len(hallucinations),
+        "severity": severity,
     }
 
 
