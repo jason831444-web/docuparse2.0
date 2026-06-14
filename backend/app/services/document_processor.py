@@ -363,18 +363,24 @@ class DocumentProcessor:
         }
         text = result.get("text") or result.get("text_preview")
         if not isinstance(text, str) or not text.strip():
+            fallback_reason = provider_metadata.get("fallback_reason") or "vl_worker_empty_or_unreadable_output"
             return {
                 "vl_provider_metadata": provider_metadata,
                 "vl_candidate_summary": {
                     "candidate_count": 0,
                     "warning_count": 0,
-                    "failure_count": 0,
+                    "failure_count": 1 if not provider_metadata.get("ok") else 0,
                     "issue_codes": [],
                     "provider": provider_metadata["provider"],
                     "provider_available_candidate": False,
                     "parser_evaluated": False,
                     "requires_review": False,
                     "promotion_applied": False,
+                    "partial_promotion_applied": False,
+                    "promotion_mode": "none",
+                    "parser_integrated": False,
+                    "fallback_used": True,
+                    "fallback_reason": fallback_reason,
                     "gate_decision": None,
                     "gate_reasons": [],
                 },

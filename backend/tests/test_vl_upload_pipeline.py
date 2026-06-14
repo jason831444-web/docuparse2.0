@@ -188,6 +188,34 @@ def test_vl_upload_pipeline_is_noop_when_worker_is_disabled():
     assert document.document_number == "QT-UNCHANGED"
 
 
+def test_vl_upload_pipeline_records_fallback_when_worker_times_out_without_text():
+    worker = FakeVLWorker(
+        {
+            "ok": False,
+            "provider": "paddleocr_vl_1_6_gguf",
+            "status": "failed",
+            "fallback_reason": "ReadTimeout: read timeout=240.0",
+            "elapsed_ms": 240000,
+        }
+    )
+    document = _document()
+
+    metadata = _processor(worker)._vl_primary_reader_metadata(
+        Path(document.stored_file_path),
+        document,
+        document.workflow_metadata,
+    )
+
+    assert metadata is not None
+    summary = metadata["vl_candidate_summary"]
+    assert summary["candidate_count"] == 0
+    assert summary["promotion_applied"] is False
+    assert summary["parser_integrated"] is False
+    assert summary["fallback_used"] is True
+    assert summary["fallback_reason"] == "ReadTimeout: read timeout=240.0"
+    assert summary["failure_count"] == 1
+
+
 def test_process_uses_vl_first_and_skips_ppocr_ingestion_when_candidate_promotes(tmp_path):
     path = tmp_path / "quote.pdf"
     path.write_bytes(b"%PDF-1.4\n% fake test file not read when VL succeeds\n")
