@@ -120,6 +120,7 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         reasons.append(str(result["error"]))
         status = "FAIL"
     review_reasons = _review_reason_counts(result.get("review_reasons") or [])
+    row_signal_counts = _row_signal_counts(result)
 
     return {
         "filename": result.get("filename"),
@@ -151,6 +152,8 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         "review_candidates_count": result.get("review_candidates_count"),
         "vl_candidate_count": result.get("vl_candidate_count"),
         "vl_candidate_issue_codes": _string_list(result.get("vl_candidate_issue_codes")),
+        "row_signal_count": sum(row_signal_counts.values()),
+        "row_signal_summary": _format_counts(row_signal_counts),
         "processing_time_ms": result.get("processing_time_ms"),
         "status": status,
         "reasons": reasons,
@@ -222,6 +225,31 @@ def _review_reason_counts(values: list[Any]) -> str:
         if not key:
             continue
         counts[key] = counts.get(key, 0) + 1
+    return _format_counts(counts)
+
+
+def _row_signal_counts(result: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in result.get("line_items") or []:
+        if not isinstance(item, dict):
+            continue
+        quantity = item.get("quantity")
+        if quantity in (None, "", []):
+            _increment(counts, "row_missing_quantity")
+        for warning in item.get("validation_warnings") or []:
+            key = str(warning or "").strip()
+            if key:
+                _increment(counts, key)
+    for code in _string_list(result.get("vl_candidate_issue_codes")):
+        _increment(counts, code)
+    return counts
+
+
+def _increment(counts: dict[str, int], key: str) -> None:
+    counts[key] = counts.get(key, 0) + 1
+
+
+def _format_counts(counts: dict[str, int]) -> str:
     if not counts:
         return ""
     return ", ".join(f"{key} x{count}" if count > 1 else key for key, count in sorted(counts.items()))
@@ -241,11 +269,12 @@ def _markdown_report(rows: list[dict[str, Any]]) -> str:
         f"- Review Required: {summary['review_required']} ({summary['review_required_ratio']}%)",
         f"- Processing Statuses: {summary['processing_statuses'] or '-'}",
         f"- Top Review Signals: {summary['top_review_signals'] or '-'}",
+        f"- Top Row-Level Signals: {summary['top_row_signals'] or '-'}",
         "",
         "## Document Results",
         "",
-        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues | Review Reasons | Report Reasons |",
-        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---:|---:|---|---|---|",
+        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Row Signals | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues | Review Reasons | Report Reasons |",
+        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---|---:|---:|---|---|---|",
     ]
     for row in rows:
         reasons = "<br>".join(row.get("reasons") or [])
@@ -253,7 +282,7 @@ def _markdown_report(rows: list[dict[str, Any]]) -> str:
         values["reasons"] = reasons
         values["vl_candidate_issue_codes_text"] = ", ".join(row.get("vl_candidate_issue_codes") or [])
         lines.append(
-            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {provider_used} | {fallback_reason} | {review_candidates_count} | {vl_candidate_count} | {vl_candidate_issue_codes_text} | {review_reason_summary} | {reasons} |".format(
+            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {row_signal_summary} | {provider_used} | {fallback_reason} | {review_candidates_count} | {vl_candidate_count} | {vl_candidate_issue_codes_text} | {review_reason_summary} | {reasons} |".format(
                 **values,
             )
         )
@@ -265,6 +294,7 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     status_counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
     processing_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
+    row_signal_counts: dict[str, int] = {}
     review_required = 0
     for row in rows:
         status = str(row.get("status") or "")
@@ -278,10 +308,15 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             key = str(reason or "").strip()
             if key:
                 reason_counts[key] = reason_counts.get(key, 0) + 1
+        for signal, count in _parse_count_summary(row.get("row_signal_summary") or "").items():
+            row_signal_counts[signal] = row_signal_counts.get(signal, 0) + count
     total = len(rows)
     processing_summary = ", ".join(f"{key} x{value}" for key, value in sorted(processing_counts.items()))
     top_reasons = ", ".join(
         f"{key} x{value}" for key, value in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    )
+    top_row_signals = ", ".join(
+        f"{key} x{value}" for key, value in sorted(row_signal_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
     )
     return {
         "total": total,
@@ -292,7 +327,25 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "review_required_ratio": round((review_required / total * 100) if total else 0, 1),
         "processing_statuses": processing_summary,
         "top_review_signals": top_reasons,
+        "top_row_signals": top_row_signals,
     }
+
+
+def _parse_count_summary(value: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if " x" in part:
+            key, raw_count = part.rsplit(" x", 1)
+            try:
+                counts[key] = int(raw_count)
+                continue
+            except ValueError:
+                pass
+        counts[part] = 1
+    return counts
 
 
 def _compact_json(value: Any) -> str:
