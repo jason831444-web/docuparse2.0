@@ -2,7 +2,7 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems, vlCandidateIssueLabel, vlCandidateMetadata } from "@/lib/utils";
+import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems, vlCandidateHandlingLabel, vlCandidateIssueLabel, vlCandidateMetadata } from "@/lib/utils";
 import type { BBoxTableCandidate, DocumentRecord, LayoutDebugMetadata, VLCandidateMetadata } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
@@ -126,6 +126,7 @@ function VLCandidateBlock({ metadata }: { metadata: VLCandidateMetadata | null }
   const candidateCount = summary?.candidate_count ?? candidates.length;
   const issueCodes = Array.from(new Set([...(summary?.issue_codes || []), ...candidates.flatMap((candidate) => candidate.issue_codes || [])]));
   const issueDetails = candidates.flatMap((candidate) => candidate.issue_details || []).slice(0, 4);
+  const handlingLabel = vlCandidateHandlingLabel(summary?.recommended_handling || candidates[0]?.recommended_handling);
   if (!candidateCount && !issueCodes.length) return null;
   return (
     <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
@@ -133,6 +134,7 @@ function VLCandidateBlock({ metadata }: { metadata: VLCandidateMetadata | null }
         <p className="text-xs font-medium uppercase tracking-normal text-violet-900">VL 문서 이해 후보</p>
         <Badge className="border-violet-300 bg-white text-violet-800">확정값 아님</Badge>
         <Badge variant="outline" className="border-slate-300 bg-white text-slate-700">ERP 내보내기 제외</Badge>
+        {handlingLabel ? <Badge variant="outline" className="border-violet-300 bg-white text-violet-800">{handlingLabel}</Badge> : null}
       </div>
       <p className="mt-2 text-sm text-violet-950">
         PaddleOCR-VL GGUF가 참고 후보 {candidateCount ?? 0}건을 만들었습니다.

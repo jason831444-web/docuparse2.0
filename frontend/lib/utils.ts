@@ -171,6 +171,7 @@ function normalizedVLCandidate(value: unknown): VLCandidate | null {
     provider: optionalString(record.provider),
     candidate_only: optionalBoolean(record.candidate_only),
     parser_integrated: optionalBoolean(record.parser_integrated),
+    recommended_handling: optionalString(record.recommended_handling),
     provider_available_candidate: optionalBoolean(record.provider_available_candidate),
     validation_severity: optionalString(record.validation_severity),
     issue_codes: optionalStringList(record.issue_codes),
@@ -233,6 +234,7 @@ export function vlCandidateMetadata(document: { workflow_metadata?: Record<strin
     parser_integrated: optionalBoolean(summarySource.parser_integrated, layoutSummarySource.parser_integrated) ?? false,
     provider: optionalString(summarySource.provider, layoutSummarySource.provider, candidates[0]?.provider),
     provider_available_candidate: optionalBoolean(summarySource.provider_available_candidate, layoutSummarySource.provider_available_candidate, candidates[0]?.provider_available_candidate),
+    recommended_handling: optionalString(summarySource.recommended_handling, layoutSummarySource.recommended_handling, candidates[0]?.recommended_handling),
   };
   if (!candidates.length && !summary.candidate_count && !summary.issue_codes.length) return null;
   return {
@@ -270,6 +272,18 @@ export function vlCandidateIssueLabel(value?: string | null) {
     vl_candidate_known_input_limitation: "VL 입력 한계",
     vl_candidate_dangerous_manual_error: "위험 오류 확인됨",
     vl_candidate_manual_hallucination: "원문 없는 값 생성",
+  };
+  return labels[value] || titleCaseLabel(value);
+}
+
+export function vlCandidateHandlingLabel(value?: string | null) {
+  if (!value) return null;
+  const labels: Record<string, string> = {
+    candidate_evidence_only: "참고 증거만",
+    use_parser_primary_vl_auxiliary: "기존 parser 우선",
+    review_candidate_only: "검토 후보만",
+    reject_vl_candidate: "VL 후보 폐기",
+    candidate_only: "후보로만 보존",
   };
   return labels[value] || titleCaseLabel(value);
 }

@@ -14,6 +14,7 @@ import {
   reviewIssueSummary,
   reviewIssueSummaryItems,
   titleCaseLabel,
+  vlCandidateHandlingLabel,
   vlCandidateIssueLabel,
   vlCandidateMetadata,
 } from "../lib/utils.ts";
@@ -116,6 +117,7 @@ const vlMetadata = vlCandidateMetadata({
         provider: "paddleocr_vl_1_6_gguf",
         candidate_only: true,
         parser_integrated: false,
+        recommended_handling: "review_candidate_only",
         provider_available_candidate: false,
         validation_severity: "warn",
         issue_codes: ["vl_candidate_missing_document_total"],
@@ -136,13 +138,16 @@ const vlMetadata = vlCandidateMetadata({
       issue_codes: ["vl_candidate_missing_document_total"],
       provider: "paddleocr_vl_1_6_gguf",
       provider_available_candidate: false,
+      recommended_handling: "review_candidate_only",
     },
   },
 });
 assert.equal(vlMetadata?.vl_candidate_summary?.candidate_count, 1);
 assert.equal(vlMetadata?.vl_candidate_summary?.provider_available_candidate, false);
+assert.equal(vlMetadata?.vl_candidate_summary?.recommended_handling, "review_candidate_only");
 assert.equal(vlMetadata?.vl_candidates?.[0]?.candidate_only, true);
 assert.equal(vlMetadata?.vl_candidates?.[0]?.parser_integrated, false);
+assert.equal(vlMetadata?.vl_candidates?.[0]?.recommended_handling, "review_candidate_only");
 assert.equal(vlMetadata?.vl_candidates?.[0]?.issue_details?.[0]?.expected_value, "418,000");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_document_total"), "문서 합계 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_anchor"), "품목 행 누락");
@@ -150,6 +155,10 @@ assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_fragment"), "품목
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_cell"), "품목 행 값 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_expected_pdf_value"), "원본 핵심 값 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_known_input_limitation"), "VL 입력 한계");
+assert.equal(vlCandidateHandlingLabel("candidate_evidence_only"), "참고 증거만");
+assert.equal(vlCandidateHandlingLabel("use_parser_primary_vl_auxiliary"), "기존 parser 우선");
+assert.equal(vlCandidateHandlingLabel("review_candidate_only"), "검토 후보만");
+assert.equal(vlCandidateHandlingLabel("reject_vl_candidate"), "VL 후보 폐기");
 assert.equal(vlCandidateMetadata({ workflow_metadata: null }), null);
 assert.equal(titleCaseLabel("credit_note"), "차감/크레딧 문서");
 assert.equal(titleCaseLabel("internal_transfer"), "내부 이동서");

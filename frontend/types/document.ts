@@ -102,6 +102,7 @@ export interface VLCandidate {
   provider?: string | null;
   candidate_only?: boolean | null;
   parser_integrated?: boolean | null;
+  recommended_handling?: string | null;
   provider_available_candidate?: boolean | null;
   validation_severity?: string | null;
   issue_codes?: string[];
@@ -129,6 +130,7 @@ export interface VLCandidateSummary {
   parser_integrated?: boolean;
   provider?: string | null;
   provider_available_candidate?: boolean | null;
+  recommended_handling?: string | null;
 }
 
 export interface VLCandidateMetadata {
