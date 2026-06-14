@@ -764,7 +764,36 @@ def test_vl_inline_mixed_language_purchase_order_preserves_three_rows():
     assert parsed.line_items[1]["quantity"] == 1200
     assert parsed.line_items[1]["line_total"] == 158400
     assert parsed.line_items[2]["item_name"] == "SUS washer"
+    assert parsed.line_items[2]["specification"] == "M8"
     assert parsed.line_items[2]["quantity"] == 1200
+
+
+def test_vl_inline_malformed_amount_row_reports_repaired_warning_not_stale_invalids():
+    text = "\n".join([
+        "발주서",
+        "발주번호 PO-2026-0807-777",
+        "통화 KRW",
+        "품목명 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "SUS316 PLATE 2T 1000x2000 1 EA 42000 4200 46200 4200",
+        "고정 브라켓 40x60x3T 120 EA 1000 120000 12000 132000",
+        "스페이서 5mm 300 EA 500 150000 15000 165000",
+        "문서 총액: 343,200",
+        "주의: 첫 번째 줄은 금액 컬럼이 밀려 있어 검토 필요",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_malformed_amount_columns.txt")
+
+    first = parsed.line_items[0]
+    assert first["quantity"] == 1
+    assert first["unit_price"] == 42000
+    assert first["supply_amount"] == 42000
+    assert first["tax_amount"] == 4200
+    assert first["line_total"] == 46200
+    warnings = set(first["validation_warnings"])
+    assert "malformed_amount_columns_repaired" in warnings
+    assert "invalid_tax_greater_than_total" not in warnings
+    assert "invalid_tax_greater_than_supply" not in warnings
+    assert "invalid_line_total" not in warnings
 
 
 def test_vl_inline_distorted_invoice_preserves_explicit_quantity_and_price():

@@ -2181,7 +2181,7 @@ class DocumentParser:
             "item_code": item_code,
             "document_item_code": item_code,
             "source_item_code": item_code,
-            "specification": self._clean_value(item.get("specification")),
+            "specification": self._normalize_specification_value(item.get("specification")),
             "quantity": item.get("quantity"),
             "unit": self._clean_value(item.get("unit")),
             "unit_price": item.get("unit_price"),
@@ -2223,6 +2223,17 @@ class DocumentParser:
             normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
         warnings = self._line_item_amount_warnings(normalized)
         for warning in item_warnings:
+            if warning in {
+                "invalid_tax_greater_than_total",
+                "invalid_tax_greater_than_supply",
+                "invalid_supply_greater_than_total",
+                "invalid_line_total",
+            } and warning not in warnings:
+                continue
+            if warning == "explicit_quantity_price_amount_mismatch" and self._quantity_price_matches_supply(normalized):
+                if "malformed_amount_columns_repaired" not in warnings:
+                    warnings.append("malformed_amount_columns_repaired")
+                continue
             if warning not in warnings:
                 warnings.append(warning)
         if warnings:
@@ -2287,6 +2298,14 @@ class DocumentParser:
         if supply is not None and tax is not None and total is not None and abs((supply + tax) - total) > max(Decimal("1"), abs(total) * Decimal("0.02")):
             warnings.append("invalid_line_total")
         return warnings
+
+    def _quantity_price_matches_supply(self, item: dict) -> bool:
+        quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
+        unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
+        supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+        if quantity is None or unit_price is None or supply is None or supply <= 0:
+            return False
+        return abs((quantity * unit_price) - supply) <= max(Decimal("1"), abs(supply) * Decimal("0.02"))
 
     def _repair_line_items_against_document_totals(
         self,
@@ -3295,6 +3314,25 @@ class DocumentParser:
             return None
         cleaned = re.sub(r"\s+", " ", str(value)).strip(" \t\r\n:：|")
         return cleaned or None
+
+    def _normalize_specification_value(self, value: object) -> str | None:
+        cleaned = self._clean_value(value)
+        if not cleaned:
+            return None
+        tokens = cleaned.split()
+        if len(tokens) <= 1:
+            return cleaned
+        normalized_tokens: list[str] = []
+        normalized_keys: list[str] = []
+        for token in tokens:
+            key = re.sub(r"[^0-9a-z가-힣]+", "", token.lower())
+            if key and normalized_keys and key == normalized_keys[-1]:
+                if re.search(r"[A-Z]", token) and not re.search(r"[A-Z]", normalized_tokens[-1]):
+                    normalized_tokens[-1] = token
+                continue
+            normalized_tokens.append(token)
+            normalized_keys.append(key)
+        return " ".join(normalized_tokens) or cleaned
 
     def _line_items_total(self, line_items: list[dict]) -> Decimal | None:
         total = Decimal("0")
