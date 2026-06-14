@@ -122,6 +122,8 @@ class DocumentParser:
         option_selection_quote = self._is_option_selection_quotation(lines, doc_type)
         if no_amount_quantity_document:
             special_quantity_items = self._extract_special_quantity_table_items(lines)
+            if doc_type == DocumentType.inspection_report:
+                special_quantity_items = self._suppress_incomplete_inspection_quantities(special_quantity_items)
             if special_quantity_items and (
                 self._should_use_no_amount_special_items(line_items, special_quantity_items)
                 or any(
@@ -159,6 +161,8 @@ class DocumentParser:
         if no_amount_quantity_document:
             line_items = [self._strip_line_item_amount_fields(item) for item in line_items]
         line_items = self._apply_row_level_safety_overrides(line_items, lines, doc_type)
+        if doc_type == DocumentType.inspection_report:
+            line_items = self._suppress_incomplete_inspection_quantities(line_items)
         category = self._guess_category(joined)
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
@@ -702,7 +706,7 @@ class DocumentParser:
         if doc_type == DocumentType.inspection_report:
             special_items = self._extract_special_quantity_table_items(lines)
             if special_items:
-                return self._dedupe_line_items(special_items)[:80]
+                return self._dedupe_line_items(self._suppress_incomplete_inspection_quantities(special_items))[:80]
         if doc_type == DocumentType.invoice:
             foreign_invoice_items = self._extract_foreign_invoice_vertical_line_items(lines)
             if foreign_invoice_items:
@@ -737,7 +741,25 @@ class DocumentParser:
                 item = self._line_item_from_free_text(normalized)
             if item and item.get("item_name"):
                 items.append(self._normalize_line_item(item))
+        if doc_type == DocumentType.inspection_report:
+            items = self._suppress_incomplete_inspection_quantities(items)
         return self._dedupe_line_items(items)[:80]
+
+    def _suppress_incomplete_inspection_quantities(self, items: list[dict]) -> list[dict]:
+        safe_items: list[dict] = []
+        for item in items:
+            next_item = dict(item)
+            has_breakdown = any(
+                next_item.get(field) not in (None, "", [])
+                for field in ["received_quantity", "accepted_quantity", "rejected_quantity"]
+            )
+            if not has_breakdown and next_item.get("quantity") not in (None, "", []):
+                next_item.pop("quantity", None)
+                warnings = list(next_item.get("validation_warnings") or [])
+                warnings.append("inspection_quantity_breakdown_missing")
+                next_item["validation_warnings"] = sorted(set(warnings))
+            safe_items.append(next_item)
+        return safe_items
 
     def _should_prefer_numbered_vertical_items(
         self,

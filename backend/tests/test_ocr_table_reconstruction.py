@@ -331,6 +331,8 @@ def test_realistic_photo_special_quantity_documents_do_not_hallucinate_amounts()
     assert inspection.extracted_amount is None
     assert len(inspection.line_items) == 2
     assert all("line_total" not in item for item in inspection.line_items)
+    assert all(item.get("quantity") is None for item in inspection.line_items)
+    assert all("inspection_quantity_breakdown_missing" in (item.get("validation_warnings") or []) for item in inspection.line_items)
 
     assert transfer.document_number == "TRF-2026-0922-002"
     assert transfer.currency is None
