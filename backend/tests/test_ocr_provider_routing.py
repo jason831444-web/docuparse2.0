@@ -35,6 +35,7 @@ def _ocr_settings(**overrides):
         "paddleocr_vl_gguf_max_pages": 1,
         "paddleocr_vl_gguf_concurrency": 1,
         "paddleocr_vl_gguf_smoke_passed": False,
+        "paddleocr_vl_gguf_primary_reader_enabled": True,
         "paddleocr_vl_gguf_in_process_enabled": False,
         "enable_paddleocr_vl": True,
         "paddleocr_vl_model_name": "PaddleOCR-VL-1.6",
@@ -351,7 +352,7 @@ def test_provider_health_reports_gguf_disabled_with_ppocr_fallback(monkeypatch):
     assert payload["paddleocr_vl_official_full"]["status"] == "memory_blocked_on_8gb_cpu"
 
 
-def test_provider_health_keeps_gguf_candidate_inactive_until_backend_integration_enabled(monkeypatch, tmp_path):
+def test_provider_health_reports_gguf_primary_reader_before_confirmed_integration(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     (model_dir / "PaddleOCR-VL-1.6-GGUF.gguf").write_text("model")
@@ -385,11 +386,14 @@ def test_provider_health_keeps_gguf_candidate_inactive_until_backend_integration
     assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
     assert payload["primary_provider_available"] is False
     assert payload["primary_provider_candidate_available"] is True
-    assert payload["primary_provider_status"] == "active_candidate_not_integrated"
-    assert payload["runtime_strategy"] == "ppocrv4_fallback"
-    assert payload["fallback_reason"] == "paddleocr_vl_gguf_in_process_disabled"
-    assert payload["paddleocr_vl_runtime_mode"] == "candidate_not_integrated"
-    assert payload["paddleocr_vl_gguf"]["status"] == "active_candidate_not_integrated"
+    assert payload["primary_reader_available"] is True
+    assert payload["primary_reader_mode"] == "candidate_only_validated_by_parser"
+    assert payload["primary_provider_status"] == "primary_reader_candidate"
+    assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_primary_reader_with_ppocrv4_validation_fallback"
+    assert payload["fallback_reason"] == "paddleocr_vl_gguf_confirmed_extraction_not_enabled"
+    assert payload["paddleocr_vl_runtime_mode"] == "primary_reader_candidate"
+    assert payload["paddleocr_vl_gguf"]["status"] == "primary_reader_candidate"
+    assert payload["paddleocr_vl_gguf"]["primary_reader_available"] is True
 
 
 def test_provider_health_reports_gguf_primary_only_when_in_process_enabled(monkeypatch, tmp_path):
@@ -427,6 +431,7 @@ def test_provider_health_reports_gguf_primary_only_when_in_process_enabled(monke
     assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
     assert payload["primary_provider_available"] is True
     assert payload["primary_provider_candidate_available"] is True
+    assert payload["primary_reader_available"] is True
     assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
     assert payload["paddleocr_vl_gguf"]["status"] == "active_candidate"
 

@@ -74,12 +74,15 @@ const candidateNotIntegrated = providerHealthLabel({
     primary_provider: "paddleocr_vl_1_6_gguf",
     primary_provider_available: false,
     primary_provider_candidate_available: true,
+    primary_reader_available: true,
+    primary_reader_mode: "candidate_only_validated_by_parser",
     fallback_provider: "paddleocr_ppocrv4",
-    fallback_reason: "paddleocr_vl_gguf_in_process_disabled",
+    fallback_reason: "paddleocr_vl_gguf_confirmed_extraction_not_enabled",
     paddleocr_vl_gguf: {
-      status: "active_candidate_not_integrated",
-      error: "paddleocr_vl_gguf_in_process_disabled",
+      status: "primary_reader_candidate",
+      error: "paddleocr_vl_gguf_confirmed_extraction_not_enabled",
       candidate_available: true,
+      primary_reader_available: true,
       in_process_enabled: false,
     },
     ocr_worker_health: {
@@ -90,9 +93,9 @@ const candidateNotIntegrated = providerHealthLabel({
 
 assert.equal(candidateNotIntegrated.label, "OCR 정상 · PP-OCRv4");
 assert.equal(candidateNotIntegrated.tone, "fallback");
-assert.match(candidateNotIntegrated.detail, /AI 문서 파싱 후보 검증됨/);
-assert.match(candidateNotIntegrated.detail, /운영 연동 대기/);
-assert.match(candidateNotIntegrated.detail, /backend 직접 실행 차단/);
+assert.match(candidateNotIntegrated.detail, /VL primary reader 사용/);
+assert.match(candidateNotIntegrated.detail, /확정값은 parser\/검증 통과 필요/);
+assert.match(candidateNotIntegrated.detail, /확정 추출은 parser 검증 대기/);
 
 const loading = providerHealthLabel(null);
 assert.equal(loading.label, "OCR 상태 확인 중");

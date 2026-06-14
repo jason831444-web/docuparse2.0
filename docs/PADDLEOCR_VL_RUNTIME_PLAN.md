@@ -117,7 +117,7 @@ AI_PRIMARY_PROVIDER=paddleocr_vl_1_6_gguf
 AI_SECONDARY_PROVIDER=heuristic_fallback
 OCR_FALLBACK_PROVIDER=paddleocr_ppocrv4
 
-ENABLE_PADDLEOCR_VL_GGUF=false
+ENABLE_PADDLEOCR_VL_GGUF=true
 PADDLEOCR_VL_GGUF_REPO_ID=PaddlePaddle/PaddleOCR-VL-1.6-GGUF
 PADDLEOCR_VL_GGUF_MODEL_DIR=/app/models/paddleocr_vl_1_6_gguf
 PADDLEOCR_VL_GGUF_MODEL_FILE=PaddleOCR-VL-1.6-GGUF.gguf
@@ -127,6 +127,7 @@ PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS=120
 PADDLEOCR_VL_GGUF_MAX_PAGES=1
 PADDLEOCR_VL_GGUF_CONCURRENCY=1
 PADDLEOCR_VL_GGUF_SMOKE_PASSED=false
+PADDLEOCR_VL_GGUF_PRIMARY_READER_ENABLED=true
 PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED=false
 
 OCR_WORKER_URL=http://ocr-worker:8010
@@ -137,10 +138,15 @@ PREFER_OCR_WORKER=true
 passed the staged smoke set. A running `llama-server` alone is not enough to
 mark the provider available.
 
+`PADDLEOCR_VL_GGUF_PRIMARY_READER_ENABLED` defaults to true. When the staged
+smoke gate passes, GGUF is treated as the primary reader/candidate source, but
+confirmed ERP fields still require the existing parser and validation
+guardrails.
+
 `PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED` defaults to false. The server smoke path
 uses an isolated PaddleOCRVL process because importing the official runtime
-inside the production backend container has shown native crash risk. Keep the
-backend primary route disabled until a dedicated isolated VL worker path is
+inside the production backend container has shown native crash risk. Keep direct
+confirmed extraction disabled until a dedicated isolated VL worker path is
 implemented and tested.
 
 ## Health Semantics
@@ -152,6 +158,7 @@ Health distinguishes:
 - `llama_server_unreachable`
 - `llama_server_ready`
 - `smoke_not_run`
+- `primary_reader_candidate`
 - `active_candidate`
 - `active_candidate_not_integrated`
 - `fallback`
@@ -162,14 +169,16 @@ Health distinguishes:
 - GGUF model and mmproj files present;
 - llama-server health OK;
 - service smoke gate marked as passed;
-- backend in-process integration explicitly enabled, or a future isolated
-  backend worker path replacing it;
+- backend in-process confirmed extraction explicitly enabled, or a future
+  isolated backend worker path replacing it;
 - PP-OCRv4 fallback remains available.
 
 When the smoke gate has passed but `PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED=false`,
-health reports `primary_provider_candidate_available=true` and
-`primary_provider_available=false`. This is intentional: the GGUF result may be
-used as auxiliary evidence, but PP-OCRv4 remains the production extraction path.
+health reports `primary_reader_available=true`,
+`primary_provider_candidate_available=true`, and
+`primary_provider_available=false`. This is intentional: GGUF may be the first
+reader/candidate source, but PP-OCRv4 remains the validation fallback and
+confirmed ERP fields are still gated by parser/review rules.
 
 ## Guardrails
 

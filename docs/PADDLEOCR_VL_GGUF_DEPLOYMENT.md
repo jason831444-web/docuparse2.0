@@ -158,9 +158,12 @@ enough.
 
 Keep `PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED=false` for the production backend.
 The current safe path is isolated smoke or a future dedicated VL worker. If the
-smoke gate has passed but in-process integration is still disabled, health
-should show `primary_provider_candidate_available=true` and
-`primary_provider_available=false`, with PP-OCRv4 still serving production OCR.
+smoke gate has passed but in-process confirmed extraction is still disabled,
+health should show `primary_reader_available=true`,
+`primary_provider_candidate_available=true`, and
+`primary_provider_available=false`. In this mode GGUF is the primary
+reader/candidate source, while PP-OCRv4 remains the validation fallback and
+confirmed ERP fields still go through parser/review guardrails.
 
 Suggested gated rollout:
 

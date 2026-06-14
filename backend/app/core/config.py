@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     ai_second_pass_confidence_threshold: float = 0.80
     ai_model_dir: Path = Path("models")
     ocr_fallback_provider: str = "paddleocr_ppocrv4"
-    enable_paddleocr_vl_gguf: bool = False
+    enable_paddleocr_vl_gguf: bool = True
     paddleocr_vl_gguf_repo_id: str = "PaddlePaddle/PaddleOCR-VL-1.6-GGUF"
     paddleocr_vl_gguf_model_dir: Path = Path("/app/models/paddleocr_vl_1_6_gguf")
     paddleocr_vl_gguf_model_file: str = "PaddleOCR-VL-1.6-GGUF.gguf"
@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     paddleocr_vl_gguf_max_pages: int = 1
     paddleocr_vl_gguf_concurrency: int = 1
     paddleocr_vl_gguf_smoke_passed: bool = False
+    paddleocr_vl_gguf_primary_reader_enabled: bool = True
     paddleocr_vl_gguf_in_process_enabled: bool = False
     enable_paddleocr_vl: bool = False
     paddleocr_vl_model_dir: Path | None = None

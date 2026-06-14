@@ -30,7 +30,12 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
   const candidate = providers.primary_provider === "paddleocr_vl_1_6_gguf" ? " · VL 후보: GGUF" : "";
   const reasonLabel = providerFallbackReasonLabel(String(reason));
   const candidateReady = providers.primary_provider_candidate_available || providers.paddleocr_vl_gguf?.candidate_available;
-  const statusPrefix = candidateReady ? "AI 문서 파싱 후보 검증됨 · 운영 연동 대기" : "AI 문서 파싱 비활성";
+  const primaryReaderReady = providers.primary_reader_available || providers.paddleocr_vl_gguf?.primary_reader_available;
+  const statusPrefix = primaryReaderReady
+    ? "VL primary reader 사용 · 확정값은 parser/검증 통과 필요"
+    : candidateReady
+      ? "AI 문서 파싱 후보 검증됨 · 운영 연동 대기"
+      : "AI 문서 파싱 비활성";
   return {
     label: `OCR 정상 · ${workerModel}`,
     detail: `${statusPrefix}${candidate}: ${reasonLabel} (${reason}). Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
@@ -53,6 +58,9 @@ export function providerFallbackReasonLabel(reason: string): string {
   }
   if (reason.includes("in_process")) {
     return "backend 직접 실행 차단";
+  }
+  if (reason.includes("confirmed_extraction_not_enabled")) {
+    return "확정 추출은 parser 검증 대기";
   }
   if (reason.includes("disabled")) {
     return "VL 후보 비활성";

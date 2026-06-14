@@ -398,6 +398,7 @@ def provider_health() -> dict[str, Any]:
     gguf_status = _paddleocr_vl_gguf_status()
     gguf_available = bool(gguf_status.get("available"))
     gguf_candidate_available = bool(gguf_status.get("candidate_available"))
+    gguf_primary_reader_available = bool(gguf_status.get("primary_reader_available"))
     gguf_status_name = str(gguf_status.get("status") or "disabled")
     gguf_error = gguf_status.get("error")
     worker_health, worker_error = _ocr_worker_health(settings.ocr_worker_url, settings.ocr_worker_timeout_seconds)
@@ -412,6 +413,8 @@ def provider_health() -> dict[str, Any]:
     runtime_strategy = (
         "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
         if primary_provider_available
+        else "paddleocr_vl_1_6_gguf_primary_reader_with_ppocrv4_validation_fallback"
+        if primary_provider == "paddleocr_vl_1_6_gguf" and gguf_primary_reader_available
         else "ppocrv4_fallback"
     )
     fallback_reason = None
@@ -430,6 +433,14 @@ def provider_health() -> dict[str, Any]:
         "primary_provider_available": primary_provider_available,
         "primary_provider_candidate_available": bool(
             primary_provider == "paddleocr_vl_1_6_gguf" and gguf_candidate_available
+        ),
+        "primary_reader_available": bool(
+            primary_provider == "paddleocr_vl_1_6_gguf" and gguf_primary_reader_available
+        ),
+        "primary_reader_mode": (
+            "candidate_only_validated_by_parser"
+            if primary_provider == "paddleocr_vl_1_6_gguf" and gguf_primary_reader_available
+            else None
         ),
         "primary_provider_status": "active_candidate" if primary_provider_available else gguf_status_name,
         "fallback_provider": settings.ocr_fallback_provider,
@@ -457,7 +468,9 @@ def provider_health() -> dict[str, Any]:
         "paddleocr_vl_runtime_mode": (
             "primary_provider"
             if primary_provider_available
-            else ("candidate_not_integrated" if gguf_candidate_available else "unavailable")
+            else ("primary_reader_candidate" if gguf_primary_reader_available else "candidate_not_integrated")
+            if gguf_candidate_available
+            else "unavailable"
         ),
         "paddleocr_vl_model": settings.paddleocr_vl_model_name,
         "paddleocr_vl_model_dir": str(settings.paddleocr_vl_model_dir) if settings.paddleocr_vl_model_dir else None,
@@ -563,6 +576,8 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
         "concurrency": settings.paddleocr_vl_gguf_concurrency,
         "timeout_seconds": settings.paddleocr_vl_gguf_timeout_seconds,
         "smoke_passed": settings.paddleocr_vl_gguf_smoke_passed,
+        "primary_reader_enabled": settings.paddleocr_vl_gguf_primary_reader_enabled,
+        "primary_reader_available": False,
         "in_process_enabled": settings.paddleocr_vl_gguf_in_process_enabled,
         "candidate_available": False,
         "available": False,
@@ -595,9 +610,15 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
         base["error"] = "paddleocr_vl_gguf_smoke_not_run"
         return base
     base["candidate_available"] = True
+    if settings.paddleocr_vl_gguf_primary_reader_enabled:
+        base["primary_reader_available"] = True
     if not settings.paddleocr_vl_gguf_in_process_enabled:
-        base["status"] = "active_candidate_not_integrated"
-        base["error"] = "paddleocr_vl_gguf_in_process_disabled"
+        if settings.paddleocr_vl_gguf_primary_reader_enabled:
+            base["status"] = "primary_reader_candidate"
+            base["error"] = "paddleocr_vl_gguf_confirmed_extraction_not_enabled"
+        else:
+            base["status"] = "active_candidate_not_integrated"
+            base["error"] = "paddleocr_vl_gguf_in_process_disabled"
         return base
     base["status"] = "active_candidate"
     base["available"] = True
