@@ -100,6 +100,15 @@ def test_gguf_manual_visual_check_template_writer(tmp_path):
     assert data["structured_checks"]["expected_document_total"] == "418,000"
 
 
+def test_gguf_commercial_invoice_template_records_text_layer_render_gap():
+    template = manual_visual_check_template_for_sample(Path("16_real_commercial_invoice_exchange_rate.pdf"))
+
+    assert template["pdf_opened_and_visually_checked"] is False
+    assert template["expected_from_pdf"]["document_number"] == "INV-US-2026-0916-EX"
+    assert template["structured_checks"]["expected_line_amounts"] == ["450.00", "110.00", "90.00"]
+    assert "text layer contains row Amount values" in template["known_input_limitations"][0]
+
+
 def test_gguf_manual_check_accepts_blank_quantity_when_unit_follows_spec():
     text = "고정 플레이트 PLT-FIX-02 120x60x5T EA 2800 280000 28000 308000"
     manual = {
@@ -142,6 +151,20 @@ def test_gguf_manual_check_flags_missing_commercial_invoice_line_amounts():
     assert result["severity"] == "warn"
     assert result["missing_required_values"] == []
     assert result["issue_codes"].count("vl_candidate_missing_line_amount") == 3
+
+
+def test_gguf_manual_check_records_known_input_limitations():
+    text = "COMMERCIAL INVOICE\nINV-US-2026-0916-EX\nTotal USD 650.00"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "known_input_limitations": ["rendered image omits far-right Amount column"],
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "warn"
+    assert "vl_candidate_known_input_limitation" in result["issue_codes"]
 
 
 def test_gguf_manual_check_flags_exchange_rate_as_total_amount():

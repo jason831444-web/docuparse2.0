@@ -77,6 +77,9 @@ MANUAL_VISUAL_CHECK_TEMPLATES_BY_SAMPLE: dict[str, dict[str, Any]] = {
                 {"row_contains": "PCB", "cells": ["300", "0.30", "90.00"]},
             ],
         },
+        "known_input_limitations": [
+            "The PDF text layer contains row Amount values, but the rendered image used for VL smoke may omit the far-right Amount column.",
+        ],
         "hallucinations_found": [],
         "dangerous_errors_found": [],
         "notes": "Set pdf_opened_and_visually_checked=true only after opening the rendered PDF/image.",
@@ -558,6 +561,14 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
                 "code": "vl_candidate_manual_hallucination",
                 "severity": "fail",
                 "message": str(hallucination),
+            }
+        )
+    for limitation in manual_visual_check.get("known_input_limitations") or []:
+        issues.append(
+            {
+                "code": "vl_candidate_known_input_limitation",
+                "severity": "warn",
+                "message": str(limitation),
             }
         )
     severity = "pass"
