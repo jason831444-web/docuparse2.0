@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 try:
     from rapidfuzz import fuzz
@@ -1249,13 +1250,25 @@ class DocumentParser:
             if target_index < len(safe_items):
                 item = safe_items[target_index]
                 item.pop("quantity", None)
-                item.pop("unit_price", None)
+                raw_window = self._item_context_window(item, lines)
+                if item.get("unit_price") is not None and not self._numeric_value_appears_in_text(item["unit_price"], raw_window):
+                    item.pop("unit_price", None)
                 warnings = list(item.get("validation_warnings") or [])
                 for warning in ["missing_quantity", "quantity_cell_blank"]:
                     if warning not in warnings:
                         warnings.append(warning)
                 item["validation_warnings"] = warnings
         return safe_items
+
+    def _numeric_value_appears_in_text(self, value: Any, text: str) -> bool:
+        expected = self._to_decimal(str(value))
+        if expected is None:
+            return False
+        for token in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+            observed = self._to_decimal(token.replace(",", ""))
+            if observed is not None and observed == expected:
+                return True
+        return False
 
     def _delivery_quantity_item_from_prefix(self, prefix: str) -> dict:
         tokens = prefix.split()
