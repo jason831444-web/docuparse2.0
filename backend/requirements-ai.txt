@@ -1,25 +1,12 @@
 # Optional heavy local model runtime dependencies.
-# Install only on machines intended to run PaddleOCR-VL / Qwen2.5-VL locally.
-
-# PaddleOCR-VL ONNX quantized provider.
-# Keep this stack optional. The PP-OCRv4 OCR worker remains the production
-# fallback and must not install this file by default.
-onnxruntime==1.23.2
-tokenizers>=0.20.0
+# Install only on machines intended to run official PaddleOCR-VL locally.
 
 # PaddleOCR-VL 3.x/PaddleX provider experiments.
 # These are not installed in the ocr-worker because they can conflict with
 # the legacy PaddleOCR 2.x PP-OCRv4 runtime.
 paddleocr==3.6.0
 paddlex[ocr]==3.6.0
+paddlepaddle>=3.0.0
 
-# Text interpretation + Qwen2.5-VL provider
-# Gemma 4 support follows the Hugging Face model card guidance to use a current Transformers release.
-torch>=2.5.0
-transformers>=4.58.0
-accelerate>=1.2.0
-sentencepiece>=0.2.0
-protobuf>=5.29.0
-qwen-vl-utils>=0.0.10
 huggingface_hub>=0.27.0
 hf_xet>=1.1.0

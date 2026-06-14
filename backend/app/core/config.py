@@ -39,23 +39,13 @@ class Settings(BaseSettings):
     gemma_model_dir: Path | None = None
     gemma_device: str = "auto"
     huggingface_token: str | None = None
-    ai_primary_provider: str = "paddleocr_vl_onnx_quantized"
-    ai_secondary_provider: str = "qwen2_5_vl"
-    ai_enable_second_pass: bool = True
+    ai_primary_provider: str = "paddleocr_vl"
+    ai_secondary_provider: str = "heuristic_fallback"
+    ai_enable_second_pass: bool = False
     ai_second_pass_confidence_threshold: float = 0.80
     ai_model_dir: Path = Path("models")
-    enable_paddleocr_vl_onnx: bool = False
-    paddleocr_vl_onnx_model_path: Path | None = None
-    paddleocr_vl_onnx_model_name: str = "PaddleOCR-VL-1.5-ONNX-quantized"
-    paddleocr_vl_onnx_repo_id: str = "lbm364dl/PaddleOCR-VL-1.5-ONNX"
-    paddleocr_vl_onnx_device: str = "cpu"
-    paddleocr_vl_onnx_timeout_seconds: float = 60.0
-    paddleocr_vl_onnx_max_pages: int = 1
-    paddleocr_vl_onnx_mode: str = "primary_with_fallback"
-    paddleocr_vl_onnx_runtime_version: str = "1.23.2"
-    paddleocr_vl_onnx_runner_module: str | None = None
     ocr_fallback_provider: str = "paddleocr_ppocrv4"
-    enable_paddleocr_vl: bool = False
+    enable_paddleocr_vl: bool = True
     paddleocr_vl_model_dir: Path | None = None
     paddleocr_vl_layout_model_dir: Path | None = None
     paddleocr_vl_hf_repo: str = "PaddlePaddle/PaddleOCR-VL-1.6"
@@ -63,9 +53,6 @@ class Settings(BaseSettings):
     paddleocr_vl_device: str | None = "cpu"
     paddleocr_vl_engine: str | None = None
     paddleocr_vl_timeout_seconds: float = 180.0
-    qwen2_5_vl_model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
-    qwen2_5_vl_model_dir: Path | None = None
-    qwen2_5_vl_device: str = "auto"
     pdf_ocr_max_pages: int = 3
     ocr_worker_url: str | None = None
     prefer_ocr_worker: bool = False
@@ -77,10 +64,8 @@ class Settings(BaseSettings):
     @field_validator(
         "llama_cpp_model_path",
         "gemma_model_dir",
-        "paddleocr_vl_onnx_model_path",
         "paddleocr_vl_model_dir",
         "paddleocr_vl_layout_model_dir",
-        "qwen2_5_vl_model_dir",
         mode="before",
     )
     @classmethod

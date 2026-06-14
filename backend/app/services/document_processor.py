@@ -664,15 +664,15 @@ class DocumentProcessor:
         if not diagnostics.get("document_ai_attempted"):
             diagnostics["primary_provider_status"] = "not_attempted"
             return
-        diagnostics["primary_provider"] = "paddleocr_vl_onnx_quantized"
+        diagnostics["primary_provider"] = "paddleocr_vl"
         unavailable = next((provider for provider in provider_chain if provider.endswith("_unavailable") or "unavailable" in provider), None)
         if unavailable:
             diagnostics["primary_provider_status"] = "unavailable"
             diagnostics["primary_provider_failed_reason"] = unavailable
-            fallback = next((provider for provider in provider_chain if provider in {"heuristic_fallback", "local", "qwen2_5_vl"}), None)
+            fallback = next((provider for provider in provider_chain if provider in {"heuristic_fallback", "local"}), None)
             diagnostics["document_ai_fallback_provider"] = fallback or diagnostics.get("document_ai_fallback_provider")
             return
-        if "paddleocr_vl_onnx_quantized" in provider_chain:
+        if "paddleocr_vl" in provider_chain:
             diagnostics["primary_provider_status"] = "succeeded"
             return
         diagnostics["primary_provider_status"] = "not_used"

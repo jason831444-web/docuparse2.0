@@ -391,34 +391,31 @@ def provider_health() -> dict[str, Any]:
     settings = get_settings()
     paddle_importable = PaddleOCRProvider.is_available()
     paddle_usable, paddle_error = _paddleocr_usable()
-    onnx_vl_status = _paddleocr_vl_onnx_status()
-    onnx_vl_usable = bool(onnx_vl_status.get("usable"))
-    onnx_vl_error = onnx_vl_status.get("error")
     paddle_vl_status = _paddleocr_vl_status()
     paddle_vl_importable = bool(paddle_vl_status.get("importable"))
     paddle_vl_usable = bool(paddle_vl_status.get("usable"))
     paddle_vl_error = paddle_vl_status.get("error")
     worker_health, worker_error = _ocr_worker_health(settings.ocr_worker_url, settings.ocr_worker_timeout_seconds)
     worker_model = (worker_health or {}).get("ocr_version") or "PP-OCRv4"
-    primary_provider_available = bool(settings.enable_paddleocr_vl_onnx and onnx_vl_usable)
-    active_ocr_engine = "PaddleOCR-VL ONNX" if primary_provider_available else str(worker_model)
+    primary_provider_available = bool(settings.enable_paddleocr_vl and paddle_vl_usable)
+    active_ocr_engine = "PaddleOCR-VL" if primary_provider_available else str(worker_model)
     runtime_strategy = (
-        "paddleocr_vl_onnx_primary_with_ppocrv4_fallback"
+        "paddleocr_vl_primary_with_ppocrv4_fallback"
         if primary_provider_available
         else "ppocrv4_fallback"
     )
     return {
         "ocr_engine": active_ocr_engine,
-        "ocr_model": settings.paddleocr_vl_onnx_model_name if primary_provider_available else worker_model,
-        "primary_provider": "paddleocr_vl_onnx_quantized",
-        "primary_provider_enabled": settings.enable_paddleocr_vl_onnx,
+        "ocr_model": settings.paddleocr_vl_model_name if primary_provider_available else worker_model,
+        "primary_provider": "paddleocr_vl",
+        "primary_provider_enabled": settings.enable_paddleocr_vl,
         "primary_provider_available": primary_provider_available,
         "primary_provider_status": "available" if primary_provider_available else "unavailable",
         "fallback_provider": settings.ocr_fallback_provider,
         "fallback_provider_available": worker_health is not None or paddle_usable,
-        "fallback_reason": None if primary_provider_available else (onnx_vl_error or "paddleocr_vl_onnx_unavailable"),
+        "fallback_reason": None if primary_provider_available else (paddle_vl_error or "paddleocr_vl_unavailable"),
         "runtime_strategy": runtime_strategy,
-        "device": settings.paddleocr_vl_onnx_device or (worker_health or {}).get("device") or "cpu",
+        "device": settings.paddleocr_vl_device or (worker_health or {}).get("device") or "cpu",
         "tesseract_available": _module_available("pytesseract"),
         "ocr_worker_configured": bool(settings.ocr_worker_url),
         "ocr_worker_url": settings.ocr_worker_url,
@@ -433,23 +430,14 @@ def provider_health() -> dict[str, Any]:
         "paddleocr_runtime_probe": "document_level_only",
         "paddleocr_runtime_note": "Actual inference is isolated per document and falls back to Tesseract on timeout or worker failure.",
         "paddleocr_runtime_disabled_reason": _paddleocr_runtime_disabled_reason,
-        "paddleocr_vl_onnx_enabled": settings.enable_paddleocr_vl_onnx,
-        "paddleocr_vl_onnx_usable": onnx_vl_usable,
-        "paddleocr_vl_onnx_init_error": onnx_vl_error,
-        "paddleocr_vl_onnx_runtime_mode": "primary_provider" if primary_provider_available else "unavailable",
-        "paddleocr_vl_onnx_model": settings.paddleocr_vl_onnx_model_name,
-        "paddleocr_vl_onnx_model_path": onnx_vl_status.get("model_path"),
-        "paddleocr_vl_onnx_probe": onnx_vl_status,
-        "legacy_paddleocr_vl_provider": "paddleocr_vl",
         "paddleocr_vl_importable": paddle_vl_importable,
         "paddleocr_vl_usable": paddle_vl_usable,
         "paddleocr_vl_init_error": paddle_vl_error,
-        "paddleocr_vl_runtime_mode": "future_provider" if paddle_vl_usable else "unavailable",
+        "paddleocr_vl_runtime_mode": "primary_provider" if primary_provider_available else "unavailable",
         "paddleocr_vl_model": settings.paddleocr_vl_model_name,
         "paddleocr_vl_model_dir": str(settings.paddleocr_vl_model_dir) if settings.paddleocr_vl_model_dir else None,
         "paddleocr_vl_hf_repo": settings.paddleocr_vl_hf_repo,
         "paddleocr_vl_probe": paddle_vl_status,
-        "qwen_vl_available": _module_available("qwen_vl_utils") and _module_available("transformers"),
     }
 
 
@@ -458,72 +446,6 @@ def _module_available(name: str) -> bool:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
         return False
-
-
-def _paddleocr_vl_onnx_status() -> dict[str, Any]:
-    settings = get_settings()
-    model_path = settings.paddleocr_vl_onnx_model_path or (settings.ai_model_dir / "paddleocr_vl_onnx_quantized")
-    payload: dict[str, Any] = {
-        "provider": "paddleocr_vl_onnx_quantized",
-        "enabled": settings.enable_paddleocr_vl_onnx,
-        "usable": False,
-        "error": None,
-        "repo_id": getattr(settings, "paddleocr_vl_onnx_repo_id", None),
-        "model": settings.paddleocr_vl_onnx_model_name,
-        "model_path": str(model_path),
-        "device": settings.paddleocr_vl_onnx_device,
-        "runtime": "onnxruntime",
-        "expected_runtime_version": getattr(settings, "paddleocr_vl_onnx_runtime_version", None),
-    }
-    if not settings.enable_paddleocr_vl_onnx:
-        payload["error"] = "paddleocr_vl_onnx_disabled"
-        return payload
-    if not _module_available("onnxruntime"):
-        payload["error"] = "onnxruntime_missing"
-        return payload
-    if not model_path.exists():
-        payload["error"] = "paddleocr_vl_onnx_model_path_missing"
-        return payload
-    onnx_files = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.onnx") if path.is_file())
-    payload["onnx_model_files"] = onnx_files[:8]
-    payload["onnx_model_file_count"] = len(onnx_files)
-    required_onnx_files = [
-        "onnx/decoder_model_merged.onnx",
-        "onnx/embed_tokens.onnx",
-        "onnx/vision_encoder.onnx",
-    ]
-    missing_onnx_files = [name for name in required_onnx_files if not (model_path / name).exists()]
-    payload["missing_onnx_files"] = missing_onnx_files
-    if missing_onnx_files:
-        payload["error"] = "paddleocr_vl_onnx_model_missing"
-        return payload
-    processor_files = ["tokenizer.json", "tokenizer.model", "config.json", "processor_config.json", "preprocessor_config.json"]
-    missing_processor_files = [name for name in processor_files if not (model_path / name).exists()]
-    payload["missing_processor_files"] = missing_processor_files
-    if missing_processor_files:
-        payload["error"] = "paddleocr_vl_onnx_processor_missing"
-        return payload
-    runner_module = getattr(settings, "paddleocr_vl_onnx_runner_module", None) or "app.services.paddleocr_vl_onnx_runner"
-    payload["runner_module"] = runner_module
-    if not _module_available(str(runner_module)):
-        payload["error"] = "paddleocr_vl_onnx_runner_import_failed"
-        return payload
-    marker_path = model_path / ".docuparse_vl_onnx_validated.json"
-    payload["validation_marker_path"] = str(marker_path)
-    if not marker_path.exists():
-        payload["error"] = "paddleocr_vl_onnx_inference_not_validated"
-        return payload
-    try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        payload["error"] = f"paddleocr_vl_onnx_validation_marker_invalid: {exc}"
-        return payload
-    payload["validation_marker"] = marker
-    if marker.get("provider_used") != "paddleocr_vl_onnx_quantized" or marker.get("output_validation_status") != "candidate_text_generated":
-        payload["error"] = marker.get("fallback_reason") or marker.get("output_validation_status") or "paddleocr_vl_onnx_inference_not_validated"
-        return payload
-    payload["usable"] = True
-    return payload
 
 
 def _ocr_worker_health(url: str | None, timeout_seconds: float) -> tuple[dict[str, Any] | None, str | None]:

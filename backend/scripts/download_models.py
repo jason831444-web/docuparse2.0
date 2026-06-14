@@ -6,8 +6,7 @@ from huggingface_hub import HfApi, snapshot_download
 
 
 DEFAULT_MODELS = {
-    "paddleocr_vl": "PaddlePaddle/PaddleOCR-VL-1.5",
-    "qwen2_5_vl": "Qwen/Qwen2.5-VL-3B-Instruct",
+    "paddleocr_vl": "PaddlePaddle/PaddleOCR-VL-1.6",
 }
 
 
@@ -39,7 +38,7 @@ def download(repo_id: str, target_dir: Path, dry_run: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download optional DocuParse open-source model weights.")
-    parser.add_argument("--model", choices=["paddleocr_vl", "qwen2_5_vl", "all"], default="all")
+    parser.add_argument("--model", choices=["paddleocr_vl", "all"], default="all")
     parser.add_argument("--target", type=Path, default=Path("models"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

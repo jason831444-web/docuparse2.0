@@ -164,6 +164,6 @@ curl -fsS "http://127.0.0.1/api/documents/$DOC_ID" \
 
 - TLS is not terminated by `infra/nginx.prod.conf`. Put this stack behind a server TLS proxy/load balancer or extend nginx with certificates before exposing it directly.
 - `INSTALL_LLAMA_CPP_DEPS=true` installs `llama-cpp-python`; first builds may compile native code if a matching wheel is unavailable.
-- `INSTALL_AI_DEPS=true` installs the heavier HF/Transformers/Paddle/Qwen packages. Keep it `false` for the GGUF production path unless comparing old behavior.
+- `INSTALL_AI_DEPS=true` installs the heavier PaddleOCR-VL/PaddleX packages. Keep it `false` for the GGUF production path unless comparing old behavior.
 - The nginx upload limit is `64m`; keep it aligned with `MAX_UPLOAD_MB`.
 - `PROCESSING_MODE` remains `inline`, matching the current app architecture. Large Gemma inference can keep upload requests open for a long time.

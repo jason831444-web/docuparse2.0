@@ -2,7 +2,7 @@
   "api_document_id": "532fb6ec-ed53-4434-b9a0-ad054c354f4b",
   "api_extraction_method": "pdf_scanned_page_ocr",
   "api_processing_status": "ready",
-  "api_provider_chain": "pdf_scanned_page_ocr+paddleocr_vl_unavailable+heuristic_fallback+qwen2_5_vl_unavailable+heuristic_interpretation+ai_interpretation_disabled",
+  "api_provider_chain": "pdf_scanned_page_ocr+paddleocr_vl_unavailable+heuristic_fallback+heuristic_interpretation+ai_interpretation_disabled",
   "api_review_required": false,
   "file_family": "pdf",
   "file_size_bytes": 225292,

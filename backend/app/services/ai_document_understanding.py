@@ -1,6 +1,5 @@
 import base64
 import html
-import importlib
 import json
 import logging
 import os
@@ -940,206 +939,6 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         return Path(cleaned) if cleaned else None
 
 
-class PaddleOCRVLOnnxQuantizedDocumentAIService(DocumentAIService):
-    provider_name = "paddleocr_vl_onnx_quantized"
-
-    def __init__(self) -> None:
-        self.settings = get_settings()
-        self.local_normalizer = LocalDocumentAIService()
-        if not self.settings.enable_paddleocr_vl_onnx:
-            raise RuntimeError("PaddleOCR-VL ONNX provider is disabled by ENABLE_PADDLEOCR_VL_ONNX=false.")
-        try:
-            import onnxruntime as ort  # noqa: F401
-        except Exception as exc:
-            raise RuntimeError("PaddleOCR-VL ONNX provider requires onnxruntime.") from exc
-
-        self.model_path = self.settings.paddleocr_vl_onnx_model_path or (self.settings.ai_model_dir / "paddleocr_vl_onnx_quantized")
-        if not self.model_path.exists():
-            raise RuntimeError(f"PaddleOCR-VL ONNX model path does not exist: {self.model_path}")
-        required_onnx_files = [
-            self.model_path / "onnx" / "decoder_model_merged.onnx",
-            self.model_path / "onnx" / "embed_tokens.onnx",
-            self.model_path / "onnx" / "vision_encoder.onnx",
-        ]
-        missing_onnx = [str(path.relative_to(self.model_path)) for path in required_onnx_files if not path.exists()]
-        if missing_onnx:
-            raise RuntimeError(f"PaddleOCR-VL ONNX model files are missing: {', '.join(missing_onnx)}")
-        self.model_files = sorted(path for path in self.model_path.rglob("*.onnx") if path.is_file())
-        required_processor_files = ["tokenizer.json", "tokenizer.model", "config.json", "processor_config.json", "preprocessor_config.json"]
-        missing = [name for name in required_processor_files if not (self.model_path / name).exists()]
-        if missing:
-            raise RuntimeError(f"PaddleOCR-VL ONNX processor files are missing: {', '.join(missing)}")
-        runner_module = self.settings.paddleocr_vl_onnx_runner_module or "app.services.paddleocr_vl_onnx_runner"
-        try:
-            self.runner = importlib.import_module(runner_module)
-        except Exception as exc:
-            raise RuntimeError(f"PaddleOCR-VL ONNX runner import failed: {runner_module}") from exc
-        if not hasattr(self.runner, "predict"):
-            raise RuntimeError(f"PaddleOCR-VL ONNX runner module has no predict(...) function: {runner_module}")
-        self.runner_module = runner_module
-
-    def analyze(
-        self,
-        image_path: Path,
-        raw_text: str,
-        parsed: ParsedDocument,
-        filename: str = "",
-    ) -> AIDocumentUnderstandingResult:
-        start = time.perf_counter()
-        output = self._run_inference(image_path)
-        normalized = self._normalize_output(output)
-        provider_text = normalized["text"]
-        validation_status = self._validate_provider_output(provider_text)
-        if validation_status != "candidate_text_generated":
-            raise RuntimeError(f"PaddleOCR-VL ONNX output validation failed: {validation_status}")
-        if not provider_text and not normalized["line_candidates"] and not normalized["table_candidates"]:
-            raise RuntimeError("PaddleOCR-VL ONNX output was empty.")
-
-        merged_text = "\n".join(part for part in [provider_text, raw_text] if part.strip())
-        provider_parsed = DocumentParser().parse(merged_text or raw_text, filename)
-        result = self.local_normalizer.analyze(image_path, merged_text or raw_text, provider_parsed, filename)
-        result.provider = self.provider_name
-        result.extraction_provider = self.provider_name
-        result.provider_chain = [self.provider_name]
-        result.merge_strategy = "paddleocr_vl_onnx_candidates_normalized"
-        result.field_sources.update({key: self.provider_name for key in result.field_sources})
-        result.extraction_notes.append(
-            f"{self.settings.paddleocr_vl_onnx_model_name} produced normalized candidate data in "
-            f"{int((time.perf_counter() - start) * 1000)} ms."
-        )
-        result.extraction_notes.append(
-            "PaddleOCR-VL ONNX table output is candidate evidence only and still requires parser/review/export validation."
-        )
-        if provider_text:
-            result.cleaned_raw_text = provider_text
-        return result
-
-    def _run_inference(self, image_path: Path) -> Any:
-        return self.runner.predict(
-            image_path=str(image_path),
-            model_path=str(self.model_path),
-            model_files=[str(path) for path in self.model_files],
-            device=self.settings.paddleocr_vl_onnx_device,
-            timeout_seconds=self.settings.paddleocr_vl_onnx_timeout_seconds,
-            max_pages=self.settings.paddleocr_vl_onnx_max_pages,
-        )
-
-    def _normalize_output(self, output: Any) -> dict[str, Any]:
-        payload = output if isinstance(output, dict) else {}
-        raw_text = payload.get("text") or payload.get("markdown") or payload.get("content") or ""
-        line_candidates = payload.get("line_candidates") or payload.get("lines") or []
-        table_candidates = payload.get("table_candidates") or payload.get("tables") or []
-        layout_elements = payload.get("layout_elements") or payload.get("elements") or []
-        text_parts = [str(raw_text).strip()]
-        for line in line_candidates:
-            if isinstance(line, dict) and line.get("text"):
-                text_parts.append(str(line["text"]).strip())
-        return {
-            "text": "\n".join(part for part in text_parts if part),
-            "line_candidates": line_candidates if isinstance(line_candidates, list) else [],
-            "table_candidates": table_candidates if isinstance(table_candidates, list) else [],
-            "layout_elements": layout_elements if isinstance(layout_elements, list) else [],
-            "raw_blocks": payload.get("raw_blocks") or [],
-            "provider_metadata": {
-                "provider": self.provider_name,
-                "model": self.settings.paddleocr_vl_onnx_model_name,
-                "runtime": "onnxruntime",
-                "device": self.settings.paddleocr_vl_onnx_device,
-                "runner_module": self.runner_module,
-                "line_candidates_count": len(line_candidates) if isinstance(line_candidates, list) else 0,
-                "table_candidates_count": len(table_candidates) if isinstance(table_candidates, list) else 0,
-            },
-        }
-
-    def _validate_provider_output(self, text: str) -> str:
-        try:
-            from app.services.paddleocr_vl_onnx_runner import validate_generated_text
-        except Exception:
-            return "runner_output_validator_missing"
-        return validate_generated_text(text, prompt="OCR:")
-
-
-class Qwen25VLDocumentAIService(DocumentAIService):
-    provider_name = "qwen2_5_vl"
-
-    def __init__(self) -> None:
-        self.settings = get_settings()
-        try:
-            import torch
-            from qwen_vl_utils import process_vision_info
-            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-        except Exception as exc:
-            raise RuntimeError(
-                "Qwen2.5-VL runtime is not installed. Install backend/requirements-ai.txt "
-                "and download Qwen2.5-VL weights."
-            ) from exc
-
-        self.torch = torch
-        self.process_vision_info = process_vision_info
-        model_ref = str(self.settings.qwen2_5_vl_model_dir or self.settings.qwen2_5_vl_model_name)
-        device_map = "auto" if self.settings.qwen2_5_vl_device == "auto" else {"": self.settings.qwen2_5_vl_device}
-        self.processor = AutoProcessor.from_pretrained(model_ref, min_pixels=256 * 28 * 28, max_pixels=1024 * 28 * 28)
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_ref,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map=device_map,
-        )
-
-    def analyze(
-        self,
-        image_path: Path,
-        raw_text: str,
-        parsed: ParsedDocument,
-        filename: str = "",
-    ) -> AIDocumentUnderstandingResult:
-        prompt = self._prompt(raw_text, parsed, filename)
-        messages = [{"role": "user", "content": [{"type": "image", "image": str(image_path)}, {"type": "text", "text": prompt}]}]
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs = self.process_vision_info(messages)
-        inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt").to(self.model.device)
-        generated_ids = self.model.generate(**inputs, max_new_tokens=512)
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids, strict=False)
-        ]
-        output_text = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        payload = self._extract_json(output_text)
-        result = OpenAIVisionDocumentAIService._normalize(self, payload, parsed, raw_text)
-        result.provider = self.provider_name
-        result.extraction_provider = self.provider_name
-        result.provider_chain = [self.provider_name]
-        result.extraction_notes.append("Qwen2.5-VL refinement completed.")
-        return result
-
-    def _prompt(self, raw_text: str, parsed: ParsedDocument, filename: str) -> str:
-        return (
-            "Refine this document extraction. Return only JSON with keys: document_type, title, "
-            "merchant_name, vendor_name, customer_name, document_number, issue_date, due_date, line_items, "
-            "low_confidence_fields, extracted_date, extracted_amount, subtotal, tax, currency, category, "
-            "tags, summary, cleaned_raw_text, confidence_score, review_required, extraction_notes. "
-            "Use document_type purchase_order, quotation, transaction_statement, delivery_note, invoice, "
-            "packing_list, inspection_report, contract, general_document, receipt, notice, document, memo, "
-            "presentation, or other. For line_items include item_name, item_code, specification, quantity, "
-            "unit, unit_price, supply_amount, tax_amount, line_total. Write all user-facing summary and extraction_notes in Korean only. "
-            "Fill missing fields only when visible or strongly supported. "
-            f"Filename: {filename}. Prior parser type: {parsed.document_type.value}. OCR text:\n{raw_text[:6000]}"
-        )
-
-    def _extract_json(self, output_text: str) -> dict[str, Any]:
-        try:
-            return json.loads(output_text)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", output_text, flags=re.DOTALL)
-            if not match:
-                raise
-            return json.loads(match.group(0))
-
-    def _decimal(self, value: Any) -> Decimal | None:
-        return OpenAIVisionDocumentAIService._decimal(self, value)
-
-    def _parse_date(self, value: Any) -> date | None:
-        return OpenAIVisionDocumentAIService._parse_date(self, value)
-
-
 class HybridOpenSourceDocumentAIService(DocumentAIService):
     provider_name = "hybrid_open_source"
 
@@ -1198,12 +997,8 @@ class HybridOpenSourceDocumentAIService(DocumentAIService):
 
     def _provider(self, provider_name: str) -> DocumentAIService:
         normalized = provider_name.lower()
-        if normalized == "paddleocr_vl_onnx_quantized":
-            return get_paddleocr_vl_onnx_quantized_document_ai_service()
         if normalized == "paddleocr_vl":
             return get_paddleocr_vl_document_ai_service()
-        if normalized == "qwen2_5_vl":
-            return get_qwen25_vl_document_ai_service()
         if normalized in {"heuristic", "heuristic_fallback", "local"}:
             return self.local_fallback
         if normalized == "openai":
@@ -1320,18 +1115,6 @@ def get_openai_vision_document_ai_service() -> OpenAIVisionDocumentAIService:
 def get_paddleocr_vl_document_ai_service() -> PaddleOCRVLDocumentAIService:
     logger.warning("Creating shared PaddleOCRVLDocumentAIService instance")
     return PaddleOCRVLDocumentAIService()
-
-
-@lru_cache(maxsize=1)
-def get_paddleocr_vl_onnx_quantized_document_ai_service() -> PaddleOCRVLOnnxQuantizedDocumentAIService:
-    logger.warning("Creating shared PaddleOCRVLOnnxQuantizedDocumentAIService instance")
-    return PaddleOCRVLOnnxQuantizedDocumentAIService()
-
-
-@lru_cache(maxsize=1)
-def get_qwen25_vl_document_ai_service() -> Qwen25VLDocumentAIService:
-    logger.warning("Creating shared Qwen25VLDocumentAIService instance")
-    return Qwen25VLDocumentAIService()
 
 
 @lru_cache(maxsize=1)

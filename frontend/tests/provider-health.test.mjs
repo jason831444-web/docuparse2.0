@@ -4,27 +4,27 @@ import { providerHealthLabel } from "../lib/provider-health.ts";
 
 const active = providerHealthLabel({
   providers: {
-    ocr_engine: "PaddleOCR-VL ONNX",
-    ocr_model: "PaddleOCR-VL-1.5-ONNX-quantized",
-    primary_provider: "paddleocr_vl_onnx_quantized",
+    ocr_engine: "PaddleOCR-VL",
+    ocr_model: "PaddleOCR-VL-1.6",
+    primary_provider: "paddleocr_vl",
     primary_provider_available: true,
     fallback_provider: "paddleocr_ppocrv4",
     device: "cpu",
   },
 });
 
-assert.equal(active.label, "OCR 정상 · PaddleOCR-VL-1.5-ONNX-quantized · CPU");
+assert.equal(active.label, "OCR 정상 · PaddleOCR-VL-1.6 · CPU");
 assert.equal(active.tone, "primary");
-assert.match(active.detail, /Primary provider: paddleocr_vl_onnx_quantized/);
+assert.match(active.detail, /Primary provider: paddleocr_vl/);
 
 const degraded = providerHealthLabel({
   providers: {
     ocr_engine: "PP-OCRv4",
     ocr_model: "PP-OCRv4",
-    primary_provider: "paddleocr_vl_onnx_quantized",
+    primary_provider: "paddleocr_vl",
     primary_provider_available: false,
     fallback_provider: "paddleocr_ppocrv4",
-    fallback_reason: "paddleocr_vl_onnx_disabled",
+    fallback_reason: "paddleocr_vl_unavailable",
     ocr_worker_health: {
       model: "PP-OCRv4",
       ocr_version: "PP-OCRv4",
@@ -36,7 +36,7 @@ const degraded = providerHealthLabel({
 assert.equal(degraded.label, "OCR 정상 · PP-OCRv4");
 assert.equal(degraded.tone, "fallback");
 assert.match(degraded.detail, /AI 문서 파싱 비활성/);
-assert.match(degraded.detail, /paddleocr_vl_onnx_disabled/);
+assert.match(degraded.detail, /paddleocr_vl_unavailable/);
 
 const loading = providerHealthLabel(null);
 assert.equal(loading.label, "OCR 상태 확인 중");

@@ -91,7 +91,7 @@ class LightweightDocumentRouter:
             if quality_escalation or confidence < 0.68 or parsed.document_type == DocumentType.other or stats["line_count"] < 6:
                 reasons.append("Image/layout document benefits from vision extraction.")
                 return DocumentRoute(
-                    "image_paddleocr_vl_onnx",
+                    "image_paddleocr_vl",
                     ProcessingPath.heavy,
                     True,
                     confidence=confidence,
@@ -169,7 +169,7 @@ class LightweightDocumentRouter:
                 reasons=["Receipt extraction is mostly usable; heavy vision was skipped."],
             )
         return DocumentRoute(
-            "image_paddleocr_vl_onnx",
+            "image_paddleocr_vl",
             ProcessingPath.heavy,
             heavy_ai_required=True,
             review_required=True,

@@ -1,99 +1,45 @@
 # PaddleOCR-VL Runtime Plan
 
-DocuParse currently keeps the stable PP-OCRv4 worker as the fallback OCR path
-and treats PaddleOCR-VL as an optional primary document parsing provider. This
-document records the runtime work needed before PaddleOCR-VL can be enabled as
-the default provider in production.
+DocuParse uses the official PaddleOCR-VL provider as the primary document
+understanding path and keeps the stable PP-OCRv4 worker as the fallback OCR
+path. Experimental duplicate model paths have been removed from the runtime
+surface to avoid ambiguous provider status and duplicate model stacks.
 
-## Current Production Path
+## Active Provider Chain
 
-- `ocr-worker`: PaddleOCR 2.x legacy API
-- OCR model: `PP-OCRv4`
-- Language: `korean`
-- Device: CPU
-- Runtime strategy: `paddleocr_2x_legacy_ocr_api`
-- Backend heavy provider setting: `AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized`
-- Actual PaddleOCR-VL ONNX status today: disabled/degraded unless
-  `ENABLE_PADDLEOCR_VL_ONNX=true`, `onnxruntime` is installed, and an ONNX
-  quantized model bundle is mounted.
-
-The PP-OCRv4 worker must remain available even when PaddleOCR-VL is enabled.
-
-## Target Provider Chain
-
-1. `paddleocr_vl_onnx_quantized`
-   - Model: `PaddleOCR-VL-1.5-ONNX-quantized`
-   - Use for image/scanned/photographed documents that route to heavy document
-     understanding.
-   - Normalize output into text/table candidates before existing parser,
-     taxonomy, review, and export guardrails.
+1. `paddleocr_vl`
+   - Model: `PaddleOCR-VL-1.6`
+   - Source: `PaddlePaddle/PaddleOCR-VL-1.6`
+   - Device: CPU by default, configurable with `PADDLEOCR_VL_DEVICE`
+   - Role: primary document layout/text/table candidate extraction for heavy
+     image, scanned, or photographed documents.
 2. `paddleocr_ppocrv4`
-   - Existing isolated OCR worker fallback.
-   - Must handle import/load/timeout/empty-output failures from PaddleOCR-VL.
+   - Existing OCR worker fallback.
+   - Must remain available when PaddleOCR-VL import, model load, inference,
+     timeout, or output normalization fails.
 3. Tesseract fallback
-   - Existing last-resort OCR fallback if the worker fails.
+   - Last-resort local OCR fallback if the worker path is unavailable.
 
-## Required Dependencies
-
-The PaddleOCR-VL ONNX stack is intentionally optional. The minimal runtime
-should stay separate from the PP-OCRv4 worker:
-
-```text
-onnxruntime>=1.20.0
-numpy>=1.26.0
-pillow>=10.0.0
-opencv-python-headless>=4.9.0
-```
-
-If the ONNX bundle still requires a tokenizer/processor from the original
-PaddleOCR-VL repository, add those dependencies in a dedicated VL container.
-Do not install PaddleOCR 3.x into the legacy `ocr-worker`.
-
-## PaddleOCR 2.x / 3.x Collision Risk
-
-The existing PP-OCRv4 worker is pinned to:
-
-```text
-paddleocr==2.7.3
-paddlepaddle==2.6.2
-numpy==1.26.4
-```
-
-The ONNX quantized path should avoid installing PaddleOCR 3.x into the same
-process as the legacy worker. Mixing both stacks can change import behavior and
-route legacy OCR through PaddleX/PIR paths. The PP-OCRv4 worker must stay
-isolated. A future `vl-worker` container is the safest home for the ONNX
-document parser once the model bundle and processor contract are finalized.
-
-## Recommended Container Shape
-
-Short term:
-
-- Backend may install ONNX dependencies with `INSTALL_AI_DEPS=true`.
-- OCR worker keeps `INSTALL_AI_DEPS=false`.
-- Backend tries `paddleocr_vl_onnx_quantized` for heavy image documents only
-  when `ENABLE_PADDLEOCR_VL_ONNX=true`.
-- OCR worker remains PP-OCRv4 fallback.
-
-Long term:
-
-- Add a separate `vl-worker` service for PaddleOCR-VL ONNX.
-- Keep `ocr-worker` small and stable for PP-OCRv4.
-- Route through backend provider chain:
-  `vl-worker -> ocr-worker -> tesseract`.
+PaddleOCR-VL output is not treated as final truth. It is normalized into text
+and table evidence and must still pass the existing parser, taxonomy, review,
+and export guardrails.
 
 ## Environment
 
 ```bash
-ENABLE_PADDLEOCR_VL_ONNX=true
-AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized
-PADDLEOCR_VL_ONNX_MODEL_NAME=PaddleOCR-VL-1.5-ONNX-quantized
-PADDLEOCR_VL_ONNX_MODEL_PATH=/app/models/paddleocr_vl_onnx_quantized
-PADDLEOCR_VL_ONNX_REPO_ID=lbm364dl/PaddleOCR-VL-1.5-ONNX
-PADDLEOCR_VL_ONNX_DEVICE=cpu
-PADDLEOCR_VL_ONNX_TIMEOUT_SECONDS=60
-PADDLEOCR_VL_ONNX_RUNTIME_VERSION=1.23.2
-PADDLEOCR_VL_ONNX_RUNNER_MODULE=
+AI_PRIMARY_PROVIDER=paddleocr_vl
+AI_SECONDARY_PROVIDER=heuristic_fallback
+AI_ENABLE_SECOND_PASS=false
+OCR_FALLBACK_PROVIDER=paddleocr_ppocrv4
+
+ENABLE_PADDLEOCR_VL=true
+PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6
+PADDLEOCR_VL_HF_REPO=PaddlePaddle/PaddleOCR-VL-1.6
+PADDLEOCR_VL_MODEL_DIR=
+PADDLEOCR_VL_LAYOUT_MODEL_DIR=
+PADDLEOCR_VL_DEVICE=cpu
+PADDLEOCR_VL_TIMEOUT_SECONDS=180
+
 OCR_WORKER_URL=http://ocr-worker:8010
 PREFER_OCR_WORKER=true
 ```
@@ -101,75 +47,71 @@ PREFER_OCR_WORKER=true
 ## Model Cache
 
 - Docker model volume: `/app/models`
-- ONNX model bundle path: `/app/models/paddleocr_vl_onnx_quantized`
-- Legacy PaddleOCR/PaddleX cache: `/root/.paddlex`
+- Default official PaddleOCR-VL cache is managed by PaddleX/PaddleOCR from
+  `PADDLEOCR_VL_MODEL_NAME`.
+- `PADDLEOCR_VL_MODEL_DIR` is optional. Set it only when the mounted model
+  directory exactly matches `PADDLEOCR_VL_MODEL_NAME`; otherwise PaddleOCR will
+  reject the model directory with a model-name mismatch.
+- Legacy OCR worker remains isolated and should not be upgraded to PaddleOCR
+  3.x in-place.
 
-When using Docker named volumes, verify that
-`/app/models/paddleocr_vl_onnx_quantized` contains `.onnx` files plus the
-required tokenizer/processor files. A named volume can shadow files copied into
-the image.
+Model weights should be downloaded or mounted on the host/server. Large model
+files must not be committed to the repository.
 
-DocuParse includes a minimal experimental runner at
-`app.services.paddleocr_vl_onnx_runner`. A custom executable runner module can
-be named by `PADDLEOCR_VL_ONNX_RUNNER_MODULE`. The module must expose:
+## Dependencies
 
-```python
-def predict(*, image_path: str, model_path: str, model_files: list[str], device: str, timeout_seconds: float, max_pages: int) -> dict:
-    ...
+`backend/requirements-ai.txt` contains only the official PaddleOCR-VL stack and
+download helpers:
+
+```text
+paddleocr==3.6.0
+paddlex[ocr]==3.6.0
+huggingface_hub>=0.27.0
+hf_xet>=1.1.0
 ```
 
-The returned dict should contain optional `text`, `line_candidates`,
-`table_candidates`, `layout_elements`, and `raw_blocks` fields. Without this
-runner path, health intentionally reports a runner/import error and continues
-with PP-OCRv4 fallback. Even with a runner, health remains unavailable until a
-real sample inference produces validated text and a validation marker is
-written under the model directory.
+The legacy `ocr-worker` keeps its PP-OCRv4/PaddleOCR 2.x stack. Do not install
+the PaddleOCR-VL 3.x stack into the OCR worker container unless the worker is
+redesigned and regression-tested.
 
-## CPU Cost Expectations
+## Health Semantics
 
-PaddleOCR-VL is a compact VLM, but it is still far heavier than PP-OCRv4.
-Expected CPU behavior:
+Active PaddleOCR-VL requires:
 
-- cold start can be slow because model weights must load;
-- per-page inference can be substantially slower than PP-OCRv4;
-- memory pressure is likely on small Docker Desktop allocations;
-- timeout fallback must remain enabled;
-- production usage should prefer GPU or a dedicated worker if throughput matters.
+- `primary_provider=paddleocr_vl`
+- `primary_provider_available=true`
+- `ocr_engine=PaddleOCR-VL`
+- `ocr_model=PaddleOCR-VL-1.6`
+- provider chain contains `paddleocr_vl` without `paddleocr_vl_unavailable`
 
-## Activation Criteria
+If any import, model load, inference, or normalization step fails, health should
+show degraded/fallback mode and the document flow should continue through
+`paddleocr_ppocrv4`.
 
-Do not treat `AI_PRIMARY_PROVIDER=paddleocr_vl_onnx_quantized` as proof that PaddleOCR-VL is
-active. Activation requires:
+## Guardrails
 
-- `/health.providers.primary_provider_available=true`
-- `/health.providers.ocr_engine=PaddleOCR-VL ONNX`
-- `/health.providers.paddleocr_vl_onnx_probe.runner_module` is importable
-- `/health.providers.paddleocr_vl_onnx_probe.validation_marker` exists and
-  records `output_validation_status=candidate_text_generated`
-- provider metadata contains `document_ai_succeeded=true`
-- provider chain contains `paddleocr_vl_onnx_quantized` without
-  `paddleocr_vl_onnx_quantized_unavailable`
-- row-level E2E shows no fake quantity/amount/currency regressions
+PaddleOCR-VL must not bypass existing safety rules:
 
-If any of these fail, DocuParse must report degraded mode and continue through
-PP-OCRv4 fallback.
+- do not fabricate quantities, amounts, totals, currency, or item names;
+- no-price documents must not gain fake total/currency values;
+- bbox/review candidates must stay separate from confirmed line items;
+- uncertain rows and amount conflicts should stay Needs Review;
+- row-level regression checks must pass before production rollout.
 
-## Benchmark Before Production Default
+## Smoke Before Full E2E
 
-Before enabling PaddleOCR-VL by default, run the 34 PDF regression and compare:
+Before running the full 34-PDF suite with PaddleOCR-VL active, smoke one or two
+representative files:
 
-- provider used / fallback used
-- OCR text length
-- line candidate count
-- table candidate count
-- confirmed line item count
-- review candidate count
-- hallucinated quantity/amount count
-- no-price fake total/currency count
-- document number/type/total match
-- row-level expected match
-- processing time and timeout count
+```bash
+PYTHONPATH=backend python3 backend/app/scripts/smoke_paddleocr_vl.py \
+  --sample samples/pdf_samples/docuparse_image_based_pdf_samples_10/08_image_quote_missing_quantity.pdf \
+  --output-dir /tmp/docuparse_e2e_logs/paddleocr_vl_smoke
+```
 
-PaddleOCR-VL output must pass the existing parser, taxonomy, review, and export
-guardrails. VLM table output must not be promoted directly to confirmed
-`line_items` without validation.
+Then verify:
+
+- readable document text is produced;
+- blank quantity cells remain blank/null;
+- no hallucinated values are introduced;
+- fallback metadata is explicit if PaddleOCR-VL fails.
