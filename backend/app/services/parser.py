@@ -792,9 +792,34 @@ class DocumentParser:
             flags=re.IGNORECASE,
         )
         match = pattern.match(text)
+        missing_supply_match = None
+        missing_quantity_match = None
         if not match:
+            missing_supply_match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
+                r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<tax_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<line_total>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if not match and not missing_supply_match:
+            missing_quantity_match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
+                r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<tax_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<line_total>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+        row_match = match or missing_supply_match or missing_quantity_match
+        if not row_match:
             return None
-        body = re.sub(r"^\d+\s+", "", match.group("body")).strip(" -|")
+        body = re.sub(r"^\d+\s+", "", row_match.group("body")).strip(" -|")
         if not re.search(r"[A-Za-z가-힣]", body):
             return None
         item_name, item_code, specification = self._split_vl_inline_item_identity(body)
@@ -804,13 +829,66 @@ class DocumentParser:
             "item_name": item_name,
             "item_code": item_code,
             "specification": specification,
-            "quantity": match.group("quantity"),
-            "unit": match.group("unit"),
-            "unit_price": match.group("unit_price"),
-            "supply_amount": match.group("supply_amount"),
-            "tax_amount": match.group("tax_amount"),
-            "line_total": match.group("line_total"),
+            "unit": row_match.group("unit"),
+            "unit_price": row_match.group("unit_price"),
         }
+        warnings: list[str] = []
+        if match:
+            item["quantity"] = match.group("quantity")
+            item["supply_amount"] = match.group("supply_amount")
+            item["tax_amount"] = match.group("tax_amount")
+            item["line_total"] = match.group("line_total")
+        elif missing_supply_match:
+            item["quantity"] = missing_supply_match.group("quantity")
+            first_amount = self._to_decimal(missing_supply_match.group("tax_amount"))
+            second_amount = self._to_decimal(missing_supply_match.group("line_total"))
+            quantity = self._to_decimal(missing_supply_match.group("quantity"))
+            unit_price = self._to_decimal(missing_supply_match.group("unit_price"))
+            expected_supply = quantity * unit_price if quantity is not None and unit_price is not None else None
+            if (
+                expected_supply is not None
+                and first_amount is not None
+                and abs(first_amount - expected_supply) <= max(Decimal("1"), abs(expected_supply) * Decimal("0.02"))
+            ):
+                item["supply_amount"] = self._number_value(first_amount)
+                item["line_total"] = self._number_value(second_amount) if second_amount is not None else missing_supply_match.group("line_total")
+                if second_amount is not None and second_amount > first_amount:
+                    warnings.append("line_total_without_tax_column")
+            inferred_supply = second_amount - first_amount if second_amount is not None and first_amount is not None else None
+            if (
+                "supply_amount" not in item
+                and
+                inferred_supply is not None
+                and inferred_supply > 0
+                and expected_supply is not None
+                and abs(expected_supply - inferred_supply) <= max(Decimal("1"), abs(inferred_supply) * Decimal("0.02"))
+            ):
+                item["supply_amount"] = self._number_value(inferred_supply)
+                item["tax_amount"] = self._number_value(first_amount) if first_amount is not None else missing_supply_match.group("tax_amount")
+                warnings.append("supply_amount_recovered_from_line_total_tax")
+            elif "supply_amount" not in item:
+                warnings.append("supply_amount_missing_or_untrusted")
+        elif missing_quantity_match:
+            item["supply_amount"] = missing_quantity_match.group("supply_amount")
+            item["tax_amount"] = missing_quantity_match.group("tax_amount")
+            item["line_total"] = missing_quantity_match.group("line_total")
+            warnings.extend(["missing_quantity", "quantity_cell_blank"])
+
+        quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
+        unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
+        supply_amount = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+        if (
+            quantity is not None
+            and unit_price is not None
+            and supply_amount is not None
+            and quantity > 0
+            and unit_price > 0
+            and supply_amount > 0
+            and abs((quantity * unit_price) - supply_amount) > max(Decimal("1"), abs(supply_amount) * Decimal("0.02"))
+        ):
+            warnings.append("explicit_quantity_price_amount_mismatch")
+        if warnings:
+            item["validation_warnings"] = sorted(set(warnings))
         return {key: value for key, value in item.items() if value not in (None, "", [])}
 
     def _split_vl_inline_item_identity(self, body: str) -> tuple[str | None, str | None, str | None]:
@@ -2111,6 +2189,9 @@ class DocumentParser:
             "tax_amount": item.get("tax_amount"),
             "line_total": item.get("line_total"),
         }
+        item_warnings = list(item.get("validation_warnings") or [])
+        if item_warnings:
+            normalized["validation_warnings"] = item_warnings
         if not normalized["unit"] and isinstance(normalized["quantity"], str):
             _, unit = self._parse_quantity_and_unit(normalized["quantity"])
             normalized["unit"] = unit
@@ -2141,7 +2222,7 @@ class DocumentParser:
         if normalized.get("quantity") is None and normalized.get("unit") and not normalized.get("_quantity_suppressed"):
             normalized["quantity"] = self._normalize_number(str(item.get("quantity") or ""))
         warnings = self._line_item_amount_warnings(normalized)
-        for warning in item.get("validation_warnings") or []:
+        for warning in item_warnings:
             if warning not in warnings:
                 warnings.append(warning)
         if warnings:
@@ -2162,7 +2243,22 @@ class DocumentParser:
                 item["_quantity_suppressed"] = True
         return item
 
+    def _should_preserve_quantity_price_from_row(self, item: dict) -> bool:
+        warnings = set(item.get("validation_warnings") or [])
+        return bool(
+            warnings
+            & {
+                "explicit_quantity_price_amount_mismatch",
+                "supply_amount_recovered_from_line_total_tax",
+                "missing_quantity",
+                "quantity_cell_blank",
+                "ocr_quantity_price_unverified",
+            }
+        )
+
     def _repair_line_item_arithmetic(self, item: dict) -> dict:
+        if self._should_preserve_quantity_price_from_row(item):
+            return item
         quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
         unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
         supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
@@ -2283,7 +2379,8 @@ class DocumentParser:
                     item["supply_amount"] = self._number_value(residual_supply)
                     item["tax_amount"] = self._number_value(residual_tax)
                     item["line_total"] = self._number_value(residual_total)
-                    self._repair_quantity_price_from_ocr_context(item, residual_supply, lines)
+                    if not self._should_preserve_quantity_price_from_row(item):
+                        self._repair_quantity_price_from_ocr_context(item, residual_supply, lines)
             elif len(bad_indexes) > 1:
                 remaining_supply = effective_subtotal - good_supply
                 remaining_tax = effective_tax - good_tax
@@ -2303,7 +2400,8 @@ class DocumentParser:
                     item["supply_amount"] = self._number_value(supply_value)
                     item["tax_amount"] = self._number_value(tax_value)
                     item["line_total"] = self._number_value(total_value)
-                    self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
+                    if not self._should_preserve_quantity_price_from_row(item):
+                        self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
                     remaining_supply -= supply_value
                     remaining_tax -= tax_value
                     remaining_total -= total_value
@@ -2321,7 +2419,8 @@ class DocumentParser:
                 or unit_price_value <= 0
                 or abs((quantity_value * unit_price_value) - supply_value) > max(Decimal("1"), supply_value * Decimal("0.02"))
             ):
-                self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
+                if not self._should_preserve_quantity_price_from_row(item):
+                    self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
         return [self._normalize_line_item(item) for item in repaired]
 
     def _suppress_unsafe_line_totals_when_supply_matches_document_total(
@@ -2920,7 +3019,7 @@ class DocumentParser:
             if changed:
                 repaired = segment_repaired
         for item in repaired:
-            if "untrusted_ocr_amount" in (item.get("validation_warnings") or []):
+            if "untrusted_ocr_amount" in (item.get("validation_warnings") or []) or self._should_preserve_quantity_price_from_row(item):
                 continue
             supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
             tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None

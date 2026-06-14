@@ -765,3 +765,38 @@ def test_vl_inline_mixed_language_purchase_order_preserves_three_rows():
     assert parsed.line_items[1]["line_total"] == 158400
     assert parsed.line_items[2]["item_name"] == "SUS washer"
     assert parsed.line_items[2]["quantity"] == 1200
+
+
+def test_vl_inline_distorted_invoice_preserves_explicit_quantity_and_price():
+    text = "\n".join([
+        "계산서번호 INV-2026-0810-LOW 발행일 2026-08-10",
+        "공급업체 동진부품 고객사 오성테크",
+        "지급기한 2026-09-10 통화 KRW",
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 세액 하게",
+        "베어린 한읙징 BRG-H-100 100mm 25 EA 12000 300000 30000 330000",
+        "S45C PIN 8x60 PIN-S45C-08 8x60 500 EA 300 15000 165000",
+        "육각볼트 M8x20 BOLT-M8-20 M8x20 EA 120 120000 12000 132000",
+        "총액:627,000",
+        "※ 저품질 스캔: OCR confidence/table confidence 낮음 및 AI escalation 판단 테스트용",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_distorted_invoice.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-2026-0810-LOW"
+    assert parsed.extracted_amount == Decimal("627000")
+    assert len(parsed.line_items) == 3
+    pin = parsed.line_items[1]
+    assert pin["item_name"] == "S45C PIN 8x60"
+    assert pin["item_code"] == "PIN-S45C-08"
+    assert pin["quantity"] == 500
+    assert pin["unit_price"] == 300
+    assert pin["supply_amount"] == 150000
+    assert pin["tax_amount"] == 15000
+    assert pin["line_total"] == 165000
+    assert "supply_amount_recovered_from_line_total_tax" in pin["validation_warnings"]
+
+    bolt = parsed.line_items[2]
+    assert bolt["item_name"] == "육각볼트 M8x20"
+    assert "quantity" not in bolt
+    assert {"missing_quantity", "quantity_cell_blank"} <= set(bolt["validation_warnings"])
