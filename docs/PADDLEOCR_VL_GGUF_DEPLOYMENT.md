@@ -99,6 +99,26 @@ PADDLEOCR_VL_GGUF_MODEL_DIR=/root/docuparse_models/paddleocr_vl_1_6_gguf \
 scripts/run_paddleocr_vl_gguf_server_smoke.sh
 ```
 
+The raw smoke module also accepts explicit runtime overrides. This is useful for
+backend-container diagnostics and host venv checks because it avoids editing
+`.env` just to point at a mounted model directory or a temporary
+`llama-server`:
+
+```bash
+PYTHONPATH=backend python3 -m app.scripts.smoke_paddleocr_vl_gguf \
+  --sample samples/pdf_samples/docuparse_image_based_pdf_samples_10/08_image_quote_missing_quantity.pdf \
+  --model-dir /root/docuparse_models/paddleocr_vl_1_6_gguf \
+  --server-url http://127.0.0.1:8081/v1 \
+  --concurrency 1 \
+  --output-dir /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/manual_08
+```
+
+The default backend image intentionally remains the safe PP-OCRv4 runtime. If a
+backend-container smoke run reports `paddleocr_vl_runtime_missing_dependency`,
+that means the GGUF candidate runner dependencies are absent from the production
+backend image, not that upload/OCR fallback is broken. Run GGUF inference from
+the isolated server venv until a dedicated VL runner image is introduced.
+
 ## Enabling Candidate Health
 
 Do not set `PADDLEOCR_VL_GGUF_SMOKE_PASSED=true` until the staged smoke path has

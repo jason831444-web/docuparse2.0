@@ -1,9 +1,11 @@
 from app.scripts.smoke_paddleocr_vl_gguf import (
     _evaluate_manual_visual_check,
+    apply_cli_runtime_overrides,
     build_docuparse_vl_candidate_metadata,
     classify_smoke_exception,
     decide_provider_available_candidate,
 )
+from app.core.config import get_settings
 
 
 def test_gguf_provider_candidate_requires_manual_visual_pass():
@@ -250,3 +252,32 @@ def test_gguf_smoke_classifies_runtime_and_model_failures_precisely():
     assert classify_smoke_exception(FileNotFoundError("gguf_model_missing")) == "gguf_model_missing"
     assert classify_smoke_exception(FileNotFoundError("sample_missing: missing.pdf")) == "sample_missing"
     assert classify_smoke_exception(TimeoutError("timeout while waiting")) == "official_runtime_timeout"
+
+
+def test_gguf_smoke_cli_runtime_overrides_clear_cached_settings(monkeypatch, tmp_path):
+    get_settings.cache_clear()
+    monkeypatch.setenv("PADDLEOCR_VL_GGUF_MODEL_DIR", "/before")
+    assert str(get_settings().paddleocr_vl_gguf_model_dir) == "/before"
+
+    model_dir = tmp_path / "paddleocr_vl_1_6_gguf"
+    overrides = apply_cli_runtime_overrides(
+        model_dir=model_dir,
+        model_file="custom-model.gguf",
+        mmproj_file="custom-mmproj.gguf",
+        server_url="http://127.0.0.1:8081/v1",
+        concurrency=1,
+    )
+
+    assert overrides == {
+        "PADDLEOCR_VL_GGUF_MODEL_DIR": str(model_dir),
+        "PADDLEOCR_VL_GGUF_MODEL_FILE": "custom-model.gguf",
+        "PADDLEOCR_VL_GGUF_MMPROJ_FILE": "custom-mmproj.gguf",
+        "PADDLEOCR_VL_GGUF_SERVER_URL": "http://127.0.0.1:8081/v1",
+        "PADDLEOCR_VL_GGUF_CONCURRENCY": "1",
+    }
+    settings = get_settings()
+    assert settings.paddleocr_vl_gguf_model_dir == model_dir
+    assert settings.paddleocr_vl_gguf_model_file == "custom-model.gguf"
+    assert settings.paddleocr_vl_gguf_mmproj_file == "custom-mmproj.gguf"
+    assert settings.paddleocr_vl_gguf_server_url == "http://127.0.0.1:8081/v1"
+    assert settings.paddleocr_vl_gguf_concurrency == 1

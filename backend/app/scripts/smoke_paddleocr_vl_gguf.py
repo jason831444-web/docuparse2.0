@@ -360,6 +360,39 @@ def _load_manual_visual_check(path: Path | None) -> dict[str, Any] | None:
     return data
 
 
+def apply_cli_runtime_overrides(
+    *,
+    model_dir: Path | None = None,
+    model_file: str | None = None,
+    mmproj_file: str | None = None,
+    server_url: str | None = None,
+    concurrency: int | None = None,
+) -> dict[str, str]:
+    """Apply smoke-only runtime overrides before Settings is loaded.
+
+    The production service reads these values from env/compose. The smoke script
+    also accepts explicit CLI values so host venv, backend container, and server
+    diagnostics can be reproduced without editing `.env`.
+    """
+
+    overrides: dict[str, str] = {}
+    if model_dir is not None:
+        overrides["PADDLEOCR_VL_GGUF_MODEL_DIR"] = str(model_dir)
+    if model_file:
+        overrides["PADDLEOCR_VL_GGUF_MODEL_FILE"] = model_file
+    if mmproj_file:
+        overrides["PADDLEOCR_VL_GGUF_MMPROJ_FILE"] = mmproj_file
+    if server_url:
+        overrides["PADDLEOCR_VL_GGUF_SERVER_URL"] = server_url
+    if concurrency is not None:
+        overrides["PADDLEOCR_VL_GGUF_CONCURRENCY"] = str(concurrency)
+    for key, value in overrides.items():
+        os.environ[key] = value
+    if overrides:
+        get_settings.cache_clear()
+    return overrides
+
+
 def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any] | None) -> dict[str, Any] | None:
     if not manual_visual_check:
         return None
@@ -679,7 +712,36 @@ def main() -> None:
         default=2.0,
         help="PyMuPDF render scale for the first page image passed to PaddleOCR-VL.",
     )
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        help="Override PADDLEOCR_VL_GGUF_MODEL_DIR for this smoke run.",
+    )
+    parser.add_argument(
+        "--model-file",
+        help="Override PADDLEOCR_VL_GGUF_MODEL_FILE for this smoke run.",
+    )
+    parser.add_argument(
+        "--mmproj-file",
+        help="Override PADDLEOCR_VL_GGUF_MMPROJ_FILE for this smoke run.",
+    )
+    parser.add_argument(
+        "--server-url",
+        help="Override PADDLEOCR_VL_GGUF_SERVER_URL for this smoke run.",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        help="Override PADDLEOCR_VL_GGUF_CONCURRENCY for this smoke run.",
+    )
     args = parser.parse_args()
+    apply_cli_runtime_overrides(
+        model_dir=args.model_dir,
+        model_file=args.model_file,
+        mmproj_file=args.mmproj_file,
+        server_url=args.server_url,
+        concurrency=args.concurrency,
+    )
     report = run_smoke(
         args.sample,
         args.output_dir,
