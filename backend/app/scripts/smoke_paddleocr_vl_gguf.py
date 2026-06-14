@@ -190,6 +190,8 @@ def _is_layout_label_noise_line(value: str) -> bool:
         "footer_image",
         "aside_text",
         "paragraph_title",
+        "seal",
+        "seal_image",
         "text",
         "table",
     }

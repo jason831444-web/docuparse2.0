@@ -84,6 +84,7 @@ def test_gguf_extract_text_filters_local_artifact_paths_from_preview():
                     "COMMERCIAL INVOICE\n"
                     "paragraph_title\n"
                     "table\n"
+                    "seal\n"
                     "/root/docuparse2.0/samples/input.pdf\n"
                     "imgs/img_in_seal_box_895_205_1008_317.jpg\n"
                     "INV-US-2026-0916-EX"
@@ -97,6 +98,7 @@ def test_gguf_extract_text_filters_local_artifact_paths_from_preview():
     assert "img_in_seal_box" not in text
     assert "paragraph_title" not in text
     assert "table" not in text
+    assert "seal" not in text
     assert "COMMERCIAL INVOICE" in text
     assert "INV-US-2026-0916-EX" in text
 
@@ -381,6 +383,7 @@ def test_gguf_candidate_metadata_sanitizes_preview_noise_from_existing_reports()
             "/tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/21/sample_page_1.png\n"
             "number\n"
             "header\n"
+            "seal\n"
             "FAX-PO-2026-0921\n"
             "1 베어링 하우징 100mm 20 EA 8,000\n"
             "footer_image\n"
@@ -394,6 +397,7 @@ def test_gguf_candidate_metadata_sanitizes_preview_noise_from_existing_reports()
     assert "sample_page_1.png" not in preview
     assert "number" not in preview
     assert "header" not in preview
+    assert "seal" not in preview
     assert "footer_image" not in preview
     assert "FAX-PO-2026-0921" in preview
     assert "베어링 하우징" in preview
