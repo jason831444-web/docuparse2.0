@@ -411,12 +411,41 @@ def _compact_vl_candidate(candidate: dict) -> dict:
         "provider_available_candidate": bool(candidate.get("provider_available_candidate")),
         "validation_severity": candidate.get("validation_severity") or validation.get("severity"),
         "issue_codes": issue_codes,
+        "issue_details": _compact_vl_issue_details(candidate.get("issue_details") or validation.get("issues")),
         "review_flags": _string_list(candidate.get("review_flags")) or issue_codes,
         "text_preview": text_preview,
         "matched_terms": _string_list(candidate.get("matched_terms") or (candidate.get("validation") or {}).get("matched_terms")),
         "missing_required_values": _json_safe(validation.get("missing_required_values") or {}),
         "inference_time_ms": _json_safe(candidate.get("inference_time_ms") or candidate.get("elapsed_ms")),
     }
+
+
+def _compact_vl_issue_details(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    details: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        detail = {
+            key: _json_safe(item.get(key))
+            for key in (
+                "code",
+                "severity",
+                "field",
+                "expected_value",
+                "row_contains",
+                "label",
+                "message",
+                "line",
+            )
+            if item.get(key) not in (None, "")
+        }
+        if detail:
+            details.append(detail)
+        if len(details) >= 10:
+            break
+    return details
 
 
 def _vl_candidate_summary(document: Document) -> dict:

@@ -105,6 +105,16 @@ export interface VLCandidate {
   provider_available_candidate?: boolean | null;
   validation_severity?: string | null;
   issue_codes?: string[];
+  issue_details?: Array<{
+    code?: string | null;
+    severity?: string | null;
+    field?: string | null;
+    expected_value?: string | number | null;
+    row_contains?: string | null;
+    label?: string | null;
+    message?: string | null;
+    line?: string | null;
+  }>;
   review_flags?: string[];
   text_preview?: string | null;
   matched_terms?: string[];

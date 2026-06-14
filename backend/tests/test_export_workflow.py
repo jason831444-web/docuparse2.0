@@ -297,6 +297,13 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
                 "provider_available_candidate": False,
                 "validation_severity": "warn",
                 "issue_codes": ["vl_candidate_missing_document_total"],
+                "issue_details": [
+                    {
+                        "code": "vl_candidate_missing_document_total",
+                        "expected_value": "418,000",
+                        "message": "The source PDF total is missing in the VL output.",
+                    }
+                ],
                 "text_preview": "1 베어링 하우징 ... 2 S45C PIN ... 3 M8 볼트/와서 ...",
                 "manual_visual_check_validation": {
                     "severity": "warn",
@@ -324,6 +331,7 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["candidate_only"] is True
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["parser_integrated"] is False
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["text_preview"].startswith("1 베어링")
+    assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["issue_details"][0]["expected_value"] == "418,000"
     assert "vl_candidate_review_required" in payload["canonical_export"]["policy"]["export_warning"]
     assert rows[0]["vl_candidate_count"] == "1"
     assert rows[0]["vl_candidate_warning_count"] == "1"

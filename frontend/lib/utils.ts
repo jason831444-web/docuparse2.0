@@ -151,6 +151,21 @@ function normalizedBBoxCandidate(value: unknown): BBoxTableCandidate | null {
 function normalizedVLCandidate(value: unknown): VLCandidate | null {
   const record = asRecord(value);
   if (!Object.keys(record).length) return null;
+  const issueDetails = Array.isArray(record.issue_details)
+    ? record.issue_details.map((detail) => {
+        const item = asRecord(detail);
+        return {
+          code: optionalString(item.code),
+          severity: optionalString(item.severity),
+          field: optionalString(item.field),
+          expected_value: typeof item.expected_value === "number" || typeof item.expected_value === "string" ? item.expected_value : null,
+          row_contains: optionalString(item.row_contains),
+          label: optionalString(item.label),
+          message: optionalString(item.message),
+          line: optionalString(item.line),
+        };
+      }).filter((detail) => Object.values(detail).some((item) => item !== null && item !== undefined))
+    : [];
   return {
     source: optionalString(record.source),
     provider: optionalString(record.provider),
@@ -159,6 +174,7 @@ function normalizedVLCandidate(value: unknown): VLCandidate | null {
     provider_available_candidate: optionalBoolean(record.provider_available_candidate),
     validation_severity: optionalString(record.validation_severity),
     issue_codes: optionalStringList(record.issue_codes),
+    issue_details: issueDetails,
     review_flags: optionalStringList(record.review_flags),
     text_preview: optionalString(record.text_preview),
     matched_terms: optionalStringList(record.matched_terms),

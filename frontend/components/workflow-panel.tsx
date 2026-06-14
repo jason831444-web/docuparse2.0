@@ -125,6 +125,7 @@ function VLCandidateBlock({ metadata }: { metadata: VLCandidateMetadata | null }
   const summary = metadata.vl_candidate_summary;
   const candidateCount = summary?.candidate_count ?? candidates.length;
   const issueCodes = Array.from(new Set([...(summary?.issue_codes || []), ...candidates.flatMap((candidate) => candidate.issue_codes || [])]));
+  const issueDetails = candidates.flatMap((candidate) => candidate.issue_details || []).slice(0, 4);
   if (!candidateCount && !issueCodes.length) return null;
   return (
     <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
@@ -141,6 +142,17 @@ function VLCandidateBlock({ metadata }: { metadata: VLCandidateMetadata | null }
         <div className="mt-2 flex flex-wrap gap-1">
           {issueCodes.map((code) => <Badge key={code} variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{vlCandidateIssueLabel(code)}</Badge>)}
         </div>
+      ) : null}
+      {issueDetails.length ? (
+        <ul className="mt-2 space-y-1 rounded border bg-white p-2 text-xs text-slate-700">
+          {issueDetails.map((detail, index) => (
+            <li key={`${detail.code ?? "issue"}-${detail.expected_value ?? index}`}>
+              <span className="font-medium">{vlCandidateIssueLabel(detail.code) || "검토 필요"}:</span>{" "}
+              {detail.label || detail.field || detail.row_contains || "원본 값"}{" "}
+              {detail.expected_value !== undefined && detail.expected_value !== null ? <span>({detail.expected_value})</span> : null}
+            </li>
+          ))}
+        </ul>
       ) : null}
       {candidates[0]?.text_preview ? (
         <p className="mt-2 line-clamp-4 whitespace-pre-wrap rounded border bg-white p-2 text-xs text-slate-700">{candidates[0].text_preview}</p>

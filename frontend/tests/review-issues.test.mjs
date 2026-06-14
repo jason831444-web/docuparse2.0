@@ -119,6 +119,13 @@ const vlMetadata = vlCandidateMetadata({
         provider_available_candidate: false,
         validation_severity: "warn",
         issue_codes: ["vl_candidate_missing_document_total"],
+        issue_details: [
+          {
+            code: "vl_candidate_missing_document_total",
+            expected_value: "418,000",
+            message: "The source PDF total is missing in the VL output.",
+          },
+        ],
         text_preview: "FAX-PO-2026-0921 ...",
       },
     ],
@@ -136,6 +143,7 @@ assert.equal(vlMetadata?.vl_candidate_summary?.candidate_count, 1);
 assert.equal(vlMetadata?.vl_candidate_summary?.provider_available_candidate, false);
 assert.equal(vlMetadata?.vl_candidates?.[0]?.candidate_only, true);
 assert.equal(vlMetadata?.vl_candidates?.[0]?.parser_integrated, false);
+assert.equal(vlMetadata?.vl_candidates?.[0]?.issue_details?.[0]?.expected_value, "418,000");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_document_total"), "문서 합계 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_anchor"), "품목 행 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_fragment"), "품목 행 텍스트 불완전");
