@@ -7,6 +7,7 @@ from app.scripts.smoke_paddleocr_vl_gguf import (
     build_docuparse_vl_candidate_metadata,
     classify_smoke_exception,
     decide_provider_available_candidate,
+    extract_text,
     manual_visual_check_template_for_sample,
     write_manual_visual_check_template,
 )
@@ -71,6 +72,26 @@ def test_gguf_manual_check_flags_blank_quantity_hallucination():
     assert result is not None
     assert result["severity"] == "fail"
     assert "vl_candidate_hallucinated_blank_quantity" in result["issue_codes"]
+
+
+def test_gguf_extract_text_filters_local_artifact_paths_from_preview():
+    text = extract_text(
+        [
+            {
+                "text": (
+                    "/tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/16/sample_page_1.png\n"
+                    "COMMERCIAL INVOICE\n"
+                    "/root/docuparse2.0/samples/input.pdf\n"
+                    "INV-US-2026-0916-EX"
+                )
+            }
+        ]
+    )
+
+    assert "sample_page_1.png" not in text
+    assert "/root/docuparse2.0" not in text
+    assert "COMMERCIAL INVOICE" in text
+    assert "INV-US-2026-0916-EX" in text
 
 
 def test_gguf_manual_visual_check_template_requires_human_visual_confirmation():

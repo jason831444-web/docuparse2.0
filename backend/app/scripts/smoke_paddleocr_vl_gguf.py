@@ -171,6 +171,13 @@ def _normalize_line(value: str) -> str:
     return value.strip(" |")
 
 
+def _is_artifact_path_line(value: str) -> bool:
+    lowered = value.lower()
+    if not lowered.endswith((".png", ".jpg", ".jpeg", ".pdf")):
+        return False
+    return lowered.startswith(("/tmp/", "/var/tmp/", "/root/", "/app/")) or "/docuparse_e2e_logs/" in lowered
+
+
 def _walk_strings(value: Any, fragments: list[str]) -> None:
     if isinstance(value, dict):
         for key in ["block_content", "rec_text", "text", "content", "markdown", "html"]:
@@ -198,6 +205,8 @@ def extract_text(output: Any) -> str:
         for raw in _strip_html(str(fragment)).splitlines():
             line = _normalize_line(raw)
             if not line:
+                continue
+            if _is_artifact_path_line(line):
                 continue
             key = line.casefold()
             if key not in seen:
