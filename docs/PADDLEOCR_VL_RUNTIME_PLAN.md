@@ -107,6 +107,21 @@ separate from confirmed ERP fields:
 - CSV/XLSX summary columns such as `vl_candidate_count` and
   `vl_candidate_issue_codes`
 
+`vl_candidates[].structured_candidate` may contain a parser-evaluated view of
+the VL text (`document`, `line_items`, `issue_codes`), but it remains
+`candidate_only=true`, `parser_integrated=false`, and
+`confirmed_promotion=false`. It is review evidence, not ERP truth.
+
+`vl_candidates[].promotion_gate` records whether that structured candidate is
+safe enough for a future explicit promotion action:
+
+- `promotion_eligible`: no known issue or document conflict, but
+  `auto_promote=false`.
+- `review_required`: useful evidence with warnings such as blank quantity,
+  missing row amount, missing total, or provider availability uncertainty.
+- `reject`: dangerous conflict such as no-price amount generation, document
+  number mismatch, exchange-rate/amount confusion, or manual hallucination.
+
 Confirmed `line_items` and ERP export rows must continue to come from the
 validated parser/review workflow, not directly from VL output.
 

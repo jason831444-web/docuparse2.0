@@ -311,6 +311,24 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
                     "1 베어링 하우징 ... 2 S45C PIN ... 3 M8 볼트/와서 ...\n"
                     "footer_image\n"
                 ),
+                "structured_candidate": {
+                    "candidate_only": True,
+                    "parser_integrated": False,
+                    "parser_evaluated": True,
+                    "confirmed_promotion": False,
+                    "document": {
+                        "document_type": "purchase_order",
+                        "document_number": "FAX-PO-2026-0921",
+                        "total": None,
+                    },
+                    "line_items": [
+                        {"item_name": "베어링 하우징", "line_total": "176000"},
+                        {"item_name": "S45C PIN 8X60", "line_total": "66000"},
+                    ],
+                    "line_item_count": 2,
+                    "issue_codes": ["vl_candidate_missing_document_total"],
+                    "review_flags": ["vl_candidate_missing_document_total"],
+                },
                 "manual_visual_check_validation": {
                     "severity": "warn",
                     "issue_codes": ["vl_candidate_missing_document_total"],
@@ -336,6 +354,16 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
     assert payload["canonical_export"]["review_candidates"]["vl_candidate_summary"]["provider_available_candidate"] is False
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["candidate_only"] is True
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["parser_integrated"] is False
+    structured = payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["structured_candidate"]
+    assert structured["candidate_only"] is True
+    assert structured["parser_integrated"] is False
+    assert structured["confirmed_promotion"] is False
+    assert structured["line_item_count"] == 2
+    assert structured["line_items"][0]["item_name"] == "베어링 하우징"
+    gate = payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["promotion_gate"]
+    assert gate["decision"] == "review_required"
+    assert gate["auto_promote"] is False
+    assert "vl_candidate_has_review_issues" in gate["reasons"]
     text_preview = payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["text_preview"]
     assert text_preview.startswith("1 베어링")
     assert "sample_page_1.png" not in text_preview
@@ -349,3 +377,5 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
     assert rows[0]["vl_candidate_failure_count"] == "0"
     assert rows[0]["vl_candidate_issue_codes"] == "vl_candidate_missing_document_total"
     assert rows[0]["vl_candidate_provider"] == "paddleocr_vl_1_6_gguf"
+    assert rows[0]["vl_candidate_gate_decision"] == "review_required"
+    assert rows[0]["vl_candidate_gate_reasons"] == "vl_candidate_has_review_issues, provider_candidate_not_available"

@@ -12,9 +12,11 @@ import pandas as pd
 
 from app.models.document import Document
 from app.services.document_taxonomy import DocumentTaxonomyService
+from app.services.vl_candidate_validation import VLCandidateValidationGate
 
 
 _taxonomy_service = DocumentTaxonomyService()
+_vl_candidate_gate = VLCandidateValidationGate()
 
 
 def serialize_document(document: Document) -> dict:
@@ -230,6 +232,8 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "vl_candidate_failure_count": vl_summary["failure_count"],
                 "vl_candidate_issue_codes": ", ".join(vl_summary["issue_codes"]),
                 "vl_candidate_provider": vl_summary["provider"],
+                "vl_candidate_gate_decision": vl_summary["gate_decision"],
+                "vl_candidate_gate_reasons": ", ".join(vl_summary["gate_reasons"]),
             })
     return rows
 
@@ -393,10 +397,10 @@ def _vl_candidates(document: Document) -> list[dict]:
     candidates = source.get("vl_candidates")
     if not isinstance(candidates, list):
         return []
-    return [_compact_vl_candidate(candidate) for candidate in candidates if isinstance(candidate, dict)][:5]
+    return [_compact_vl_candidate(document, candidate) for candidate in candidates if isinstance(candidate, dict)][:5]
 
 
-def _compact_vl_candidate(candidate: dict) -> dict:
+def _compact_vl_candidate(document: Document, candidate: dict) -> dict:
     validation = candidate.get("manual_visual_check_validation")
     if not isinstance(validation, dict):
         validation = candidate.get("validation") if isinstance(candidate.get("validation"), dict) else {}
@@ -404,11 +408,12 @@ def _compact_vl_candidate(candidate: dict) -> dict:
     text_preview = _sanitize_vl_text_preview(candidate.get("text_preview") or candidate.get("output_preview"))
     if text_preview and len(text_preview) > 1200:
         text_preview = text_preview[:1200] + "..."
-    return {
+    compact = {
         "source": candidate.get("source") or candidate.get("provider") or "paddleocr_vl_1_6_gguf",
         "provider": candidate.get("provider") or "paddleocr_vl_1_6_gguf",
         "candidate_only": True,
         "parser_integrated": False,
+        "parser_evaluated": bool(candidate.get("structured_candidate")) or bool(candidate.get("parser_evaluated")),
         "provider_available_candidate": bool(candidate.get("provider_available_candidate")),
         "validation_severity": candidate.get("validation_severity") or validation.get("severity"),
         "issue_codes": issue_codes,
@@ -418,6 +423,30 @@ def _compact_vl_candidate(candidate: dict) -> dict:
         "matched_terms": _string_list(candidate.get("matched_terms") or (candidate.get("validation") or {}).get("matched_terms")),
         "missing_required_values": _json_safe(validation.get("missing_required_values") or {}),
         "inference_time_ms": _json_safe(candidate.get("inference_time_ms") or candidate.get("elapsed_ms")),
+    }
+    structured = _compact_vl_structured_candidate(candidate.get("structured_candidate"))
+    if structured:
+        compact["structured_candidate"] = structured
+        compact["promotion_gate"] = _json_safe(_vl_candidate_gate.evaluate(document, candidate))
+    return compact
+
+
+def _compact_vl_structured_candidate(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    document = value.get("document") if isinstance(value.get("document"), dict) else {}
+    line_items = value.get("line_items") if isinstance(value.get("line_items"), list) else []
+    return {
+        "candidate_only": True,
+        "parser_integrated": False,
+        "parser_evaluated": bool(value.get("parser_evaluated", True)),
+        "confirmed_promotion": False,
+        "document": _json_safe(document),
+        "line_items": [_json_safe(item) for item in line_items[:25] if isinstance(item, dict)],
+        "line_item_count": int(value.get("line_item_count") or len(line_items)),
+        "issue_codes": _string_list(value.get("issue_codes")),
+        "review_flags": _string_list(value.get("review_flags")),
+        "issues": _compact_vl_issue_details(value.get("issues")),
     }
 
 
@@ -520,14 +549,29 @@ def _vl_candidate_summary(document: Document) -> dict:
             severities.append(str(severity))
     warning_count = int(summary.get("warning_count") or sum(1 for value in severities if value == "warn"))
     failure_count = int(summary.get("failure_count") or sum(1 for value in severities if value == "fail"))
+    gate_decisions = [
+        str((candidate.get("promotion_gate") or {}).get("decision"))
+        for candidate in candidates
+        if isinstance(candidate.get("promotion_gate"), dict) and (candidate.get("promotion_gate") or {}).get("decision")
+    ]
+    gate_reasons: list[str] = []
+    for candidate in candidates:
+        gate = candidate.get("promotion_gate") if isinstance(candidate.get("promotion_gate"), dict) else {}
+        for reason in gate.get("reasons") or []:
+            if reason not in gate_reasons:
+                gate_reasons.append(str(reason))
     return {
         "candidate_count": int(summary.get("candidate_count") or len(candidates)),
         "warning_count": warning_count,
         "failure_count": failure_count,
         "issue_codes": issue_codes,
         "parser_integrated": False,
+        "parser_evaluated": bool(summary.get("parser_evaluated")) or any(candidate.get("parser_evaluated") for candidate in candidates),
+        "parsed_line_item_count": _json_safe(summary.get("parsed_line_item_count")),
         "provider": summary.get("provider") or (candidates[0].get("provider") if candidates else None),
         "provider_available_candidate": bool(summary.get("provider_available_candidate")),
+        "gate_decision": gate_decisions[0] if gate_decisions else None,
+        "gate_reasons": gate_reasons,
     }
 
 

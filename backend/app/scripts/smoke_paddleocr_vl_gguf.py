@@ -707,6 +707,7 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
     ]
     issue_codes = list(dict.fromkeys(raw_issue_codes))
     severity = manual_validation.get("severity")
+    structured_candidate = _parse_structured_vl_candidate(report)
     recommended_handling = recommend_candidate_handling(
         provider_available_candidate=bool(report.get("provider_available_candidate")),
         manual_validation=manual_validation,
@@ -727,12 +728,16 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         "text_preview": _sanitize_preview_text(report.get("text_preview"))[:1200],
         "inference_time_ms": report.get("elapsed_ms"),
     }
+    if structured_candidate:
+        candidate["structured_candidate"] = structured_candidate
     summary = {
         "candidate_count": 1 if report.get("text_preview") else 0,
         "warning_count": 1 if severity == "warn" else 0,
         "failure_count": 1 if severity == "fail" else 0,
         "issue_codes": issue_codes,
         "parser_integrated": False,
+        "parser_evaluated": bool(structured_candidate),
+        "parsed_line_item_count": (structured_candidate or {}).get("line_item_count"),
         "provider": "paddleocr_vl_1_6_gguf",
         "provider_available_candidate": bool(report.get("provider_available_candidate")),
         "recommended_handling": recommended_handling,
@@ -741,6 +746,42 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         "vl_candidates": [candidate] if summary["candidate_count"] else [],
         "vl_candidate_summary": summary,
     }
+
+
+def _parse_structured_vl_candidate(report: dict[str, Any]) -> dict[str, Any] | None:
+    text = report.get("text_preview")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        from app.services.vl_candidate_parser import VLCandidateParser
+
+        return VLCandidateParser().parse_text(
+            text,
+            filename=Path(str(report.get("sample") or "")).name,
+            manual_visual_check=report.get("manual_visual_check")
+            if isinstance(report.get("manual_visual_check"), dict)
+            else None,
+            validation=report.get("validation") if isinstance(report.get("validation"), dict) else None,
+        )
+    except Exception as exc:
+        return {
+            "source": "vl_candidate_parser",
+            "provider": "paddleocr_vl_1_6_gguf",
+            "candidate_only": True,
+            "parser_integrated": False,
+            "parser_evaluated": False,
+            "confirmed_promotion": False,
+            "issue_codes": ["vl_candidate_parser_failed"],
+            "issues": [
+                {
+                    "code": "vl_candidate_parser_failed",
+                    "severity": "warn",
+                    "message": f"VL candidate parser failed: {type(exc).__name__}: {exc}",
+                }
+            ],
+            "line_items": [],
+            "line_item_count": 0,
+        }
 
 
 def _render_first_page(sample: Path, output_dir: Path, *, scale: float = 2.0) -> dict[str, Any]:
