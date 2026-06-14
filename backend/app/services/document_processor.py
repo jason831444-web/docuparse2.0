@@ -1,12 +1,14 @@
 import logging
 import re
 import threading
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.document import Document, ProcessingStatus
+from app.models.document import Document, DocumentType, ProcessingStatus
 from app.services.ai_document_understanding import LocalDocumentAIService, get_document_ai_service
 from app.services.ai_escalation import should_escalate_to_ai
 from app.services.ai_merge import AIResultMerger
@@ -22,6 +24,9 @@ from app.services.parser import DocumentParser
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.quality_evaluation import DocumentQualityEvaluator, QualityEvaluation
 from app.services.table_layout import BBoxTableReconstructor
+from app.services.vl_candidate_client import VLCandidateWorkerClient
+from app.services.vl_candidate_parser import VLCandidateParser
+from app.services.vl_candidate_validation import VLCandidateValidationGate
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 
 
@@ -44,6 +49,9 @@ class DocumentProcessor:
         self.item_master_matcher = ItemMasterMatcher()
         self.ai_merger = AIResultMerger()
         self.bbox_table_reconstructor = BBoxTableReconstructor()
+        self.vl_worker = VLCandidateWorkerClient()
+        self.vl_candidate_parser = VLCandidateParser(parser=self.parser)
+        self.vl_candidate_gate = VLCandidateValidationGate()
 
     def process(self, db: Session, document: Document) -> Document:
         with _PROCESSING_SEMAPHORE:
@@ -57,7 +65,16 @@ class DocumentProcessor:
         db.refresh(document)
         try:
             stored_path = Path(document.stored_file_path)
-            normalized = self.ingestion.ingest(stored_path, document.original_filename, document.mime_type)
+            vl_primary_attempt = self._vl_primary_reader_attempt(stored_path, document, {})
+            if vl_primary_attempt and vl_primary_attempt.get("promoted") and vl_primary_attempt.get("text"):
+                normalized = self._vl_primary_normalized_document(
+                    stored_path,
+                    document,
+                    str(vl_primary_attempt["text"]),
+                    vl_primary_attempt.get("metadata") or {},
+                )
+            else:
+                normalized = self.ingestion.ingest(stored_path, document.original_filename, document.mime_type)
             raw_text = normalized.normalized_text
             parsed = self.parser.parse(raw_text, document.original_filename)
             extraction_quality = self.quality.evaluate_extraction(normalized, parsed)
@@ -228,6 +245,7 @@ class DocumentProcessor:
                 taxonomy.to_metadata(),
             ))
             document.review_required = document.review_required or self._manufacturing_review_required(document)
+            vl_pipeline_metadata = (vl_primary_attempt or {}).get("metadata")
             workflow = self.workflow_enrichment.enrich(document, ai_result.cleaned_raw_text or raw_text, interpretation)
             document.workflow_summary = sanitize_for_postgres(workflow.workflow_summary)
             if self._is_manufacturing_type(document):
@@ -238,6 +256,8 @@ class DocumentProcessor:
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
             workflow_metadata = workflow.workflow_metadata or {}
+            if vl_pipeline_metadata:
+                workflow_metadata = self._merge_vl_pipeline_metadata(workflow_metadata, vl_pipeline_metadata)
             layout_debug = self._bbox_layout_debug_metadata(normalized, document, workflow_metadata)
             if layout_debug:
                 workflow_metadata["layout_debug"] = layout_debug
@@ -250,6 +270,7 @@ class DocumentProcessor:
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             workflow_review_required = bool((workflow.workflow_metadata or {}).get("review_required"))
             document.review_required = workflow_review_required if self._is_manufacturing_type(document) else document.review_required or workflow_review_required
+            document.review_required = document.review_required or bool((workflow_metadata.get("vl_candidate_summary") or {}).get("requires_review"))
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
             if parser_only:
                 logger.info("Parser-only processing completed for document %s.", document.id)
@@ -262,6 +283,243 @@ class DocumentProcessor:
         db.commit()
         db.refresh(document)
         return document
+
+    def _vl_primary_reader_attempt(
+        self,
+        stored_path: Path,
+        document: Document,
+        workflow_metadata: dict,
+    ) -> dict | None:
+        if not self.vl_worker.enabled():
+            return None
+        result = self.vl_worker.analyze(stored_path, original_filename=document.original_filename)
+        metadata = self._vl_primary_reader_metadata_from_result(result, document, workflow_metadata)
+        text = result.get("text") or result.get("text_preview")
+        if not isinstance(text, str):
+            text = ""
+        return {
+            "metadata": metadata,
+            "text": text,
+            "promoted": bool((metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
+        }
+
+    def _vl_primary_normalized_document(
+        self,
+        stored_path: Path,
+        document: Document,
+        text: str,
+        metadata: dict,
+    ) -> NormalizedDocument:
+        provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
+        return NormalizedDocument(
+            source_file_type=stored_path.suffix.casefold().lstrip(".") or "file",
+            mime_type=document.mime_type or "application/octet-stream",
+            extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+            normalized_text="\n".join(line.strip() for line in text.splitlines() if line.strip()),
+            raw_extracted_blocks=[{
+                "type": "vl_primary_reader_text",
+                "provider": provider_metadata.get("provider") or "paddleocr_vl_1_6_gguf",
+                "content": text[:20000],
+                "parser_integrated": True,
+                "confirmed_promotion": True,
+            }],
+            extraction_warnings=[],
+            file_metadata={
+                "vl_primary_reader": True,
+                "vl_worker_elapsed_ms": provider_metadata.get("elapsed_ms"),
+                "vl_worker_status": provider_metadata.get("status"),
+                "vl_worker_provider": provider_metadata.get("provider"),
+                "ocr_fallback_used": False,
+            },
+            ocr_confidence=None,
+            primary_image_path=None,
+            heavy_ai_candidate=False,
+            partial_support=False,
+        )
+
+    def _vl_primary_reader_metadata(
+        self,
+        stored_path: Path,
+        document: Document,
+        workflow_metadata: dict,
+    ) -> dict | None:
+        attempt = self._vl_primary_reader_attempt(stored_path, document, workflow_metadata)
+        return attempt.get("metadata") if attempt else None
+
+    def _vl_primary_reader_metadata_from_result(
+        self,
+        result: dict,
+        document: Document,
+        workflow_metadata: dict,
+    ) -> dict:
+        provider_metadata = {
+            "source": "vl_worker_api",
+            "provider": result.get("provider") or "paddleocr_vl_1_6_gguf",
+            "ok": bool(result.get("ok")),
+            "status": result.get("status") or result.get("classification"),
+            "fallback_reason": result.get("fallback_reason"),
+            "elapsed_ms": result.get("elapsed_ms"),
+            "provider_available_decision_reason": result.get("provider_available_decision_reason"),
+        }
+        text = result.get("text") or result.get("text_preview")
+        if not isinstance(text, str) or not text.strip():
+            return {
+                "vl_provider_metadata": provider_metadata,
+                "vl_candidate_summary": {
+                    "candidate_count": 0,
+                    "warning_count": 0,
+                    "failure_count": 0,
+                    "issue_codes": [],
+                    "provider": provider_metadata["provider"],
+                    "provider_available_candidate": False,
+                    "parser_evaluated": False,
+                    "requires_review": False,
+                    "promotion_applied": False,
+                    "gate_decision": None,
+                    "gate_reasons": [],
+                },
+                "vl_candidates": [],
+            }
+        structured = self.vl_candidate_parser.parse_text(
+            text,
+            filename=document.original_filename,
+            validation=result.get("validation") if isinstance(result.get("validation"), dict) else None,
+        )
+        candidate = {
+            "source": "vl_worker_api",
+            "provider": provider_metadata["provider"],
+            "candidate_only": True,
+            "parser_integrated": False,
+            "parser_evaluated": bool(structured),
+            "provider_available_candidate": bool(result.get("ok")),
+            "validation_severity": result.get("classification"),
+            "issue_codes": list((structured or {}).get("issue_codes") or []),
+            "review_flags": list((structured or {}).get("review_flags") or (structured or {}).get("issue_codes") or []),
+            "text_preview": text[:1200],
+            "inference_time_ms": result.get("elapsed_ms"),
+            "structured_candidate": structured,
+        }
+        original_workflow_metadata = document.workflow_metadata
+        document.workflow_metadata = workflow_metadata
+        try:
+            gate = self.vl_candidate_gate.evaluate(document, candidate)
+        finally:
+            document.workflow_metadata = original_workflow_metadata
+        candidate["promotion_gate"] = gate
+        promotion_applied = False
+        if gate.get("auto_promote") and structured:
+            self._apply_vl_structured_candidate(document, structured)
+            structured["candidate_only"] = False
+            structured["parser_integrated"] = True
+            structured["confirmed_promotion"] = True
+            candidate["candidate_only"] = False
+            candidate["parser_integrated"] = True
+            candidate["confirmed_promotion"] = True
+            promotion_applied = True
+        issue_codes = list(dict.fromkeys((candidate.get("issue_codes") or []) + (gate.get("issue_codes") or [])))
+        requires_review = gate.get("decision") in {"review_required", "reject"}
+        return {
+            "vl_provider_metadata": provider_metadata,
+            "vl_candidates": [candidate],
+            "vl_candidate_summary": {
+                "candidate_count": 1,
+                "warning_count": 1 if gate.get("decision") == "review_required" else 0,
+                "failure_count": 1 if gate.get("decision") == "reject" else 0,
+                "issue_codes": issue_codes,
+                "parser_integrated": promotion_applied,
+                "parser_evaluated": bool(structured),
+                "parsed_line_item_count": (structured or {}).get("line_item_count"),
+                "provider": provider_metadata["provider"],
+                "provider_available_candidate": bool(result.get("ok")),
+                "gate_decision": gate.get("decision"),
+                "gate_reasons": gate.get("reasons") or [],
+                "requires_review": requires_review,
+                "promotion_applied": promotion_applied,
+            },
+            "normalized_review_issues": [self._vl_candidate_review_issue(gate)] if requires_review else [],
+        }
+
+    def _merge_vl_pipeline_metadata(self, workflow_metadata: dict, vl_metadata: dict) -> dict:
+        merged = dict(workflow_metadata or {})
+        for key in ("vl_provider_metadata", "vl_candidates", "vl_candidate_summary"):
+            if key in vl_metadata:
+                merged[key] = vl_metadata[key]
+        incoming_issues = [issue for issue in vl_metadata.get("normalized_review_issues") or [] if isinstance(issue, dict)]
+        if incoming_issues:
+            issues = list(merged.get("normalized_review_issues") or [])
+            existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
+            for issue in incoming_issues:
+                if issue.get("code") not in existing_codes:
+                    issues.append(issue)
+            merged["normalized_review_issues"] = issues
+            merged["review_required"] = True
+        return merged
+
+    def _vl_candidate_review_issue(self, gate: dict) -> dict:
+        decision = gate.get("decision") or "review_required"
+        return {
+            "code": "vl_candidate_review_required" if decision != "reject" else "vl_candidate_rejected",
+            "message_ko": "VL 추출 후보가 검증을 통과하지 못했습니다. 원본과 후보 값을 확인하세요.",
+            "field": "workflow_metadata.vl_candidates",
+            "severity": "warning" if decision != "reject" else "critical",
+            "blocking": False,
+            "flags": gate.get("issue_codes") or [],
+            "gate_decision": decision,
+            "gate_reasons": gate.get("reasons") or [],
+        }
+
+    def _apply_vl_structured_candidate(self, document: Document, structured: dict) -> None:
+        candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}
+        if candidate_doc.get("document_type"):
+            try:
+                document.document_type = DocumentType(str(candidate_doc["document_type"]))
+                document.ai_document_type = document.document_type
+            except Exception:
+                pass
+        for attr, key in (
+            ("document_number", "document_number"),
+            ("vendor_name", "vendor_name"),
+            ("customer_name", "customer_name"),
+            ("currency", "currency"),
+        ):
+            value = candidate_doc.get(key)
+            if value not in (None, "", []):
+                setattr(document, attr, sanitize_for_postgres(value))
+        issue_date = self._vl_date(candidate_doc.get("issue_date"))
+        due_date = self._vl_date(candidate_doc.get("due_date"))
+        if issue_date:
+            document.issue_date = issue_date
+            document.extracted_date = issue_date
+        if due_date:
+            document.due_date = due_date
+        for attr, key in (("subtotal", "subtotal"), ("tax", "tax"), ("extracted_amount", "total")):
+            value = self._vl_decimal(candidate_doc.get(key))
+            if value is not None:
+                setattr(document, attr, value)
+        line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
+        if line_items:
+            document.line_items = sanitize_for_postgres(line_items)
+            document.low_confidence_fields = []
+        field_sources = dict(document.field_sources or {})
+        for field in ("document_number", "vendor_name", "customer_name", "issue_date", "due_date", "currency", "subtotal", "tax", "extracted_amount", "line_items"):
+            field_sources[field] = "paddleocr_vl_1_6_gguf"
+        document.field_sources = sanitize_for_postgres(field_sources)
+
+    def _vl_date(self, value: Any) -> date | None:
+        if value in (None, "", []):
+            return None
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except Exception:
+            return None
+
+    def _vl_decimal(self, value: Any) -> Decimal | None:
+        if value in (None, "", []):
+            return None
+        try:
+            return Decimal(str(value).replace(",", ""))
+        except Exception:
+            return None
 
     def _bbox_layout_debug_metadata(
         self,

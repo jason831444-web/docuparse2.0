@@ -22,7 +22,7 @@ def _document() -> Document:
     )
 
 
-def test_vl_candidate_gate_marks_clean_candidate_as_promotion_eligible_but_not_auto_promoted():
+def test_vl_candidate_gate_marks_clean_candidate_as_promotion_eligible_for_auto_promote():
     candidate = {
         "provider_available_candidate": True,
         "structured_candidate": {
@@ -43,7 +43,7 @@ def test_vl_candidate_gate_marks_clean_candidate_as_promotion_eligible_but_not_a
     result = VLCandidateValidationGate().evaluate(_document(), candidate)
 
     assert result["decision"] == "promotion_eligible"
-    assert result["auto_promote"] is False
+    assert result["auto_promote"] is True
     assert result["reasons"] == ["validated_candidate_without_known_issues"]
 
 

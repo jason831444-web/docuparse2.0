@@ -29,5 +29,6 @@ def test_settings_default_to_gguf_candidate_with_full_vl_disabled():
     assert settings.ai_primary_provider == "paddleocr_vl_1_6_gguf"
     assert settings.enable_paddleocr_vl_gguf is True
     assert settings.paddleocr_vl_gguf_primary_reader_enabled is True
+    assert settings.paddleocr_vl_gguf_upload_pipeline_enabled is True
     assert settings.paddleocr_vl_gguf_in_process_enabled is False
     assert settings.enable_paddleocr_vl is False

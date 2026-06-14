@@ -5,10 +5,10 @@ from typing import Any
 
 
 class VLCandidateValidationGate:
-    """Decide whether a structured VL candidate is safe to promote later.
+    """Decide whether a structured VL candidate is safe to promote.
 
-    The gate never mutates confirmed document fields. It only records whether a
-    candidate is eligible for a future explicit promotion action.
+    The gate itself never mutates confirmed document fields. Callers may only
+    promote when the decision is `promotion_eligible` and `auto_promote` is true.
     """
 
     dangerous_issue_codes = {
@@ -68,7 +68,13 @@ class VLCandidateValidationGate:
         if reasons:
             return self._result("review_required", reasons, issue_codes, document_checks)
 
-        return self._result("promotion_eligible", ["validated_candidate_without_known_issues"], issue_codes, document_checks)
+        return self._result(
+            "promotion_eligible",
+            ["validated_candidate_without_known_issues"],
+            issue_codes,
+            document_checks,
+            auto_promote=True,
+        )
 
     def _candidate_issue_codes(self, candidate: dict[str, Any], structured: dict[str, Any]) -> list[str]:
         codes: list[str] = []
@@ -160,10 +166,12 @@ class VLCandidateValidationGate:
         reasons: list[str],
         issue_codes: list[str],
         document_checks: dict[str, Any] | None = None,
+        *,
+        auto_promote: bool = False,
     ) -> dict[str, Any]:
         return {
             "decision": decision,
-            "auto_promote": False,
+            "auto_promote": auto_promote,
             "reasons": list(dict.fromkeys(reasons)),
             "issue_codes": list(dict.fromkeys(issue_codes)),
             "document_checks": document_checks or {},

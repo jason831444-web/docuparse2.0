@@ -411,8 +411,8 @@ def _compact_vl_candidate(document: Document, candidate: dict) -> dict:
     compact = {
         "source": candidate.get("source") or candidate.get("provider") or "paddleocr_vl_1_6_gguf",
         "provider": candidate.get("provider") or "paddleocr_vl_1_6_gguf",
-        "candidate_only": True,
-        "parser_integrated": False,
+        "candidate_only": bool(candidate.get("candidate_only", True)),
+        "parser_integrated": bool(candidate.get("parser_integrated")),
         "parser_evaluated": bool(candidate.get("structured_candidate")) or bool(candidate.get("parser_evaluated")),
         "provider_available_candidate": bool(candidate.get("provider_available_candidate")),
         "validation_severity": candidate.get("validation_severity") or validation.get("severity"),
@@ -437,10 +437,10 @@ def _compact_vl_structured_candidate(value: object) -> dict | None:
     document = value.get("document") if isinstance(value.get("document"), dict) else {}
     line_items = value.get("line_items") if isinstance(value.get("line_items"), list) else []
     return {
-        "candidate_only": True,
-        "parser_integrated": False,
+        "candidate_only": bool(value.get("candidate_only", True)),
+        "parser_integrated": bool(value.get("parser_integrated")),
         "parser_evaluated": bool(value.get("parser_evaluated", True)),
-        "confirmed_promotion": False,
+        "confirmed_promotion": bool(value.get("confirmed_promotion")),
         "document": _json_safe(document),
         "line_items": [_json_safe(item) for item in line_items[:25] if isinstance(item, dict)],
         "line_item_count": int(value.get("line_item_count") or len(line_items)),

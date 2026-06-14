@@ -51,11 +51,13 @@ class Settings(BaseSettings):
     paddleocr_vl_gguf_model_file: str = "PaddleOCR-VL-1.6-GGUF.gguf"
     paddleocr_vl_gguf_mmproj_file: str = "PaddleOCR-VL-1.6-GGUF-mmproj.gguf"
     paddleocr_vl_gguf_server_url: str = "http://vl-worker-gguf:8080/v1"
+    paddleocr_vl_gguf_worker_url: str | None = None
     paddleocr_vl_gguf_timeout_seconds: float = 120.0
     paddleocr_vl_gguf_max_pages: int = 1
     paddleocr_vl_gguf_concurrency: int = 1
     paddleocr_vl_gguf_smoke_passed: bool = False
     paddleocr_vl_gguf_primary_reader_enabled: bool = True
+    paddleocr_vl_gguf_upload_pipeline_enabled: bool = True
     paddleocr_vl_gguf_in_process_enabled: bool = False
     enable_paddleocr_vl: bool = False
     paddleocr_vl_model_dir: Path | None = None
