@@ -537,7 +537,7 @@ class DocumentParser:
         patterns = [
             r"\b(?:FAXx?-)?PO0?[-_ ]?\d{4}[-_ ]?[0O]?\d{3,4}(?:[-_ ][A-Z0-9]{2,8}){0,2}\b",
             r"\bQT[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{2,8}){0,2}\b",
-            r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}(?:[-_ ]?[A-Z0-9]{2,8}){1,4}\b",
+            r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}[-_ ]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bDN[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
             r"\bTS[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
             r"\b(?:I?QC|QC)[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
@@ -704,6 +704,9 @@ class DocumentParser:
         return value.isoformat() if value else None
 
     def _extract_line_items(self, lines: list[str], doc_type: DocumentType | None = None) -> list[dict]:
+        vl_inline_items = self._extract_vl_inline_table_items(lines, doc_type)
+        if vl_inline_items:
+            return self._dedupe_line_items(vl_inline_items)[:80]
         if doc_type == DocumentType.inspection_report:
             special_items = self._extract_special_quantity_table_items(lines)
             if special_items:
@@ -745,6 +748,119 @@ class DocumentParser:
         if doc_type == DocumentType.inspection_report:
             items = self._suppress_incomplete_inspection_quantities(items)
         return self._dedupe_line_items(items)[:80]
+
+    def _extract_vl_inline_table_items(self, lines: list[str], doc_type: DocumentType | None = None) -> list[dict]:
+        """Extract rows from VL plain-text tables where columns are space-separated.
+
+        PaddleOCR-VL often returns a readable table as one line per row instead of
+        preserving pipe/tab delimiters. This path handles rows ending in
+        qty/unit/unit_price/supply/tax/total without relying on filename-specific
+        expectations.
+        """
+        header_index = next((
+            index for index, line in enumerate(lines)
+            if re.search(r"(품목명|품목\s*코드|item\s+name|item\s+code|description|vendor\s+sku)", line, flags=re.IGNORECASE)
+            and re.search(r"(수량|qty|quantity)", line, flags=re.IGNORECASE)
+            and re.search(r"(단가|unit\s*price)", line, flags=re.IGNORECASE)
+            and re.search(r"(공급가액|subtotal|supply|amount|total)", line, flags=re.IGNORECASE)
+        ), None)
+        if header_index is None:
+            return []
+        items: list[dict] = []
+        for row in lines[header_index + 1:]:
+            if self._looks_like_numbered_table_footer(row) or self._looks_like_instruction_or_note(row):
+                break
+            item = self._vl_inline_table_item_from_row(row, doc_type)
+            if item:
+                items.append(self._normalize_line_item(item))
+        if len(items) < 2:
+            return []
+        return items
+
+    def _vl_inline_table_item_from_row(self, row: str, doc_type: DocumentType | None = None) -> dict | None:
+        text = re.sub(r"\s+", " ", str(row or "")).strip(" |")
+        if not text or re.search(r"^(?:total|subtotal|vat|tax|공급가액|부가세|총액|합계)", text, flags=re.IGNORECASE):
+            return None
+        pattern = re.compile(
+            r"^(?P<body>.+?)\s+"
+            r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
+            r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<tax_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<line_total>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+            flags=re.IGNORECASE,
+        )
+        match = pattern.match(text)
+        if not match:
+            return None
+        body = re.sub(r"^\d+\s+", "", match.group("body")).strip(" -|")
+        if not re.search(r"[A-Za-z가-힣]", body):
+            return None
+        item_name, item_code, specification = self._split_vl_inline_item_identity(body)
+        if not item_name:
+            return None
+        item = {
+            "item_name": item_name,
+            "item_code": item_code,
+            "specification": specification,
+            "quantity": match.group("quantity"),
+            "unit": match.group("unit"),
+            "unit_price": match.group("unit_price"),
+            "supply_amount": match.group("supply_amount"),
+            "tax_amount": match.group("tax_amount"),
+            "line_total": match.group("line_total"),
+        }
+        return {key: value for key, value in item.items() if value not in (None, "", [])}
+
+    def _split_vl_inline_item_identity(self, body: str) -> tuple[str | None, str | None, str | None]:
+        tokens = body.split()
+        code_index = next((
+            index for index, token in enumerate(tokens)
+            if self._looks_like_item_code_token(token)
+        ), None)
+        if code_index is not None:
+            item_name = self._clean_value(" ".join(tokens[:code_index]))
+            item_code = self._clean_code_value(tokens[code_index])
+            specification = self._clean_value(" ".join(tokens[code_index + 1:])) if code_index + 1 < len(tokens) else None
+            return item_name, item_code, self._normalize_vl_inline_specification(specification)
+
+        spec_start = self._vl_inline_spec_start(tokens)
+        if spec_start is not None and spec_start > 0:
+            item_name = self._clean_value(" ".join(tokens[:spec_start]))
+            specification = self._clean_value(" ".join(tokens[spec_start:]))
+            return item_name, None, self._normalize_vl_inline_specification(specification)
+        return self._clean_value(body), None, None
+
+    def _looks_like_item_code_token(self, token: str) -> bool:
+        cleaned = str(token or "").strip(" ,|")
+        if not cleaned or "-" not in cleaned:
+            return False
+        if re.search(r"[A-Za-z]", cleaned) and re.search(r"\d", cleaned):
+            return True
+        return bool(re.fullmatch(r"[A-Z][A-Z0-9]{1,}(?:-[A-Z0-9]{2,})+", cleaned))
+
+    def _vl_inline_spec_start(self, tokens: list[str]) -> int | None:
+        joined = " ".join(tokens)
+        match = re.search(r"\b\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?(?:\s*[xX]\s*\d+(?:\.\d+)?)?\b", joined)
+        if match:
+            prefix = joined[:match.start()].strip()
+            return len(prefix.split()) if prefix else 0
+        for index, token in enumerate(tokens):
+            if index == 0:
+                continue
+            if re.fullmatch(r"M\d+(?:x\d+)?", token, flags=re.IGNORECASE):
+                return index
+            if re.fullmatch(r"\d+(?:\.\d+)?(?:mm|T|P)", token, flags=re.IGNORECASE):
+                return index
+        return None
+
+    def _normalize_vl_inline_specification(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        text = re.sub(r"\s*[xX]\s*", "x", value.strip())
+        text = re.sub(r"\s+", "", text) if re.search(r"\d+\s*x\s*\d+", text, flags=re.IGNORECASE) else re.sub(r"\s+", " ", text)
+        return self._clean_value(text)
 
     def _suppress_incomplete_inspection_quantities(self, items: list[dict]) -> list[dict]:
         safe_items: list[dict] = []

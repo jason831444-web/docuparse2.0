@@ -63,6 +63,11 @@ class VLCandidateValidationGate:
 
         if set(issue_codes) & self.review_issue_codes:
             reasons.append("vl_candidate_has_review_issues")
+        elif any(
+            code.startswith("vl_candidate_invalid_") or code.startswith("vl_candidate_untrusted_")
+            for code in issue_codes
+        ):
+            reasons.append("vl_candidate_has_review_issues")
         if not candidate.get("provider_available_candidate"):
             reasons.append("provider_candidate_not_available")
         if structured.get("line_item_count") in (None, 0) and not (structured.get("line_items") or []):

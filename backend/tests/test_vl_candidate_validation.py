@@ -74,6 +74,41 @@ def test_vl_candidate_gate_partially_promotes_blank_quantity_candidate_with_revi
     assert "vl_candidate_has_review_issues" in result["reasons"]
 
 
+def test_vl_candidate_gate_partially_promotes_invalid_row_warning_for_review():
+    candidate = {
+        "provider_available_candidate": True,
+        "structured_candidate": {
+            "candidate_only": True,
+            "parser_integrated": False,
+            "confirmed_promotion": False,
+            "document": {
+                "document_number": "PO-2026-0807-777",
+                "total": "343200",
+            },
+            "line_items": [
+                {
+                    "item_name": "SUS304 PLATE",
+                    "quantity": 1,
+                    "validation_warnings": ["invalid_line_total"],
+                }
+            ],
+            "line_item_count": 1,
+            "issue_codes": ["vl_candidate_invalid_line_total"],
+        },
+    }
+
+    document = _document()
+    document.document_number = "PO-2026-0807-777"
+    document.extracted_amount = Decimal("343200")
+
+    result = VLCandidateValidationGate().evaluate(document, candidate)
+
+    assert result["decision"] == "review_required"
+    assert result["auto_promote"] is True
+    assert result["promotion_mode"] == "partial"
+    assert "vl_candidate_has_review_issues" in result["reasons"]
+
+
 def test_vl_candidate_gate_rejects_no_price_amount_conflict():
     document = _document()
     document.document_type = DocumentType.delivery_note

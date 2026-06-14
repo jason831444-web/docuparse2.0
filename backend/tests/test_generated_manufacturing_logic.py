@@ -709,3 +709,59 @@ def test_missing_document_item_code_is_info_when_internal_match_is_confident_and
     assert missing_code_issues[0]["severity"] == "info"
     assert workflow.workflow_metadata["review_required"] is False
     assert not any(issue["code"] in {"internal_item_unmatched", "internal_item_ambiguous"} for issue in issues)
+
+
+def test_vl_inline_commercial_invoice_rows_keep_vendor_sku_as_item_code():
+    text = "\n".join([
+        "COMMERCIAL INVOICE",
+        "Invoice No INV-US-2026-0806-019 Issue Date 2026-08-06",
+        "Currency USD",
+        "No Description Vendor SKU Spec Qty Unit Unit Price Subtotal Tax Total",
+        "1 Linear Guide Rail HGW20 HGW20-1000 1000mm 8 EA 45.00 360.00 0.00 360.00",
+        "2 Cable Harness 500 CBL-HAR-500 500mm 40 EA 2.20 88.00 0.00 88.00",
+        "3 PCB Connector 12P CON-PCB-12P 12P 200 EA 0.30 60.00 0.00 60.00",
+        "Total Amount: USD 508.00",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_commercial_invoice.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-US-2026-0806-019"
+    assert parsed.currency == "USD"
+    assert parsed.extracted_amount == Decimal("508.00")
+    assert len(parsed.line_items) == 3
+    assert parsed.line_items[0]["item_name"] == "Linear Guide Rail HGW20"
+    assert parsed.line_items[0]["item_code"] == "HGW20-1000"
+    assert parsed.line_items[0]["specification"] == "1000mm"
+    assert parsed.line_items[0]["quantity"] == 8
+    assert parsed.line_items[0]["unit_price"] == 45
+    assert parsed.line_items[0]["supply_amount"] == 360
+    assert parsed.line_items[2]["item_name"] == "PCB Connector 12P"
+    assert parsed.line_items[2]["item_code"] == "CON-PCB-12P"
+    assert parsed.line_items[2]["line_total"] == 60
+
+
+def test_vl_inline_mixed_language_purchase_order_preserves_three_rows():
+    text = "\n".join([
+        "발주서",
+        "PO No PO-2026-0809-MIX-888",
+        "No Item Code Spec Qty Unit Unit Price Supply Tax Total",
+        "1 SUS304 2T PLATE M-PLT-SUS304-2T 1000x2000 7 EA 25000 175000 17500 192500",
+        "2 M8 육각 볼트 M8x20 / zinc 1200 EA 120 144000 14400 158400",
+        "3 SUS washer m8 M8 1200 EA 40 48000 4800 52800",
+        "Total KRW 403,700",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_mixed_purchase_order.txt")
+
+    assert parsed.document_type == DocumentType.purchase_order
+    assert parsed.document_number == "PO-2026-0809-MIX-888"
+    assert len(parsed.line_items) == 3
+    assert parsed.line_items[0]["item_name"] == "SUS304 2T PLATE"
+    assert parsed.line_items[0]["item_code"] == "M-PLT-SUS304-2T"
+    assert parsed.line_items[1]["item_name"] == "M8 육각 볼트"
+    assert parsed.line_items[1]["specification"] == "M8x20/zinc"
+    assert parsed.line_items[1]["quantity"] == 1200
+    assert parsed.line_items[1]["line_total"] == 158400
+    assert parsed.line_items[2]["item_name"] == "SUS washer"
+    assert parsed.line_items[2]["quantity"] == 1200
