@@ -1,4 +1,8 @@
-from app.scripts.smoke_paddleocr_vl_gguf import _evaluate_manual_visual_check, decide_provider_available_candidate
+from app.scripts.smoke_paddleocr_vl_gguf import (
+    _evaluate_manual_visual_check,
+    build_docuparse_vl_candidate_metadata,
+    decide_provider_available_candidate,
+)
 
 
 def test_gguf_provider_candidate_requires_manual_visual_pass():
@@ -135,3 +139,26 @@ def test_gguf_manual_check_flags_missing_document_total_for_fax_candidate():
     assert result is not None
     assert result["severity"] == "warn"
     assert "vl_candidate_missing_document_total" in result["issue_codes"]
+
+
+def test_gguf_smoke_report_builds_candidate_only_docuparse_metadata():
+    report = {
+        "provider_available_candidate": False,
+        "provider_available_decision_reason": "manual_visual_check_warn",
+        "validation": {"matched_terms": ["FAX-PO-2026-0921", "베어링"]},
+        "manual_visual_check_validation": {
+            "severity": "warn",
+            "issue_codes": ["vl_candidate_missing_document_total"],
+        },
+        "text_preview": "FAX-PO-2026-0921\n1 베어링 하우징 ...",
+        "elapsed_ms": 137716,
+    }
+
+    metadata = build_docuparse_vl_candidate_metadata(report)
+
+    assert metadata["vl_candidate_summary"]["candidate_count"] == 1
+    assert metadata["vl_candidate_summary"]["warning_count"] == 1
+    assert metadata["vl_candidate_summary"]["provider_available_candidate"] is False
+    assert metadata["vl_candidates"][0]["candidate_only"] is True
+    assert metadata["vl_candidates"][0]["parser_integrated"] is False
+    assert metadata["vl_candidates"][0]["review_flags"] == ["vl_candidate_missing_document_total"]

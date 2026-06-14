@@ -365,6 +365,48 @@ def decide_provider_available_candidate(
     return True, "manual_visual_check_passed"
 
 
+def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, Any]:
+    validation = report.get("validation") if isinstance(report.get("validation"), dict) else {}
+    manual_validation = (
+        report.get("manual_visual_check_validation")
+        if isinstance(report.get("manual_visual_check_validation"), dict)
+        else {}
+    )
+    issue_codes = [
+        str(code)
+        for code in manual_validation.get("issue_codes", [])
+        if code not in (None, "")
+    ]
+    severity = manual_validation.get("severity")
+    candidate = {
+        "source": "paddleocr_vl_gguf_smoke",
+        "provider": "paddleocr_vl_1_6_gguf",
+        "candidate_only": True,
+        "parser_integrated": False,
+        "provider_available_candidate": bool(report.get("provider_available_candidate")),
+        "provider_available_decision_reason": report.get("provider_available_decision_reason"),
+        "validation_severity": severity,
+        "issue_codes": issue_codes,
+        "review_flags": issue_codes,
+        "matched_terms": validation.get("matched_terms") or [],
+        "text_preview": str(report.get("text_preview") or "")[:1200],
+        "inference_time_ms": report.get("elapsed_ms"),
+    }
+    summary = {
+        "candidate_count": 1 if report.get("text_preview") else 0,
+        "warning_count": 1 if severity == "warn" else 0,
+        "failure_count": 1 if severity == "fail" else 0,
+        "issue_codes": issue_codes,
+        "parser_integrated": False,
+        "provider": "paddleocr_vl_1_6_gguf",
+        "provider_available_candidate": bool(report.get("provider_available_candidate")),
+    }
+    return {
+        "vl_candidates": [candidate] if summary["candidate_count"] else [],
+        "vl_candidate_summary": summary,
+    }
+
+
 def _render_first_page(sample: Path, output_dir: Path, *, scale: float = 2.0) -> dict[str, Any]:
     import fitz
 
@@ -407,6 +449,12 @@ def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
         "",
         "```json",
         json.dumps(report.get("manual_visual_check_validation") or {}, ensure_ascii=False, indent=2, default=str),
+        "```",
+        "",
+        "## DocuParse Candidate Metadata",
+        "",
+        "```json",
+        json.dumps(report.get("docuparse_candidate_metadata") or {}, ensure_ascii=False, indent=2, default=str),
         "```",
         "",
         "## Manual Visual Check",
@@ -519,6 +567,7 @@ def run_smoke(
             report["classification"] = "paddleocr_vl_gguf_backend_error"
     finally:
         report["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+        report["docuparse_candidate_metadata"] = build_docuparse_vl_candidate_metadata(report)
         _write_report(output_dir, report)
     return report
 
