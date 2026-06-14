@@ -41,6 +41,22 @@ EXPECTED_TERMS_BY_SAMPLE = {
     ],
 }
 
+MANUAL_EXPECTED_VALUE_REQUIRED_KEYS = {
+    "document_number",
+    "invoice_number",
+    "related_document_number",
+    "vendor",
+    "vendor_name",
+    "customer",
+    "customer_name",
+    "currency",
+    "subtotal",
+    "tax",
+    "total",
+    "total_amount",
+    "document_total",
+}
+
 
 def _configure_runtime_env() -> None:
     os.environ.setdefault("FLAGS_use_onednn", "0")
@@ -415,6 +431,17 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
     matched_required_values = [value for value in required_values if value in text]
     missing_required_values = [value for value in required_values if value not in text]
     issues = _structured_manual_issues(text, manual_visual_check)
+    for key, value in expected_values.items():
+        if key in MANUAL_EXPECTED_VALUE_REQUIRED_KEYS and key not in matched_expected_values:
+            issues.append(
+                {
+                    "code": "vl_candidate_missing_expected_pdf_value",
+                    "severity": "warn",
+                    "field": key,
+                    "expected_value": value,
+                    "message": "A manually verified source PDF value is missing in the VL output.",
+                }
+            )
     for value in missing_required_values:
         issues.append(
             {

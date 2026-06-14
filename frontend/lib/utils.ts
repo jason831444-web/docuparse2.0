@@ -249,6 +249,7 @@ export function vlCandidateIssueLabel(value?: string | null) {
     vl_candidate_missing_row_cell: "품목 행 값 누락",
     vl_candidate_hallucinated_blank_quantity: "빈 수량 추정 위험",
     vl_candidate_exchange_rate_as_amount: "환율/금액 혼동 위험",
+    vl_candidate_missing_expected_pdf_value: "원본 핵심 값 누락",
     vl_candidate_missing_required_value: "필수 원문 값 누락",
     vl_candidate_dangerous_manual_error: "위험 오류 확인됨",
     vl_candidate_manual_hallucination: "원문 없는 값 생성",

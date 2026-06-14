@@ -140,6 +140,7 @@ assert.equal(vlCandidateIssueLabel("vl_candidate_missing_document_total"), "문�
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_anchor"), "품목 행 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_fragment"), "품목 행 텍스트 불완전");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_cell"), "품목 행 값 누락");
+assert.equal(vlCandidateIssueLabel("vl_candidate_missing_expected_pdf_value"), "원본 핵심 값 누락");
 assert.equal(vlCandidateMetadata({ workflow_metadata: null }), null);
 assert.equal(titleCaseLabel("credit_note"), "차감/크레딧 문서");
 assert.equal(titleCaseLabel("internal_transfer"), "내부 이동서");

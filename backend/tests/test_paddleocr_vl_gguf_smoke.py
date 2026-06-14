@@ -144,6 +144,28 @@ def test_gguf_manual_check_flags_missing_document_total_for_fax_candidate():
     assert "vl_candidate_missing_document_total" in result["issue_codes"]
 
 
+def test_gguf_manual_check_flags_missing_core_expected_pdf_value():
+    text = "견적서\n고정 플레이트\n총액:473,000"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "expected_from_pdf": {
+            "document_number": "QT-2026-0808-009",
+            "row_count": "2",
+            "notes": "row_count is context only and should not become a warning by itself",
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "warn"
+    assert "vl_candidate_missing_expected_pdf_value" in result["issue_codes"]
+    issue = next(issue for issue in result["issues"] if issue["code"] == "vl_candidate_missing_expected_pdf_value")
+    assert issue["field"] == "document_number"
+    assert issue["expected_value"] == "QT-2026-0808-009"
+    assert not any(issue.get("field") == "row_count" for issue in result["issues"])
+
+
 def test_gguf_manual_check_flags_missing_visually_verified_row_anchor():
     text = "FAX-PO-2026-0921\n1 베어링 하우징 100mm 20 EA 8,000 160,000 16,000 176,000"
     manual = {
