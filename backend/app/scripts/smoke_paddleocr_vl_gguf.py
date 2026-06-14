@@ -234,6 +234,25 @@ def extract_text(output: Any) -> str:
     return "\n".join(lines)
 
 
+def _sanitize_preview_text(value: Any) -> str:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw in _strip_html(str(value or "")).splitlines():
+        line = _normalize_line(raw)
+        if not line:
+            continue
+        if _is_artifact_path_line(line):
+            continue
+        if _is_layout_label_noise_line(line):
+            continue
+        key = line.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _json_safe(value: Any, *, depth: int = 0) -> Any:
     if depth > 6:
         return repr(value)[:300]
@@ -703,7 +722,7 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         "issue_details": issue_details,
         "review_flags": issue_codes,
         "matched_terms": validation.get("matched_terms") or [],
-        "text_preview": str(report.get("text_preview") or "")[:1200],
+        "text_preview": _sanitize_preview_text(report.get("text_preview"))[:1200],
         "inference_time_ms": report.get("elapsed_ms"),
     }
     summary = {

@@ -370,6 +370,35 @@ def test_gguf_candidate_metadata_deduplicates_issue_codes_but_keeps_details():
     ]
 
 
+def test_gguf_candidate_metadata_sanitizes_preview_noise_from_existing_reports():
+    report = {
+        "provider_available_candidate": False,
+        "manual_visual_check_validation": {
+            "severity": "warn",
+            "issue_codes": ["vl_candidate_missing_document_total"],
+        },
+        "text_preview": (
+            "/tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/21/sample_page_1.png\n"
+            "number\n"
+            "header\n"
+            "FAX-PO-2026-0921\n"
+            "1 베어링 하우징 100mm 20 EA 8,000\n"
+            "footer_image\n"
+        ),
+        "elapsed_ms": 149750,
+    }
+
+    metadata = build_docuparse_vl_candidate_metadata(report)
+    preview = metadata["vl_candidates"][0]["text_preview"]
+
+    assert "sample_page_1.png" not in preview
+    assert "number" not in preview
+    assert "header" not in preview
+    assert "footer_image" not in preview
+    assert "FAX-PO-2026-0921" in preview
+    assert "베어링 하우징" in preview
+
+
 def test_gguf_candidate_handling_recommends_parser_primary_for_known_input_limitation():
     handling = recommend_candidate_handling(
         provider_available_candidate=False,
