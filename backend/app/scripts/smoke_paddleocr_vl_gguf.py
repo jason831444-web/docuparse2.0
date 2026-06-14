@@ -240,6 +240,23 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
     }
 
 
+def decide_provider_available_candidate(
+    validation: dict[str, Any],
+    manual_visual_check: dict[str, Any] | None,
+    manual_validation: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    if not validation.get("ok"):
+        return False, str(validation.get("status") or "output_validation_failed")
+    if not manual_visual_check:
+        return False, "manual_visual_check_missing"
+    if not manual_validation or not manual_validation.get("ok"):
+        return False, "manual_visual_check_failed"
+    severity = manual_validation.get("severity")
+    if severity != "pass":
+        return False, f"manual_visual_check_{severity or 'not_pass'}"
+    return True, "manual_visual_check_passed"
+
+
 def _render_first_page(sample: Path, output_dir: Path, *, scale: float = 2.0) -> dict[str, Any]:
     import fitz
 
@@ -356,6 +373,11 @@ def run_smoke(
         terms = expected_terms if expected_terms is not None else _expected_terms_for_sample(sample)
         validation = validate_output_text(text, terms)
         manual_validation = _evaluate_manual_visual_check(text, manual_visual_check)
+        provider_candidate, provider_candidate_reason = decide_provider_available_candidate(
+            validation,
+            manual_visual_check,
+            manual_validation,
+        )
         report.update(
             {
                 "ok": bool(validation["ok"]),
@@ -364,7 +386,8 @@ def run_smoke(
                 "manual_visual_check_validation": manual_validation,
                 "output_type": str(type(output)),
                 "text_preview": text[:5000],
-                "provider_available_candidate": bool(validation["ok"]),
+                "provider_available_candidate": provider_candidate,
+                "provider_available_decision_reason": provider_candidate_reason,
             }
         )
     except Exception as exc:
