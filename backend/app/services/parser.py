@@ -330,8 +330,16 @@ class DocumentParser:
         key = self._normalized_amount_label_key(line)
         return key in {
             "공급가액", "공급가액합계", "공급액", "공급금액", "subtotal", "supplyamount", "supplytotal",
-            "금월공급가액", "세액", "부가세", "금월세액", "vat", "tax",
-            "총액", "총합계", "합계", "합계금액", "금월합계", "invoicetotal", "grandtotal", "totaldue", "totalamount", "amountdue", "total",
+            "금월공급가액", "차감공급가액", "차감공급액", "세액", "부가세", "금월세액", "차감세액", "vat", "tax",
+            "총액", "총합계", "합계", "합계금액", "금월합계", "차감합계", "invoicetotal", "grandtotal", "totaldue", "totalamount", "amountdue", "total",
+        }
+
+    def _looks_like_summary_amount_label_line(self, line: str) -> bool:
+        key = self._normalized_amount_label_key(line)
+        return key in {
+            "공급가액합계", "공급액합계", "공급금액합계", "금월공급가액", "차감공급가액", "차감공급액",
+            "세액합계", "금월세액", "차감세액", "총액", "총합계", "합계금액", "금월합계", "차감합계",
+            "grandtotal", "totaldue", "totalamount", "amountdue",
         }
 
     def _normalized_amount_label_key(self, line: str) -> str:
@@ -1360,6 +1368,8 @@ class DocumentParser:
     def _clean_fragmented_fax_item_name(self, value: str) -> str:
         text = self._clean_value(value) or ""
         text = re.sub(r"\b8X6[QO]\b", "8X60", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b8X6\s*C(?=\d{3,}\b)", "8X60 ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+\d{3,}$", "", text)
         text = re.sub(r"\s+", " ", text).strip()
         if re.search(r"베어링\s*하우징|베어링하우징", text):
             return "베어링 하우징"
@@ -2624,7 +2634,14 @@ class DocumentParser:
             end = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
             tail_end = end
             for index in range(start + 1, end):
-                if self._looks_like_amount_label_line(lines[index]) and re.search(r"total|amount|총액|합계", lines[index], flags=re.IGNORECASE):
+                if self._looks_like_summary_amount_label_line(lines[index]):
+                    tail_end = index
+                    break
+                if (
+                    index > start + 2
+                    and self._looks_like_amount_label_line(lines[index])
+                    and re.search(r"total|amount|총액|합계", lines[index], flags=re.IGNORECASE)
+                ):
                     tail_end = index
                     break
             segments.append(lines[start:tail_end])
@@ -2763,19 +2780,26 @@ class DocumentParser:
             if quantity is not None and unit_price is not None and abs(quantity * unit_price - supply) <= max(Decimal("1"), supply * Decimal("0.02")) and not suspicious_small_hardware:
                 continue
             raw_window = self._item_context_window(item, lines)
-            pair = self._choose_krw_quantity_price(identity, supply, raw_window)
-            if pair:
-                item["quantity"] = self._number_value(pair[0])
-                item["unit_price"] = self._number_value(pair[1])
+            warnings = item.get("validation_warnings") or []
+            if "row_amount_recovered_from_ocr_fragment" not in warnings:
+                pair = self._choose_krw_quantity_price(identity, supply, raw_window)
+                if pair:
+                    item["quantity"] = self._number_value(pair[0])
+                    item["unit_price"] = self._number_value(pair[1])
             if tax is None and total is not None and total > supply:
                 item["tax_amount"] = self._number_value(total - supply)
         return repaired
 
     def _recover_krw_segment_amount_row(self, item: dict, segment: list[str]) -> dict | None:
         values: list[Decimal] = []
+        corrected_ocr_amount_fragment = False
         for line in segment:
-            for token in re.findall(r"\d[\d,]*(?:\.\d+)?[A-Za-z]?", line):
-                value = self._amount_from_labeled_match(token, line)
+            if self._looks_like_summary_amount_label_line(line):
+                break
+            for token in re.findall(r"[Bb]?\d[\d,]*(?:\.\d+)?[A-Za-z]?", line):
+                if re.fullmatch(r"[Bb]\d{2,}[CcGgLl]?", token) or re.fullmatch(r"\d{2,}[CcGgLl]", token):
+                    corrected_ocr_amount_fragment = True
+                value = self._amount_from_ocr_amount_token(token, line)
                 if value is not None and value > 0:
                     values.append(value)
         triples: list[tuple[Decimal, Decimal, Decimal]] = []
@@ -2785,6 +2809,15 @@ class DocumentParser:
                 for k in range(j + 1, min(j + 4, len(values))):
                     total = values[k]
                     if abs(tax - supply * Decimal("0.1")) <= max(Decimal("1"), supply * Decimal("0.02")) and abs(total - (supply + tax)) <= max(Decimal("1"), total * Decimal("0.02")):
+                        triples.append((supply, tax, total))
+        if not triples:
+            for i, supply in enumerate(values):
+                for k in range(i + 1, min(i + 5, len(values))):
+                    total = values[k]
+                    tax = total - supply
+                    if supply <= 0 or tax <= 0:
+                        continue
+                    if abs(tax - supply * Decimal("0.1")) <= max(Decimal("1"), supply * Decimal("0.02")):
                         triples.append((supply, tax, total))
         if not triples:
             return None
@@ -2797,13 +2830,31 @@ class DocumentParser:
         recovered["supply_amount"] = self._number_value(supply)
         recovered["tax_amount"] = self._number_value(tax)
         recovered["line_total"] = self._number_value(total)
-        identity = " ".join(str(recovered.get(field) or "") for field in ["item_name", "specification", "item_code"])
-        quantity_price = self._choose_krw_quantity_price(identity, supply, " ".join(segment))
-        if quantity_price:
-            recovered["quantity"] = self._number_value(quantity_price[0])
-            recovered["unit_price"] = self._number_value(quantity_price[1])
+        if recovered.get("item_name"):
+            recovered["item_name"] = self._clean_fragmented_fax_item_name(str(recovered["item_name"]))
+        quantity = self._to_decimal(str(recovered.get("quantity"))) if recovered.get("quantity") is not None else None
+        unit_price = self._to_decimal(str(recovered.get("unit_price"))) if recovered.get("unit_price") is not None else None
+        if quantity is None or unit_price is None or abs(quantity * unit_price - supply) > max(Decimal("1"), supply * Decimal("0.02")):
+            recovered.pop("quantity", None)
+            recovered.pop("unit_price", None)
+        if corrected_ocr_amount_fragment:
+            warnings = list(recovered.get("validation_warnings") or [])
+            warnings.append("row_amount_recovered_from_ocr_fragment")
+            recovered["validation_warnings"] = sorted(set(warnings))
         recovered["unit"] = recovered.get("unit") or "EA"
         return recovered
+
+    def _amount_from_ocr_amount_token(self, token: str, context: str) -> Decimal | None:
+        compact = str(token or "").strip().replace(",", "")
+        if re.fullmatch(r"[Bb]\d{2,}[CcGgLl]?", compact):
+            compact = "8" + compact[1:]
+        if re.fullmatch(r"\d{2,}[CcGgLl]", compact):
+            compact = compact[:-1] + "0"
+        compact = compact.replace("O", "0").replace("o", "0")
+        value = self._to_decimal(compact)
+        if value is not None:
+            return value
+        return self._amount_from_labeled_match(token, context)
 
     def _item_context_window(self, item: dict, lines: list[str]) -> str:
         identity = " ".join(str(item.get(field) or "") for field in ["item_name", "item_code", "document_item_code", "specification"])

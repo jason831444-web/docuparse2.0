@@ -1377,6 +1377,62 @@ def test_visual_return_credit_numbered_table_prioritizes_deduction_total():
     assert [item["line_total"] for item in parsed.line_items] == [8800, 3300]
 
 
+def test_photographed_return_credit_summary_totals_do_not_replace_line_amounts():
+    text = "\n".join([
+        "Page 1",
+        "반품",
+        "/차감",
+        "요청서",
+        "공급업체",
+        "오성테크",
+        "고객시",
+        "대영부품",
+        "문서번호",
+        "RTN-2026-0919-O11",
+        "작성일",
+        "2026-09-19",
+        "관련납품서",
+        "DN-2026-0914-2F",
+        "처리",
+        "다음거래대금에서차감",
+        "반품품목",
+        "공급가악",
+        "베어링하우징",
+        "합계",
+        "100mm",
+        "8000",
+        "B80C",
+        "S45C PIN 8X6C",
+        "8X60",
+        "3000",
+        "330C",
+        "차감공급가액",
+        "11000",
+        "차감세액",
+        "1100",
+        "차감합계",
+        "12100",
+        "*반품문서일반발주/매출로처리하지말것",
+        "DocuParse realistic",
+        "-Synthetic dat",
+    ])
+
+    parsed = DocumentParser().parse(text, "19_photo_return_credit_note.pdf")
+
+    assert parsed.document_number == "RTN-2026-0919-011"
+    assert parsed.business_fields["related_document_number"] == "DN-2026-0914-2F"
+    assert parsed.extracted_amount == 12100
+    assert len(parsed.line_items) == 2
+    assert [item["item_name"] for item in parsed.line_items] == ["베어링 하우징", "S45C PIN 8X60"]
+    assert [item["supply_amount"] for item in parsed.line_items] == [8000, 3000]
+    assert [item["tax_amount"] for item in parsed.line_items] == [800, 300]
+    assert [item["line_total"] for item in parsed.line_items] == [8800, 3300]
+    assert parsed.line_items[1].get("quantity") is None
+    assert parsed.line_items[1].get("unit_price") is None
+    assert all(item["line_total"] != 12100 for item in parsed.line_items)
+    assert all("row_amount_recovered_from_ocr_fragment" in item["validation_warnings"] for item in parsed.line_items)
+
+
 def test_visual_numbered_long_invoice_text_layer_recovers_all_rows():
     rows = []
     for number, name, spec, quantity, unit_price, supply in [
