@@ -7,6 +7,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from app.scripts.smoke_paddleocr_vl_gguf import recommend_candidate_handling
+
 
 REPORT_NAME = "paddleocr_vl_gguf_smoke_report.json"
 
@@ -92,14 +94,20 @@ def _summarize_one(report: dict[str, Any]) -> dict[str, Any]:
     sample = Path(str(report.get("sample") or "")).name or str(report.get("sample") or "")
     issue_codes = [str(code) for code in manual_validation.get("issue_codes") or [] if code]
     resource_monitor = _resource_monitor_summary(report.get("_source_report"))
+    provider_available_candidate = bool(report.get("provider_available_candidate"))
+    recommended_handling = recommend_candidate_handling(
+        provider_available_candidate=provider_available_candidate,
+        manual_validation=manual_validation,
+    )
     return {
         "sample": sample,
         "source_report": report.get("_source_report"),
         "ok": bool(report.get("ok")),
         "classification": report.get("classification") or "unknown",
         "manual_severity": manual_validation.get("severity") or ("fail" if report.get("error") else "unknown"),
-        "provider_available_candidate": bool(report.get("provider_available_candidate")),
+        "provider_available_candidate": provider_available_candidate,
         "provider_available_decision_reason": report.get("provider_available_decision_reason"),
+        "recommended_handling": recommended_handling,
         "pdf_opened_and_visually_checked": bool(manual_check.get("pdf_opened_and_visually_checked")),
         "matched_terms": validation.get("matched_terms") or [],
         "issue_codes": issue_codes,
@@ -193,8 +201,8 @@ def markdown_summary(summary: dict[str, Any]) -> str:
         "",
         "## Reports",
         "",
-        "| Sample | Severity | Candidate | Reason | Issues | Elapsed ms | Source |",
-        "|---|---|---:|---|---|---:|---|",
+        "| Sample | Severity | Candidate | Handling | Reason | Issues | Elapsed ms | Source |",
+        "|---|---|---:|---|---|---|---:|---|",
     ]
     for row in summary["rows"]:
         resource = row.get("resource_monitor") or {}
@@ -205,10 +213,11 @@ def markdown_summary(summary: dict[str, Any]) -> str:
                 swap=resource.get("max_swap_used_mib"),
             )
         lines.append(
-            "| {sample} | {manual_severity} | {provider_available_candidate} | {provider_available_decision_reason} | {issues} | {elapsed_ms}{resource_text} | {source_report} |".format(
+            "| {sample} | {manual_severity} | {provider_available_candidate} | {recommended_handling} | {provider_available_decision_reason} | {issues} | {elapsed_ms}{resource_text} | {source_report} |".format(
                 sample=row["sample"],
                 manual_severity=row["manual_severity"],
                 provider_available_candidate=row["provider_available_candidate"],
+                recommended_handling=row.get("recommended_handling") or "",
                 provider_available_decision_reason=row.get("provider_available_decision_reason") or "",
                 issues=", ".join(row["unique_issue_codes"]),
                 elapsed_ms=row.get("elapsed_ms") or "",

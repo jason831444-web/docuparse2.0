@@ -49,6 +49,8 @@ def test_gguf_smoke_summary_blocks_production_active_when_any_report_warns(tmp_p
     assert summary["provider_available_candidate_count"] == 1
     assert summary["manual_severity_counts"] == {"pass": 1, "warn": 1}
     assert summary["severity_counts"] == {"pass": 1, "warn": 1}
+    assert summary["rows"][0]["recommended_handling"] == "candidate_evidence_only"
+    assert summary["rows"][1]["recommended_handling"] == "review_candidate_only"
     assert summary["issue_counts"] == {
         "vl_candidate_missing_line_amount": 1,
         "vl_candidate_missing_row_cell": 1,
@@ -60,6 +62,8 @@ def test_gguf_smoke_summary_blocks_production_active_when_any_report_warns(tmp_p
     assert "Production active recommended: `False`" in markdown
     assert "manual_visual_check_warn" in markdown
     assert "vl_candidate_missing_line_amount" in markdown
+    assert "candidate_evidence_only" in markdown
+    assert "review_candidate_only" in markdown
 
 
 def test_gguf_smoke_summary_recommends_active_only_when_all_candidates_pass(tmp_path):
@@ -72,6 +76,21 @@ def test_gguf_smoke_summary_recommends_active_only_when_all_candidates_pass(tmp_
 
     assert summary["production_active_recommended"] is True
     assert summary["production_active_reason"] == "all_smokes_passed"
+
+
+def test_gguf_smoke_summary_marks_known_input_limitation_as_parser_primary(tmp_path):
+    report = tmp_path / "16" / "paddleocr_vl_gguf_smoke_report.json"
+    _write_report(
+        report,
+        sample="16_real_commercial_invoice_exchange_rate.pdf",
+        severity="warn",
+        candidate=False,
+        issues=["vl_candidate_known_input_limitation", "vl_candidate_missing_line_amount"],
+    )
+
+    summary = summarize_reports([report])
+
+    assert summary["rows"][0]["recommended_handling"] == "use_parser_primary_vl_auxiliary"
 
 
 def test_gguf_smoke_summary_surfaces_missing_report_paths(tmp_path):
