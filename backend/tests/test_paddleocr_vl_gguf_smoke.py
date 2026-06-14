@@ -1,4 +1,4 @@
-from app.scripts.smoke_paddleocr_vl_gguf import decide_provider_available_candidate
+from app.scripts.smoke_paddleocr_vl_gguf import _evaluate_manual_visual_check, decide_provider_available_candidate
 
 
 def test_gguf_provider_candidate_requires_manual_visual_pass():
@@ -41,3 +41,97 @@ def test_gguf_provider_candidate_rejects_output_validation_failure():
 
     assert available is False
     assert reason == "document_terms_missing"
+
+
+def test_gguf_manual_check_flags_blank_quantity_hallucination():
+    text = "고정 플레이트 PLT-FIX-02 120x60x5T 8 EA 2800 280000 28000 308000"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "structured_checks": {
+            "blank_quantity_rows": [
+                {"row_contains": "고정 플레이트", "spec": "120x60x5T", "unit": "EA"}
+            ]
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "fail"
+    assert "vl_candidate_hallucinated_blank_quantity" in result["issue_codes"]
+
+
+def test_gguf_manual_check_accepts_blank_quantity_when_unit_follows_spec():
+    text = "고정 플레이트 PLT-FIX-02 120x60x5T EA 2800 280000 28000 308000"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "structured_checks": {
+            "blank_quantity_rows": [
+                {"row_contains": "고정 플레이트", "spec": "120x60x5T", "unit": "EA"}
+            ]
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "pass"
+    assert result["issue_codes"] == []
+
+
+def test_gguf_manual_check_flags_missing_commercial_invoice_line_amounts():
+    text = (
+        "COMMERCIAL INVOICE\n"
+        "INV-US-2026-0916-EX\n"
+        "1 Linear Guide Rail HGW20 HGW20-1000 1000mm 10 EA 45.00\n"
+        "Subtotal USD 650.00\n"
+        "Total USD 650.00\n"
+        "Exchange Rate USD = 1,370 KRW 참고"
+    )
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "required_vl_output_values": ["INV-US-2026-0916-EX", "650.00"],
+        "structured_checks": {
+            "expected_line_amounts": ["450.00", "110.00", "90.00"],
+            "exchange_rate_value": "1,370",
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "warn"
+    assert result["missing_required_values"] == []
+    assert result["issue_codes"].count("vl_candidate_missing_line_amount") == 3
+
+
+def test_gguf_manual_check_flags_exchange_rate_as_total_amount():
+    text = "COMMERCIAL INVOICE\nTotal USD 1,370\nExchange Rate USD = 1,370 KRW 참고"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "structured_checks": {
+            "exchange_rate_value": "1,370",
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "fail"
+    assert "vl_candidate_exchange_rate_as_amount" in result["issue_codes"]
+
+
+def test_gguf_manual_check_flags_missing_document_total_for_fax_candidate():
+    text = "FAX-PO-2026-0921\n1 베어링 하우징 100mm 20 EA 8,000 160,000 16,000 176,000"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "structured_checks": {
+            "expected_document_total": "418,000",
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "warn"
+    assert "vl_candidate_missing_document_total" in result["issue_codes"]

@@ -179,6 +179,86 @@ def validate_output_text(text: str, expected_terms: list[str] | None = None) -> 
     return {"ok": ok, "status": status, "text_length": len(stripped), "matched_terms": matched_terms}
 
 
+def _line_containing(text: str, needle: str) -> str | None:
+    needle_folded = needle.casefold()
+    for line in text.splitlines():
+        if needle_folded in line.casefold():
+            return line
+    return None
+
+
+def _structured_manual_issues(text: str, manual_visual_check: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = manual_visual_check.get("structured_checks") or {}
+    issues: list[dict[str, Any]] = []
+
+    for value in checks.get("expected_line_amounts") or []:
+        value = str(value).strip()
+        if value and value not in text:
+            issues.append(
+                {
+                    "code": "vl_candidate_missing_line_amount",
+                    "severity": "warn",
+                    "expected_value": value,
+                    "message": "A visible line amount from the source PDF is missing in the VL output.",
+                }
+            )
+
+    document_total = str(checks.get("expected_document_total") or "").strip()
+    if document_total and document_total not in text:
+        issues.append(
+            {
+                "code": "vl_candidate_missing_document_total",
+                "severity": "warn",
+                "expected_value": document_total,
+                "message": "The source PDF total is missing in the VL output.",
+            }
+        )
+
+    for guard in checks.get("blank_quantity_rows") or []:
+        row_contains = str(guard.get("row_contains") or "").strip()
+        unit = str(guard.get("unit") or "").strip()
+        spec = str(guard.get("spec") or "").strip()
+        if not row_contains or not unit:
+            continue
+        line = _line_containing(text, row_contains)
+        if not line:
+            continue
+        if spec:
+            pattern = rf"{re.escape(spec)}\s+(?P<quantity>[0-9][0-9,]*(?:\.[0-9]+)?)\s+{re.escape(unit)}\b"
+        else:
+            pattern = rf"{re.escape(row_contains)}.*?(?P<quantity>[0-9][0-9,]*(?:\.[0-9]+)?)\s+{re.escape(unit)}\b"
+        match = re.search(pattern, line)
+        if match:
+            issues.append(
+                {
+                    "code": "vl_candidate_hallucinated_blank_quantity",
+                    "severity": "fail",
+                    "row_contains": row_contains,
+                    "quantity": match.group("quantity"),
+                    "line": line,
+                    "message": "A visually blank quantity cell appears filled in the VL output.",
+                }
+            )
+
+    exchange_rate_value = str(checks.get("exchange_rate_value") or "").strip()
+    if exchange_rate_value:
+        total_label_pattern = re.compile(r"(?i)(total|subtotal|amount|합계|총액|공급가액|세액)")
+        for line in text.splitlines():
+            if exchange_rate_value in line and total_label_pattern.search(line):
+                if not re.search(r"(?i)(exchange\s*rate|환율|참고|기준)", line):
+                    issues.append(
+                        {
+                            "code": "vl_candidate_exchange_rate_as_amount",
+                            "severity": "fail",
+                            "value": exchange_rate_value,
+                            "line": line,
+                            "message": "An exchange-rate value appears in an amount/total context.",
+                        }
+                    )
+
+    return issues
+
+
 def _expected_terms_for_sample(sample: Path) -> list[str]:
     return EXPECTED_TERMS_BY_SAMPLE.get(sample.name, [])
 
@@ -216,10 +296,36 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
     ]
     matched_required_values = [value for value in required_values if value in text]
     missing_required_values = [value for value in required_values if value not in text]
+    issues = _structured_manual_issues(text, manual_visual_check)
+    for value in missing_required_values:
+        issues.append(
+            {
+                "code": "vl_candidate_missing_required_value",
+                "severity": "warn",
+                "expected_value": value,
+                "message": "A required manually verified value is missing in the VL output.",
+            }
+        )
+    for error in dangerous_errors:
+        issues.append(
+            {
+                "code": "vl_candidate_dangerous_manual_error",
+                "severity": "fail",
+                "message": str(error),
+            }
+        )
+    for hallucination in hallucinations:
+        issues.append(
+            {
+                "code": "vl_candidate_manual_hallucination",
+                "severity": "fail",
+                "message": str(hallucination),
+            }
+        )
     severity = "pass"
-    if dangerous_errors or hallucinations:
+    if any(issue.get("severity") == "fail" for issue in issues):
         severity = "fail"
-    elif missing_required_values:
+    elif any(issue.get("severity") == "warn" for issue in issues):
         severity = "warn"
     ok = (
         bool(manual_visual_check.get("pdf_opened_and_visually_checked"))
@@ -234,6 +340,8 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
         },
         "matched_required_values": matched_required_values,
         "missing_required_values": missing_required_values,
+        "issues": issues,
+        "issue_codes": [str(issue.get("code")) for issue in issues if issue.get("code")],
         "dangerous_error_count": len(dangerous_errors),
         "hallucination_count": len(hallucinations),
         "severity": severity,
@@ -286,12 +394,20 @@ def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
         "",
         f"- OK: `{report.get('ok')}`",
         f"- Classification: `{report.get('classification')}`",
+        f"- Provider candidate: `{report.get('provider_available_candidate')}`",
+        f"- Provider candidate reason: `{report.get('provider_available_decision_reason')}`",
         f"- Server URL: `{report.get('server_url')}`",
         f"- Model: `{report.get('model')}`",
         f"- Sample: `{report.get('sample')}`",
         f"- Elapsed ms: `{report.get('elapsed_ms')}`",
         f"- Error: `{report.get('error')}`",
         f"- Matched terms: `{', '.join((report.get('validation') or {}).get('matched_terms') or [])}`",
+        "",
+        "## Manual Validation",
+        "",
+        "```json",
+        json.dumps(report.get("manual_visual_check_validation") or {}, ensure_ascii=False, indent=2, default=str),
+        "```",
         "",
         "## Manual Visual Check",
         "",
