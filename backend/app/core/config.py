@@ -39,12 +39,22 @@ class Settings(BaseSettings):
     gemma_model_dir: Path | None = None
     gemma_device: str = "auto"
     huggingface_token: str | None = None
-    ai_primary_provider: str = "paddleocr_vl"
+    ai_primary_provider: str = "paddleocr_vl_1_6_gguf"
     ai_secondary_provider: str = "heuristic_fallback"
     ai_enable_second_pass: bool = False
     ai_second_pass_confidence_threshold: float = 0.80
     ai_model_dir: Path = Path("models")
     ocr_fallback_provider: str = "paddleocr_ppocrv4"
+    enable_paddleocr_vl_gguf: bool = False
+    paddleocr_vl_gguf_repo_id: str = "PaddlePaddle/PaddleOCR-VL-1.6-GGUF"
+    paddleocr_vl_gguf_model_dir: Path = Path("/app/models/paddleocr_vl_1_6_gguf")
+    paddleocr_vl_gguf_model_file: str = "PaddleOCR-VL-1.6-GGUF.gguf"
+    paddleocr_vl_gguf_mmproj_file: str = "PaddleOCR-VL-1.6-GGUF-mmproj.gguf"
+    paddleocr_vl_gguf_server_url: str = "http://vl-worker-gguf:8080/v1"
+    paddleocr_vl_gguf_timeout_seconds: float = 120.0
+    paddleocr_vl_gguf_max_pages: int = 1
+    paddleocr_vl_gguf_concurrency: int = 1
+    paddleocr_vl_gguf_smoke_passed: bool = False
     enable_paddleocr_vl: bool = True
     paddleocr_vl_model_dir: Path | None = None
     paddleocr_vl_layout_model_dir: Path | None = None
@@ -64,6 +74,7 @@ class Settings(BaseSettings):
     @field_validator(
         "llama_cpp_model_path",
         "gemma_model_dir",
+        "paddleocr_vl_gguf_model_dir",
         "paddleocr_vl_model_dir",
         "paddleocr_vl_layout_model_dir",
         mode="before",

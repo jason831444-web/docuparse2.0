@@ -24,6 +24,17 @@ def _ocr_settings(**overrides):
         "ocr_fallback_provider": "paddleocr_ppocrv4",
         "ocr_worker_url": "http://ocr-worker:8010",
         "ocr_worker_timeout_seconds": 120.0,
+        "ai_primary_provider": "paddleocr_vl_1_6_gguf",
+        "enable_paddleocr_vl_gguf": False,
+        "paddleocr_vl_gguf_repo_id": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+        "paddleocr_vl_gguf_model_dir": Path("/app/models/paddleocr_vl_1_6_gguf"),
+        "paddleocr_vl_gguf_model_file": "PaddleOCR-VL-1.6-GGUF.gguf",
+        "paddleocr_vl_gguf_mmproj_file": "PaddleOCR-VL-1.6-GGUF-mmproj.gguf",
+        "paddleocr_vl_gguf_server_url": "http://vl-worker-gguf:8080/v1",
+        "paddleocr_vl_gguf_timeout_seconds": 120.0,
+        "paddleocr_vl_gguf_max_pages": 1,
+        "paddleocr_vl_gguf_concurrency": 1,
+        "paddleocr_vl_gguf_smoke_passed": False,
         "enable_paddleocr_vl": True,
         "paddleocr_vl_model_name": "PaddleOCR-VL-1.6",
         "paddleocr_vl_model_dir": None,
@@ -99,6 +110,22 @@ class FakeTesseractProvider:
             provider_attempted=[self.engine_name],
             provider_succeeded=self.engine_name,
         )
+
+
+class _JsonResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        import json
+
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class ImageDetector:
@@ -280,7 +307,7 @@ def test_paddleocr_output_normalization_preserves_bbox_candidates():
     assert line_candidates[1]["confidence"] == 0.86
 
 
-def test_provider_health_reports_paddleocr_vl_unavailable_with_ppocr_fallback(monkeypatch):
+def test_provider_health_reports_gguf_disabled_with_ppocr_fallback(monkeypatch):
     monkeypatch.setattr(ocr_module, "get_settings", lambda: _ocr_settings())
     monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
     monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
@@ -312,19 +339,35 @@ def test_provider_health_reports_paddleocr_vl_unavailable_with_ppocr_fallback(mo
 
     payload = ocr_module.provider_health()
 
-    assert payload["primary_provider"] == "paddleocr_vl"
+    assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
     assert payload["primary_provider_available"] is False
+    assert payload["primary_provider_status"] == "disabled"
     assert payload["fallback_provider"] == "paddleocr_ppocrv4"
     assert payload["ocr_engine"] == "PP-OCRv4"
     assert payload["ocr_model"] == "PP-OCRv4"
-    assert payload["fallback_reason"] == "cannot import name 'PaddleOCRVL'"
+    assert payload["fallback_reason"] == "paddleocr_vl_gguf_disabled"
+    assert payload["paddleocr_vl_gguf"]["status"] == "disabled"
+    assert payload["paddleocr_vl_official_full"]["status"] == "memory_blocked_on_8gb_cpu"
 
 
-def test_provider_health_reports_paddleocr_vl_primary_when_available(monkeypatch):
-    monkeypatch.setattr(ocr_module, "get_settings", lambda: _ocr_settings(enable_paddleocr_vl=True))
+def test_provider_health_reports_gguf_candidate_when_smoke_gate_passed(monkeypatch, tmp_path):
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "PaddleOCR-VL-1.6-GGUF.gguf").write_text("model")
+    (model_dir / "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").write_text("mmproj")
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: _ocr_settings(
+            enable_paddleocr_vl_gguf=True,
+            paddleocr_vl_gguf_model_dir=model_dir,
+            paddleocr_vl_gguf_smoke_passed=True,
+        ),
+    )
     monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
     monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
     monkeypatch.setattr(ocr_module, "_paddleocr_vl_status", lambda: {"importable": True, "usable": True, "error": None})
+    monkeypatch.setattr(ocr_module.urllib.request, "urlopen", lambda request, timeout=5.0: _JsonResponse({"status": "ok"}))
     monkeypatch.setattr(
         ocr_module,
         "_ocr_worker_health",
@@ -336,11 +379,42 @@ def test_provider_health_reports_paddleocr_vl_primary_when_available(monkeypatch
 
     payload = ocr_module.provider_health()
 
-    assert payload["ocr_engine"] == "PaddleOCR-VL"
-    assert payload["ocr_model"] == "PaddleOCR-VL-1.6"
-    assert payload["primary_provider"] == "paddleocr_vl"
+    assert payload["ocr_engine"] == "PaddleOCR-VL GGUF"
+    assert payload["ocr_model"] == "PaddleOCR-VL-1.6-GGUF.gguf"
+    assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
     assert payload["primary_provider_available"] is True
-    assert payload["runtime_strategy"] == "paddleocr_vl_primary_with_ppocrv4_fallback"
+    assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
+    assert payload["paddleocr_vl_gguf"]["status"] == "active_candidate"
+
+
+def test_provider_health_does_not_activate_gguf_without_smoke_gate(monkeypatch, tmp_path):
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "PaddleOCR-VL-1.6-GGUF.gguf").write_text("model")
+    (model_dir / "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").write_text("mmproj")
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: _ocr_settings(enable_paddleocr_vl_gguf=True, paddleocr_vl_gguf_model_dir=model_dir),
+    )
+    monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
+    monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(ocr_module, "_paddleocr_vl_status", lambda: {"importable": True, "usable": True, "error": None})
+    monkeypatch.setattr(ocr_module.urllib.request, "urlopen", lambda request, timeout=5.0: _JsonResponse({"status": "ok"}))
+    monkeypatch.setattr(
+        ocr_module,
+        "_ocr_worker_health",
+        lambda url, timeout: (
+            {"status": "ok", "ocr_engine": "PP-OCRv4", "model": "PP-OCRv4", "ocr_version": "PP-OCRv4"},
+            None,
+        ),
+    )
+
+    payload = ocr_module.provider_health()
+
+    assert payload["primary_provider_available"] is False
+    assert payload["primary_provider_status"] == "llama_server_ready"
+    assert payload["fallback_reason"] == "paddleocr_vl_gguf_smoke_not_run"
 
 
 def test_ocr_worker_resets_provider_and_retries_paddle_runtime_error(monkeypatch, tmp_path):

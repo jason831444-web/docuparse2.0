@@ -23,11 +23,14 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
   const workerModel = providers.ocr_worker_health?.model || providers.ocr_worker_health?.ocr_version || providers.ocr_model || "PP-OCRv4";
   const reason =
     providers.fallback_reason ||
+    providers.paddleocr_vl_gguf?.error ||
+    providers.paddleocr_vl_gguf?.status ||
     providers.paddleocr_vl_init_error ||
     "paddleocr_vl_unavailable";
+  const candidate = providers.primary_provider === "paddleocr_vl_1_6_gguf" ? " · VL 후보: GGUF" : "";
   return {
     label: `OCR 정상 · ${workerModel}`,
-    detail: `AI 문서 파싱 비활성: ${reason}. Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
+    detail: `AI 문서 파싱 비활성${candidate}: ${reason}. Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
     tone: "fallback",
   };
 }

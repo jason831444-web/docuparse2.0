@@ -45,12 +45,22 @@ services:
       LLAMA_CPP_GPU_LAYERS: ${LLAMA_CPP_GPU_LAYERS:-0}
       LLAMA_CPP_MAX_TOKENS: ${LLAMA_CPP_MAX_TOKENS:-700}
       LLAMA_CPP_TEMPERATURE: ${LLAMA_CPP_TEMPERATURE:-0.1}
-      AI_PRIMARY_PROVIDER: ${AI_PRIMARY_PROVIDER:-paddleocr_vl}
+      AI_PRIMARY_PROVIDER: ${AI_PRIMARY_PROVIDER:-paddleocr_vl_1_6_gguf}
       AI_SECONDARY_PROVIDER: heuristic_fallback
       AI_ENABLE_SECOND_PASS: "false"
       AI_SECOND_PASS_CONFIDENCE_THRESHOLD: "0.80"
       AI_MODEL_DIR: /app/models
       OCR_FALLBACK_PROVIDER: paddleocr_ppocrv4
+      ENABLE_PADDLEOCR_VL_GGUF: ${ENABLE_PADDLEOCR_VL_GGUF:-false}
+      PADDLEOCR_VL_GGUF_REPO_ID: ${PADDLEOCR_VL_GGUF_REPO_ID:-PaddlePaddle/PaddleOCR-VL-1.6-GGUF}
+      PADDLEOCR_VL_GGUF_MODEL_DIR: /app/models/paddleocr_vl_1_6_gguf
+      PADDLEOCR_VL_GGUF_MODEL_FILE: ${PADDLEOCR_VL_GGUF_MODEL_FILE:-PaddleOCR-VL-1.6-GGUF.gguf}
+      PADDLEOCR_VL_GGUF_MMPROJ_FILE: ${PADDLEOCR_VL_GGUF_MMPROJ_FILE:-PaddleOCR-VL-1.6-GGUF-mmproj.gguf}
+      PADDLEOCR_VL_GGUF_SERVER_URL: ${PADDLEOCR_VL_GGUF_SERVER_URL:-http://vl-worker-gguf:8080/v1}
+      PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS: ${PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS:-120}
+      PADDLEOCR_VL_GGUF_MAX_PAGES: ${PADDLEOCR_VL_GGUF_MAX_PAGES:-1}
+      PADDLEOCR_VL_GGUF_CONCURRENCY: ${PADDLEOCR_VL_GGUF_CONCURRENCY:-1}
+      PADDLEOCR_VL_GGUF_SMOKE_PASSED: ${PADDLEOCR_VL_GGUF_SMOKE_PASSED:-false}
       ENABLE_PADDLEOCR_VL: ${ENABLE_PADDLEOCR_VL:-true}
       PADDLEOCR_VL_MODEL_NAME: ${PADDLEOCR_VL_MODEL_NAME:-PaddleOCR-VL-1.6}
       PADDLEOCR_VL_HF_REPO: ${PADDLEOCR_VL_HF_REPO:-PaddlePaddle/PaddleOCR-VL-1.6}
@@ -72,6 +82,7 @@ services:
     volumes:
       - uploaded_files:/app/uploads
       - model_cache:/app/models
+      - ${PADDLEOCR_VL_GGUF_HOST_MODEL_DIR:-./models/paddleocr_vl_1_6_gguf}:/app/models/paddleocr_vl_1_6_gguf:ro
       - ./models/gguf:/models/gguf:ro
     depends_on:
       db:
@@ -127,6 +138,31 @@ services:
       DOCUPARSE_BACKEND_INTERNAL_URL: http://backend:8000
     ports:
       - "3001:3000"
+
+  vl-worker-gguf:
+    profiles:
+      - vl
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    command:
+      - -m
+      - /app/models/paddleocr_vl_1_6_gguf/${PADDLEOCR_VL_GGUF_MODEL_FILE:-PaddleOCR-VL-1.6-GGUF.gguf}
+      - --mmproj
+      - /app/models/paddleocr_vl_1_6_gguf/${PADDLEOCR_VL_GGUF_MMPROJ_FILE:-PaddleOCR-VL-1.6-GGUF-mmproj.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --temp
+      - "0"
+      - -t
+      - "${PADDLEOCR_VL_GGUF_THREADS:-2}"
+      - -c
+      - "${PADDLEOCR_VL_GGUF_CONTEXT:-4096}"
+    expose:
+      - "8080"
+    volumes:
+      - ${PADDLEOCR_VL_GGUF_HOST_MODEL_DIR:-./models/paddleocr_vl_1_6_gguf}:/app/models/paddleocr_vl_1_6_gguf:ro
 
 volumes:
   postgres_data:

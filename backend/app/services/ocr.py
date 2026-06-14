@@ -395,27 +395,44 @@ def provider_health() -> dict[str, Any]:
     paddle_vl_importable = bool(paddle_vl_status.get("importable"))
     paddle_vl_usable = bool(paddle_vl_status.get("usable"))
     paddle_vl_error = paddle_vl_status.get("error")
+    gguf_status = _paddleocr_vl_gguf_status()
+    gguf_available = bool(gguf_status.get("available"))
+    gguf_status_name = str(gguf_status.get("status") or "disabled")
+    gguf_error = gguf_status.get("error")
     worker_health, worker_error = _ocr_worker_health(settings.ocr_worker_url, settings.ocr_worker_timeout_seconds)
     worker_model = (worker_health or {}).get("ocr_version") or "PP-OCRv4"
-    primary_provider_available = bool(settings.enable_paddleocr_vl and paddle_vl_usable)
-    active_ocr_engine = "PaddleOCR-VL" if primary_provider_available else str(worker_model)
+    primary_provider = settings.ai_primary_provider or "paddleocr_vl_1_6_gguf"
+    primary_provider_available = bool(primary_provider == "paddleocr_vl_1_6_gguf" and gguf_available)
+    if primary_provider == "paddleocr_vl":
+        # The full runtime is intentionally retained only as a documented fallback
+        # candidate because it exceeded the current 8GB CPU server budget.
+        primary_provider_available = False
+    active_ocr_engine = "PaddleOCR-VL GGUF" if primary_provider_available else str(worker_model)
     runtime_strategy = (
-        "paddleocr_vl_primary_with_ppocrv4_fallback"
+        "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
         if primary_provider_available
         else "ppocrv4_fallback"
     )
+    fallback_reason = None
+    if not primary_provider_available:
+        if primary_provider == "paddleocr_vl_1_6_gguf":
+            fallback_reason = gguf_error or gguf_status_name
+        elif primary_provider == "paddleocr_vl":
+            fallback_reason = "paddleocr_vl_official_full_memory_blocked_on_8gb_cpu"
+        else:
+            fallback_reason = paddle_vl_error or "paddleocr_vl_unavailable"
     return {
         "ocr_engine": active_ocr_engine,
-        "ocr_model": settings.paddleocr_vl_model_name if primary_provider_available else worker_model,
-        "primary_provider": "paddleocr_vl",
-        "primary_provider_enabled": settings.enable_paddleocr_vl,
+        "ocr_model": settings.paddleocr_vl_gguf_model_file if primary_provider_available else worker_model,
+        "primary_provider": primary_provider,
+        "primary_provider_enabled": bool(settings.enable_paddleocr_vl_gguf),
         "primary_provider_available": primary_provider_available,
-        "primary_provider_status": "available" if primary_provider_available else "unavailable",
+        "primary_provider_status": "active_candidate" if primary_provider_available else gguf_status_name,
         "fallback_provider": settings.ocr_fallback_provider,
         "fallback_provider_available": worker_health is not None or paddle_usable,
-        "fallback_reason": None if primary_provider_available else (paddle_vl_error or "paddleocr_vl_unavailable"),
+        "fallback_reason": fallback_reason,
         "runtime_strategy": runtime_strategy,
-        "device": settings.paddleocr_vl_device or (worker_health or {}).get("device") or "cpu",
+        "device": (worker_health or {}).get("device") or "cpu",
         "tesseract_available": _module_available("pytesseract"),
         "ocr_worker_configured": bool(settings.ocr_worker_url),
         "ocr_worker_url": settings.ocr_worker_url,
@@ -438,6 +455,18 @@ def provider_health() -> dict[str, Any]:
         "paddleocr_vl_model_dir": str(settings.paddleocr_vl_model_dir) if settings.paddleocr_vl_model_dir else None,
         "paddleocr_vl_hf_repo": settings.paddleocr_vl_hf_repo,
         "paddleocr_vl_probe": paddle_vl_status,
+        "paddleocr_vl_official_full": {
+            "provider": "paddleocr_vl_official_full",
+            "status": "memory_blocked_on_8gb_cpu",
+            "server_smoke_summary": {
+                "sample": "08_image_quote_missing_quantity.pdf",
+                "readable_output": True,
+                "elapsed": "about 4 minutes",
+                "peak_rss": "about 5.5GiB",
+                "swap_used": "about 3.7GiB-5.8GiB",
+            },
+        },
+        "paddleocr_vl_gguf": gguf_status,
     }
 
 
@@ -507,6 +536,57 @@ def _paddleocr_vl_status() -> dict[str, Any]:
     payload.setdefault("usable", bool(payload.get("importable")))
     payload.setdefault("error", None)
     return payload
+
+
+def _paddleocr_vl_gguf_status() -> dict[str, Any]:
+    settings = get_settings()
+    model_dir = settings.paddleocr_vl_gguf_model_dir
+    model_file = model_dir / settings.paddleocr_vl_gguf_model_file
+    mmproj_file = model_dir / settings.paddleocr_vl_gguf_mmproj_file
+    base: dict[str, Any] = {
+        "provider": "paddleocr_vl_1_6_gguf",
+        "repo_id": settings.paddleocr_vl_gguf_repo_id,
+        "model_dir": str(model_dir),
+        "model_file": settings.paddleocr_vl_gguf_model_file,
+        "mmproj_file": settings.paddleocr_vl_gguf_mmproj_file,
+        "server_url": settings.paddleocr_vl_gguf_server_url,
+        "enabled": settings.enable_paddleocr_vl_gguf,
+        "max_pages": settings.paddleocr_vl_gguf_max_pages,
+        "concurrency": settings.paddleocr_vl_gguf_concurrency,
+        "timeout_seconds": settings.paddleocr_vl_gguf_timeout_seconds,
+        "smoke_passed": settings.paddleocr_vl_gguf_smoke_passed,
+        "available": False,
+        "error": None,
+    }
+    if not settings.enable_paddleocr_vl_gguf:
+        base["status"] = "disabled"
+        base["error"] = "paddleocr_vl_gguf_disabled"
+        return base
+    missing = [str(path) for path in (model_file, mmproj_file) if not path.exists()]
+    if missing:
+        base["status"] = "model_missing"
+        base["missing_files"] = missing
+        base["error"] = "paddleocr_vl_gguf_model_missing"
+        return base
+    health_url = settings.paddleocr_vl_gguf_server_url.rstrip("/")
+    if health_url.endswith("/v1"):
+        health_url = health_url[:-3]
+    try:
+        request = urllib.request.Request(f"{health_url}/health", method="GET")
+        with urllib.request.urlopen(request, timeout=min(settings.paddleocr_vl_gguf_timeout_seconds, 5.0)) as response:
+            health_payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        base["status"] = "llama_server_unreachable"
+        base["error"] = f"llama_server_unreachable: {exc}"
+        return base
+    base["llama_server_health"] = health_payload if isinstance(health_payload, dict) else {"raw": health_payload}
+    if not settings.paddleocr_vl_gguf_smoke_passed:
+        base["status"] = "llama_server_ready"
+        base["error"] = "paddleocr_vl_gguf_smoke_not_run"
+        return base
+    base["status"] = "active_candidate"
+    base["available"] = True
+    return base
 
 
 def _ocr_line_candidate_from_mapping(item: dict[str, Any], text: str, score: object) -> dict[str, Any] | None:

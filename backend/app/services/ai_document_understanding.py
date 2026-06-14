@@ -602,7 +602,10 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
     def __init__(self) -> None:
         self.settings = get_settings()
         self.local_normalizer = LocalDocumentAIService()
-        if not self.settings.enable_paddleocr_vl:
+        use_gguf = self.settings.ai_primary_provider == "paddleocr_vl_1_6_gguf"
+        if use_gguf and not self.settings.enable_paddleocr_vl_gguf:
+            raise RuntimeError("PaddleOCR-VL GGUF provider is disabled by ENABLE_PADDLEOCR_VL_GGUF=false.")
+        if not use_gguf and not self.settings.enable_paddleocr_vl:
             raise RuntimeError("PaddleOCR-VL provider is disabled by ENABLE_PADDLEOCR_VL=false.")
 
         logger.warning("PaddleOCR-VL provider initialization started")
@@ -626,9 +629,20 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         kwargs: dict[str, Any] = {
             "pipeline_version": pipeline_version,
             "device": self.settings.paddleocr_vl_device,
+            "use_queues": False,
         }
 
-        if engine:
+        if use_gguf:
+            kwargs.update(
+                {
+                    "vl_rec_backend": "llama-cpp-server",
+                    "vl_rec_server_url": self.settings.paddleocr_vl_gguf_server_url,
+                    "vl_rec_api_model_name": self.settings.paddleocr_vl_gguf_model_file,
+                    "vl_rec_max_concurrency": self.settings.paddleocr_vl_gguf_concurrency,
+                }
+            )
+            self.provider_name = "paddleocr_vl_1_6_gguf"
+        elif engine:
             kwargs["engine"] = engine
         if model_dir:
             kwargs["vl_rec_model_dir"] = str(model_dir)
@@ -691,7 +705,7 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         result.provider_chain = [self.provider_name]
         result.merge_strategy = "paddleocr_vl_structured_output_normalized"
         result.field_sources.update({key: self.provider_name for key in result.field_sources})
-        result.extraction_notes.append(f"{self.settings.paddleocr_vl_model_name} primary extraction completed.")
+        result.extraction_notes.append(f"{self.provider_name} primary extraction completed.")
         if provider_text:
             result.cleaned_raw_text = provider_text
         postprocess_elapsed = time.perf_counter() - postprocess_start
@@ -997,7 +1011,7 @@ class HybridOpenSourceDocumentAIService(DocumentAIService):
 
     def _provider(self, provider_name: str) -> DocumentAIService:
         normalized = provider_name.lower()
-        if normalized == "paddleocr_vl":
+        if normalized in {"paddleocr_vl", "paddleocr_vl_1_6_gguf", "paddleocr_vl_gguf"}:
             return get_paddleocr_vl_document_ai_service()
         if normalized in {"heuristic", "heuristic_fallback", "local"}:
             return self.local_fallback

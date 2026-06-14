@@ -152,6 +152,17 @@ export interface ProviderHealth {
     paddleocr_vl_init_error?: string | null;
     paddleocr_vl_runtime_mode?: string | null;
     paddleocr_vl_model?: string | null;
+    paddleocr_vl_gguf?: {
+      provider?: string | null;
+      status?: string | null;
+      enabled?: boolean | null;
+      available?: boolean | null;
+      error?: string | null;
+      server_url?: string | null;
+      model_file?: string | null;
+      mmproj_file?: string | null;
+      smoke_passed?: boolean | null;
+    } | null;
   };
 }
 
