@@ -401,6 +401,8 @@ def _summary(prefix: str, filename: str, payload: dict[str, Any], *, ok: bool, e
         "api_provider_chain": metadata.get("api_provider_chain"),
         "line_candidates_count": metadata.get("ocr_line_candidate_count"),
         "review_candidates_count": _review_candidate_count(parsed),
+        "vl_candidate_count": _vl_candidate_summary(parsed).get("candidate_count", 0),
+        "vl_candidate_issue_codes": _vl_candidate_summary(parsed).get("issue_codes", []),
         "processing_time_ms": payload.get("processing_time_ms"),
     }
 
@@ -416,6 +418,20 @@ def _review_candidate_count(parsed: dict[str, Any]) -> int:
     if isinstance(candidates, list):
         return len(candidates)
     return 0
+
+
+def _vl_candidate_summary(parsed: dict[str, Any]) -> dict[str, Any]:
+    workflow_metadata = parsed.get("workflow_metadata") or {}
+    summary = workflow_metadata.get("vl_candidate_summary")
+    if isinstance(summary, dict):
+        return summary
+    layout_debug = workflow_metadata.get("layout_debug") if isinstance(workflow_metadata.get("layout_debug"), dict) else {}
+    summary = layout_debug.get("vl_candidate_summary") if isinstance(layout_debug, dict) else None
+    if isinstance(summary, dict):
+        return summary
+    review_candidates = (parsed.get("canonical_export") or {}).get("review_candidates") or {}
+    summary = review_candidates.get("vl_candidate_summary")
+    return summary if isinstance(summary, dict) else {}
 
 
 def _line_items_total(line_items: list[dict[str, Any]]) -> float | int | None:

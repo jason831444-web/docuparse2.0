@@ -16,6 +16,8 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
             "processing_status": "needs_review",
             "review_required": True,
             "review_reasons": ["missing_quantity", "missing_quantity", "missing_quantity"],
+            "vl_candidate_count": 1,
+            "vl_candidate_issue_codes": ["vl_candidate_missing_document_total"],
         },
         {
             "document_type": "internal_transfer",
@@ -37,6 +39,8 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert "Processing Statuses: needs_review x1" in markdown
     assert "Top Review Signals: missing_quantity x3" in markdown
     assert "| Status | Processing | Review Required |" in markdown
+    assert "BBox Candidates | VL Candidates | VL Issues" in markdown
+    assert "vl_candidate_missing_document_total" in markdown
     assert "non-blocking informational codes" in markdown
     assert "missing_quantity x3" in markdown
     assert "needs_review" in markdown

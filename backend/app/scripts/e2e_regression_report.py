@@ -142,6 +142,8 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         "api_provider_chain": result.get("api_provider_chain"),
         "line_candidates_count": result.get("line_candidates_count"),
         "review_candidates_count": result.get("review_candidates_count"),
+        "vl_candidate_count": result.get("vl_candidate_count"),
+        "vl_candidate_issue_codes": _string_list(result.get("vl_candidate_issue_codes")),
         "processing_time_ms": result.get("processing_time_ms"),
         "status": status,
         "reasons": reasons,
@@ -226,15 +228,16 @@ def _markdown_report(rows: list[dict[str, Any]]) -> str:
         "",
         "## Document Results",
         "",
-        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Provider | Fallback | Candidates | Review Reasons | Report Reasons |",
-        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---:|---|---|",
+        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues | Review Reasons | Report Reasons |",
+        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---:|---:|---|---|---|",
     ]
     for row in rows:
         reasons = "<br>".join(row.get("reasons") or [])
         values = {key: row.get(key) if row.get(key) is not None else "" for key in row}
         values["reasons"] = reasons
+        values["vl_candidate_issue_codes_text"] = ", ".join(row.get("vl_candidate_issue_codes") or [])
         lines.append(
-            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {provider_used} | {fallback_reason} | {review_candidates_count} | {review_reason_summary} | {reasons} |".format(
+            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {provider_used} | {fallback_reason} | {review_candidates_count} | {vl_candidate_count} | {vl_candidate_issue_codes_text} | {review_reason_summary} | {reasons} |".format(
                 **values,
             )
         )
@@ -282,6 +285,14 @@ def _compact_json(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    if isinstance(value, str) and value.strip():
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return []
 
 
 if __name__ == "__main__":
