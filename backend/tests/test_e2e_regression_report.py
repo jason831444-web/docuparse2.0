@@ -59,6 +59,56 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert "needs_review" in markdown
 
 
+def test_e2e_report_surfaces_priced_row_missing_unit_price_as_review_signal():
+    row = _compare_result(
+        {
+            "filename": "08_image_quote_missing_quantity.pdf",
+            "document_type": "quotation",
+            "document_number": "QT-2026-0808-009",
+            "currency": "KRW",
+            "extracted_amount": 473000,
+            "line_items_count": 2,
+            "line_items": [
+                {
+                    "item_name": "고정플레이트",
+                    "quantity": None,
+                    "unit": "EA",
+                    "supply_amount": 280000,
+                    "tax_amount": 28000,
+                    "line_total": 308000,
+                    "validation_warnings": ["missing_quantity", "quantity_cell_blank"],
+                },
+                {
+                    "item_name": "스테인리스 브라켓",
+                    "quantity": 100,
+                    "unit": "EA",
+                    "unit_price": 1500,
+                    "supply_amount": 150000,
+                    "tax_amount": 15000,
+                    "line_total": 165000,
+                },
+            ],
+            "processing_status": "needs_review",
+            "review_required": True,
+            "review_reasons": ["missing_quantity"],
+        },
+        {
+            "document_type": "quotation",
+            "document_number": "QT-2026-0808-009",
+            "currency": "KRW",
+            "total_amount": 473000,
+            "line_items": 2,
+        },
+        source="/tmp/image.log",
+    )
+
+    assert row["status"] == "PASS"
+    assert row["row_signal_summary"] == (
+        "missing_quantity, quantity_cell_blank, row_missing_quantity, row_missing_unit_price"
+    )
+    assert row["row_signal_count"] == 4
+
+
 def test_e2e_report_explains_low_recall_when_review_candidates_are_preserved():
     row = _compare_result(
         {

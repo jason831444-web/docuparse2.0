@@ -244,13 +244,27 @@ def _row_signal_counts(result: dict[str, Any]) -> dict[str, int]:
         quantity = item.get("quantity")
         if quantity in (None, "", []):
             _increment(counts, "row_missing_quantity")
-        for warning in item.get("validation_warnings") or []:
+        warnings = item.get("validation_warnings") or []
+        if (
+            _has_priced_row_amount(item)
+            and item.get("unit_price") in (None, "", [])
+            and "untrusted_ocr_amount" not in warnings
+        ):
+            _increment(counts, "row_missing_unit_price")
+        for warning in warnings:
             key = str(warning or "").strip()
             if key:
                 _increment(counts, key)
     for code in _string_list(result.get("vl_candidate_issue_codes")):
         _increment(counts, code)
     return counts
+
+
+def _has_priced_row_amount(item: dict[str, Any]) -> bool:
+    return any(
+        item.get(field) not in (None, "", [])
+        for field in ("supply_amount", "tax_amount", "line_total")
+    )
 
 
 def _increment(counts: dict[str, int], key: str) -> None:
