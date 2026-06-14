@@ -137,6 +137,7 @@ assert.equal(vlMetadata?.vl_candidate_summary?.provider_available_candidate, fal
 assert.equal(vlMetadata?.vl_candidates?.[0]?.candidate_only, true);
 assert.equal(vlMetadata?.vl_candidates?.[0]?.parser_integrated, false);
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_document_total"), "문서 합계 누락");
+assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_anchor"), "품목 행 누락");
 assert.equal(vlCandidateMetadata({ workflow_metadata: null }), null);
 assert.equal(titleCaseLabel("credit_note"), "차감/크레딧 문서");
 assert.equal(titleCaseLabel("internal_transfer"), "내부 이동서");

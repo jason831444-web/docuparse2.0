@@ -77,6 +77,9 @@ Current strict validation issue codes:
   is missing in VL output. This keeps `16_real` as WARN/candidate-only.
 - `vl_candidate_missing_document_total`: the source document total is missing
   in VL output. This keeps `21_photo` as WARN/candidate-only.
+- `vl_candidate_missing_row_anchor`: a visually verified item/row anchor from
+  the source PDF is missing in VL output. This catches fax/photo row recall loss
+  without promoting missing rows into confirmed ERP data.
 - `vl_candidate_hallucinated_blank_quantity`: a blank source quantity appears
   to have been filled by VL output. This is a FAIL condition.
 - `vl_candidate_exchange_rate_as_amount`: an exchange-rate note appears in a

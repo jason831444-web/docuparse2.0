@@ -141,6 +141,25 @@ def test_gguf_manual_check_flags_missing_document_total_for_fax_candidate():
     assert "vl_candidate_missing_document_total" in result["issue_codes"]
 
 
+def test_gguf_manual_check_flags_missing_visually_verified_row_anchor():
+    text = "FAX-PO-2026-0921\n1 베어링 하우징 100mm 20 EA 8,000 160,000 16,000 176,000"
+    manual = {
+        "pdf_opened_and_visually_checked": True,
+        "structured_checks": {
+            "expected_row_anchors": [
+                {"text": "S45C PIN 8X60", "label": "row 2 item"},
+                {"text": "M8 볼트", "label": "row 3 item"},
+            ],
+        },
+    }
+
+    result = _evaluate_manual_visual_check(text, manual)
+
+    assert result is not None
+    assert result["severity"] == "warn"
+    assert result["issue_codes"].count("vl_candidate_missing_row_anchor") == 2
+
+
 def test_gguf_smoke_report_builds_candidate_only_docuparse_metadata():
     report = {
         "provider_available_candidate": False,

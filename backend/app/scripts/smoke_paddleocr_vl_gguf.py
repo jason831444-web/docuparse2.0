@@ -214,6 +214,25 @@ def _structured_manual_issues(text: str, manual_visual_check: dict[str, Any]) ->
             }
         )
 
+    row_anchors = checks.get("expected_row_anchors") or checks.get("required_row_anchors") or []
+    for anchor in row_anchors:
+        if isinstance(anchor, dict):
+            anchor_text = str(anchor.get("text") or anchor.get("contains") or "").strip()
+            label = str(anchor.get("label") or anchor_text).strip()
+        else:
+            anchor_text = str(anchor or "").strip()
+            label = anchor_text
+        if anchor_text and anchor_text not in text:
+            issues.append(
+                {
+                    "code": "vl_candidate_missing_row_anchor",
+                    "severity": "warn",
+                    "expected_value": anchor_text,
+                    "label": label,
+                    "message": "A visually verified row/item anchor from the source PDF is missing in the VL output.",
+                }
+            )
+
     for guard in checks.get("blank_quantity_rows") or []:
         row_contains = str(guard.get("row_contains") or "").strip()
         unit = str(guard.get("unit") or "").strip()
