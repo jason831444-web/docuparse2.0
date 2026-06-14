@@ -175,6 +175,8 @@ def _is_artifact_path_line(value: str) -> bool:
     lowered = value.lower()
     if not lowered.endswith((".png", ".jpg", ".jpeg", ".pdf")):
         return False
+    if lowered.startswith(("imgs/", "./imgs/")):
+        return True
     return lowered.startswith(("/tmp/", "/var/tmp/", "/root/", "/app/")) or "/docuparse_e2e_logs/" in lowered
 
 

@@ -82,6 +82,7 @@ def test_gguf_extract_text_filters_local_artifact_paths_from_preview():
                     "/tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/16/sample_page_1.png\n"
                     "COMMERCIAL INVOICE\n"
                     "/root/docuparse2.0/samples/input.pdf\n"
+                    "imgs/img_in_seal_box_895_205_1008_317.jpg\n"
                     "INV-US-2026-0916-EX"
                 )
             }
@@ -90,6 +91,7 @@ def test_gguf_extract_text_filters_local_artifact_paths_from_preview():
 
     assert "sample_page_1.png" not in text
     assert "/root/docuparse2.0" not in text
+    assert "img_in_seal_box" not in text
     assert "COMMERCIAL INVOICE" in text
     assert "INV-US-2026-0916-EX" in text
 
