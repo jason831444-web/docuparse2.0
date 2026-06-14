@@ -12,9 +12,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from app.core.config import get_settings
-
-
 EXPECTED_TERMS_BY_SAMPLE = {
     "08_image_quote_missing_quantity.pdf": [
         "견적서",
@@ -499,6 +496,8 @@ def apply_cli_runtime_overrides(
     for key, value in overrides.items():
         os.environ[key] = value
     if overrides:
+        from app.core.config import get_settings
+
         get_settings.cache_clear()
     return overrides
 
@@ -725,6 +724,8 @@ def run_smoke(
     render_scale: float = 2.0,
 ) -> dict[str, Any]:
     _configure_runtime_env()
+    from app.core.config import get_settings
+
     settings = get_settings()
     started = time.perf_counter()
     model_dir = settings.paddleocr_vl_gguf_model_dir
