@@ -412,9 +412,11 @@ class DocumentProcessor:
             structured["candidate_only"] = False
             structured["parser_integrated"] = True
             structured["confirmed_promotion"] = True
+            structured["promotion_mode"] = gate.get("promotion_mode") or "full"
             candidate["candidate_only"] = False
             candidate["parser_integrated"] = True
             candidate["confirmed_promotion"] = True
+            candidate["promotion_mode"] = gate.get("promotion_mode") or "full"
             promotion_applied = True
         issue_codes = list(dict.fromkeys((candidate.get("issue_codes") or []) + (gate.get("issue_codes") or [])))
         requires_review = gate.get("decision") in {"review_required", "reject"}
@@ -433,6 +435,9 @@ class DocumentProcessor:
                 "provider_available_candidate": bool(result.get("ok")),
                 "gate_decision": gate.get("decision"),
                 "gate_reasons": gate.get("reasons") or [],
+                "promotion_mode": gate.get("promotion_mode") or "none",
+                "partial_promotion_applied": promotion_applied and gate.get("promotion_mode") == "partial",
+                "fallback_used": not promotion_applied,
                 "requires_review": requires_review,
                 "promotion_applied": promotion_applied,
             },

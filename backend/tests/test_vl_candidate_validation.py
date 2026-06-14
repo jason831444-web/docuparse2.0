@@ -44,10 +44,11 @@ def test_vl_candidate_gate_marks_clean_candidate_as_promotion_eligible_for_auto_
 
     assert result["decision"] == "promotion_eligible"
     assert result["auto_promote"] is True
+    assert result["promotion_mode"] == "full"
     assert result["reasons"] == ["validated_candidate_without_known_issues"]
 
 
-def test_vl_candidate_gate_keeps_blank_quantity_candidate_in_review():
+def test_vl_candidate_gate_partially_promotes_blank_quantity_candidate_with_review():
     candidate = {
         "provider_available_candidate": True,
         "issue_codes": ["vl_candidate_missing_quantity"],
@@ -68,7 +69,8 @@ def test_vl_candidate_gate_keeps_blank_quantity_candidate_in_review():
     result = VLCandidateValidationGate().evaluate(_document(), candidate)
 
     assert result["decision"] == "review_required"
-    assert result["auto_promote"] is False
+    assert result["auto_promote"] is True
+    assert result["promotion_mode"] == "partial"
     assert "vl_candidate_has_review_issues" in result["reasons"]
 
 
@@ -101,3 +103,4 @@ def test_vl_candidate_gate_rejects_no_price_amount_conflict():
     assert result["decision"] == "reject"
     assert "no_price_candidate_amount_conflict" in result["issue_codes"]
     assert result["auto_promote"] is False
+    assert result["promotion_mode"] == "none"

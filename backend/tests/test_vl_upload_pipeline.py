@@ -118,7 +118,7 @@ def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields(
     assert document.line_items[0]["quantity"] == 100
 
 
-def test_vl_upload_pipeline_keeps_risky_candidate_out_of_confirmed_line_items():
+def test_vl_upload_pipeline_partially_promotes_blank_quantity_candidate():
     text = """
     견적서
     견적번호 QT-2026-0808-009
@@ -139,13 +139,7 @@ def test_vl_upload_pipeline_keeps_risky_candidate_out_of_confirmed_line_items():
             "validation": {"status": "warn", "ok": False},
         }
     )
-    existing_items = [{"item_name": "기존 OCR 품목", "quantity": None}]
-    document = _document(
-        document_number="QT-2026-0808-009",
-        extracted_amount=Decimal("473000"),
-        currency="KRW",
-        line_items=list(existing_items),
-    )
+    document = _document()
 
     metadata = _processor(worker)._vl_primary_reader_metadata(
         Path(document.stored_file_path),
@@ -154,11 +148,26 @@ def test_vl_upload_pipeline_keeps_risky_candidate_out_of_confirmed_line_items():
     )
 
     assert metadata is not None
-    assert metadata["vl_candidate_summary"]["promotion_applied"] is False
+    assert metadata["vl_candidate_summary"]["promotion_applied"] is True
+    assert metadata["vl_candidate_summary"]["promotion_mode"] == "partial"
+    assert metadata["vl_candidate_summary"]["partial_promotion_applied"] is True
+    assert metadata["vl_candidate_summary"]["fallback_used"] is False
     assert metadata["vl_candidate_summary"]["requires_review"] is True
     assert metadata["vl_candidate_summary"]["gate_decision"] == "review_required"
-    assert metadata["vl_candidates"][0]["candidate_only"] is True
-    assert document.line_items == existing_items
+    assert metadata["vl_candidates"][0]["candidate_only"] is False
+    assert metadata["vl_candidates"][0]["parser_integrated"] is True
+    assert document.document_number == "QT-2026-0808-009"
+    assert document.currency == "KRW"
+    assert document.extracted_amount == Decimal("473000")
+    assert len(document.line_items or []) == 2
+    assert document.line_items[0]["item_name"] == "고정 플레이트"
+    assert document.line_items[0].get("quantity") is None
+    assert document.line_items[0]["unit_price"] == 2800
+    assert document.line_items[0]["supply_amount"] == 280000
+    assert document.line_items[0]["tax_amount"] == 28000
+    assert document.line_items[0]["line_total"] == 308000
+    assert "missing_quantity" in document.line_items[0]["validation_warnings"]
+    assert document.line_items[1]["quantity"] == 100
     issue_codes = metadata["vl_candidate_summary"]["issue_codes"]
     assert "vl_candidate_requires_review" in issue_codes
     assert metadata["normalized_review_issues"][0]["code"] == "vl_candidate_review_required"
@@ -223,3 +232,57 @@ def test_process_uses_vl_first_and_skips_ppocr_ingestion_when_candidate_promotes
     assert result.extracted_amount == Decimal("165000")
     assert len(result.line_items or []) == 1
     assert result.workflow_metadata["vl_candidate_summary"]["promotion_applied"] is True
+
+
+def test_process_uses_partial_vl_primary_and_skips_ppocr_ingestion_for_review_candidate(tmp_path):
+    path = tmp_path / "quote-missing-quantity.pdf"
+    path.write_bytes(b"%PDF-1.4\n% fake test file not read when VL succeeds with review warnings\n")
+    text = """
+    견적서
+    견적번호 QT-2026-0808-009
+    공급업체 한성산업 고객사 제일기계
+    견적일 2026-08-08 통화 KRW
+    품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액
+    고정 플레이트 PLT-FIX-02 120x60x5T EA 2800 280000 28000 308000
+    스테인리스 브라켓 BRK-SUS-01 50x80x3T 100 EA 1500 150000 15000 165000
+    총액 473,000
+    첫 번째 품목 수량 공란
+    """
+    document = Document(
+        original_filename="quote-missing-quantity.pdf",
+        stored_file_path=str(path),
+        mime_type="application/pdf",
+        processing_status=ProcessingStatus.uploaded,
+    )
+    processor = _processor(
+        FakeVLWorker(
+            {
+                "ok": True,
+                "provider": "paddleocr_vl_1_6_gguf",
+                "classification": "warn",
+                "text": text,
+                "validation": {"status": "warn", "ok": False},
+            }
+        )
+    )
+
+    class BrokenIngestion:
+        def ingest(self, *args, **kwargs):
+            raise AssertionError("PP-OCRv4 ingestion should be skipped for partial VL primary promotion")
+
+    processor.ingestion = BrokenIngestion()
+
+    result = processor.process(FakeSession(document), document)
+
+    assert result.processing_status == ProcessingStatus.needs_review
+    assert result.extraction_method == "paddleocr_vl_1_6_gguf_primary_reader"
+    assert result.document_number == "QT-2026-0808-009"
+    assert result.extracted_amount == Decimal("473000")
+    assert len(result.line_items or []) == 2
+    assert result.line_items[0].get("quantity") is None
+    assert "missing_quantity" in result.line_items[0]["validation_warnings"]
+    summary = result.workflow_metadata["vl_candidate_summary"]
+    assert summary["promotion_applied"] is True
+    assert summary["promotion_mode"] == "partial"
+    assert summary["partial_promotion_applied"] is True
+    assert summary["fallback_used"] is False

@@ -7,8 +7,11 @@ from typing import Any
 class VLCandidateValidationGate:
     """Decide whether a structured VL candidate is safe to promote.
 
-    The gate itself never mutates confirmed document fields. Callers may only
-    promote when the decision is `promotion_eligible` and `auto_promote` is true.
+    The gate itself never mutates confirmed document fields. Callers may promote
+    clean candidates fully, or promote review-required candidates partially when
+    the remaining issues are field/row-level review warnings. Only runtime
+    failures, parser failures, dangerous issues, and hard document conflicts
+    should force a PP-OCR fallback.
     """
 
     dangerous_issue_codes = {
@@ -66,7 +69,19 @@ class VLCandidateValidationGate:
             reasons.append("structured_line_items_missing")
 
         if reasons:
-            return self._result("review_required", reasons, issue_codes, document_checks)
+            can_partial_promote = (
+                "provider_candidate_not_available" not in reasons
+                and "structured_line_items_missing" not in reasons
+                and bool(structured.get("document") or structured.get("line_items"))
+            )
+            return self._result(
+                "review_required",
+                reasons,
+                issue_codes,
+                document_checks,
+                auto_promote=can_partial_promote,
+                promotion_mode="partial" if can_partial_promote else "none",
+            )
 
         return self._result(
             "promotion_eligible",
@@ -74,6 +89,7 @@ class VLCandidateValidationGate:
             issue_codes,
             document_checks,
             auto_promote=True,
+            promotion_mode="full",
         )
 
     def _candidate_issue_codes(self, candidate: dict[str, Any], structured: dict[str, Any]) -> list[str]:
@@ -168,10 +184,12 @@ class VLCandidateValidationGate:
         document_checks: dict[str, Any] | None = None,
         *,
         auto_promote: bool = False,
+        promotion_mode: str = "none",
     ) -> dict[str, Any]:
         return {
             "decision": decision,
             "auto_promote": auto_promote,
+            "promotion_mode": promotion_mode,
             "reasons": list(dict.fromkeys(reasons)),
             "issue_codes": list(dict.fromkeys(issue_codes)),
             "document_checks": document_checks or {},
