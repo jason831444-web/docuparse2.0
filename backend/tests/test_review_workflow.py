@@ -171,6 +171,42 @@ def test_vl_candidate_issue_warns_but_does_not_block_approval():
     assert not any("vl_candidate" in item for item in validation.blocking)
 
 
+def test_layout_debug_vl_candidate_issue_warns_but_does_not_block_approval():
+    document = _document(
+        workflow_metadata={
+            "taxonomy": {
+                "document_profile": "priced_document",
+                "document_profiles": ["priced_document"],
+                "amount_required": True,
+                "party_required": True,
+            },
+            "normalized_review_issues": [],
+            "layout_debug": {
+                "vl_candidates": [
+                    {
+                        "provider": "paddleocr_vl_1_6_gguf",
+                        "candidate_only": True,
+                        "parser_integrated": False,
+                        "issue_codes": ["manual_visual_check_not_performed"],
+                    }
+                ],
+                "vl_candidate_summary": {
+                    "candidate_count": 1,
+                    "failure_count": 1,
+                    "issue_codes": ["manual_visual_check_not_performed"],
+                    "provider_available_candidate": False,
+                },
+            },
+        },
+    )
+
+    validation = validate_approval(document)
+
+    assert validation.ok is True
+    assert "vl_candidate_review_required" in validation.warnings
+    assert not any("vl_candidate" in item for item in validation.blocking)
+
+
 def test_export_reflects_approval_metadata():
     document = _document()
     validation = approve_document(document, approval_note="ERP 입력 전 확인 완료")
