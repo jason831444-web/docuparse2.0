@@ -3,7 +3,7 @@ import json
 from app.scripts.summarize_paddleocr_vl_gguf_smokes import markdown_summary, summarize_reports
 
 
-def _write_report(path, *, sample, severity, candidate, issues=None):
+def _write_report(path, *, sample, severity, candidate, issues=None, visual_checked=True):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -16,7 +16,7 @@ def _write_report(path, *, sample, severity, candidate, issues=None):
                 if candidate
                 else "manual_visual_check_warn",
                 "validation": {"matched_terms": ["QT-2026-0808-009"]},
-                "manual_visual_check": {"pdf_opened_and_visually_checked": True},
+                "manual_visual_check": {"pdf_opened_and_visually_checked": visual_checked},
                 "manual_visual_check_validation": {
                     "severity": severity,
                     "issue_codes": issues or [],
@@ -64,6 +64,29 @@ def test_gguf_smoke_summary_blocks_production_active_when_any_report_warns(tmp_p
     assert "vl_candidate_missing_line_amount" in markdown
     assert "candidate_evidence_only" in markdown
     assert "use_parser_primary_vl_auxiliary" in markdown
+
+
+def test_gguf_smoke_summary_blocks_unopened_manual_visual_checks(tmp_path):
+    report = tmp_path / "08" / "paddleocr_vl_gguf_smoke_report.json"
+    _write_report(
+        report,
+        sample="08_image_quote_missing_quantity.pdf",
+        severity="fail",
+        candidate=False,
+        issues=["manual_visual_check_not_performed"],
+        visual_checked=False,
+    )
+
+    summary = summarize_reports([report])
+
+    assert summary["manual_visual_checked_count"] == 0
+    assert summary["manual_severity_counts"] == {"fail": 1}
+    assert summary["issue_counts"] == {"manual_visual_check_not_performed": 1}
+    assert summary["production_active_recommended"] is False
+    assert summary["production_active_reason"] == "manual_visual_check_failed"
+
+    markdown = markdown_summary(summary)
+    assert "manual_visual_check_not_performed" in markdown
 
 
 def test_gguf_smoke_summary_recommends_active_only_when_all_candidates_pass(tmp_path):
