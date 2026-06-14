@@ -113,6 +113,26 @@ PYTHONPATH=backend python3 -m app.scripts.smoke_paddleocr_vl_gguf \
   --output-dir /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/manual_08
 ```
 
+## Summarize Staged Smoke Reports
+
+After running `08`, `16_real`, and `21_photo`, summarize the reports before
+changing any provider health or routing setting:
+
+```bash
+cd /root/docuparse2.0
+PYTHONPATH=backend python3 -m app.scripts.summarize_paddleocr_vl_gguf_smokes \
+  --input-dir /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/08_manual_expected_0e265ed \
+  --input-dir /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/16_manual_expected_0e265ed \
+  --input-dir /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/21_manual_expected_0e265ed \
+  --output-json /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/summary.json \
+  --output-md /tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/summary.md
+```
+
+The summary should keep `production_active_recommended=false` whenever any
+manual visual check is `warn` or `fail`. The current staged result is one PASS
+and two WARN reports, so the GGUF path remains candidate-only and PP-OCRv4
+continues as the production OCR path.
+
 The default backend image intentionally remains the safe PP-OCRv4 runtime. If a
 backend-container smoke run reports `paddleocr_vl_runtime_missing_dependency`,
 that means the GGUF candidate runner dependencies are absent from the production
