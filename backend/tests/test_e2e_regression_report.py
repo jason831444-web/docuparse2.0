@@ -40,6 +40,7 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert row["row_signal_count"] == 6
     assert row["processing_status"] == "needs_review"
     assert row["review_required"] is True
+    assert row["warning_categories"] == ["taxonomy_type_covered_by_metadata"]
 
     markdown = _markdown_report([row])
     assert "## Operational Summary" in markdown
@@ -48,7 +49,8 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert "Processing Statuses: needs_review x1" in markdown
     assert "Top Review Signals: missing_quantity x3" in markdown
     assert "Top Row-Level Signals: row_missing_quantity x3, inspection_quantity_breakdown_missing x2, vl_candidate_missing_document_total x1" in markdown
-    assert "| Status | Processing | Review Required |" in markdown
+    assert "Top Warning Categories: taxonomy_type_covered_by_metadata x1" in markdown
+    assert "| Status | Warning Categories | Processing | Review Required |" in markdown
     assert "Row Signals | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues" in markdown
     assert "vl_candidate_missing_document_total" in markdown
     assert "inspection_quantity_breakdown_missing x2, row_missing_quantity x3" in markdown
@@ -87,7 +89,45 @@ def test_e2e_report_explains_low_recall_when_review_candidates_are_preserved():
 
     assert row["status"] == "WARN"
     assert "line_items_count: expected at least 3, got 1; review candidates present: 2" in row["reasons"]
+    assert row["warning_categories"] == [
+        "taxonomy_type_covered_by_metadata",
+        "line_item_recall_with_review_candidates",
+    ]
     assert row["review_candidates_count"] == 2
+
+
+def test_e2e_report_categorizes_return_credit_amount_direction_review():
+    row = _compare_result(
+        {
+            "filename": "19_photo_return_credit_note.pdf",
+            "document_type": "general_document",
+            "document_subtype": "credit_note",
+            "document_profile": "return_document",
+            "document_profiles": ["return_document"],
+            "document_number": "RTN-2026-0919-011",
+            "currency": "KRW",
+            "extracted_amount": "12100.00",
+            "line_items_count": 2,
+            "processing_status": "needs_review",
+            "review_required": True,
+            "review_reasons": ["return_credit_amount_direction_requires_review"],
+        },
+        {
+            "document_type": "return_note",
+            "document_number": "RTN-2026-0919-011",
+            "currency": "KRW",
+            "total_amount": -12100,
+            "line_items": 2,
+        },
+        source="/tmp/photo.log",
+    )
+
+    assert row["status"] == "WARN"
+    assert row["warning_categories"] == [
+        "taxonomy_type_covered_by_metadata",
+        "return_credit_amount_direction_review",
+    ]
+    assert "return/credit amount sign requires review" in row["reasons"][1]
 
 
 def test_e2e_report_surfaces_row_level_warning_summary_without_forcing_failure():

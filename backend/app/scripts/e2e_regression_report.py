@@ -65,6 +65,7 @@ def _load_log_results(path: Path) -> list[dict[str, Any]]:
 
 def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, source: str) -> dict[str, Any]:
     reasons: list[str] = []
+    warning_categories: list[str] = []
     status = "PASS"
     expected = expected or {}
 
@@ -76,6 +77,7 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
             return
         if field == "type" and _type_covered_by_taxonomy(str(expected_value), str(actual_value or ""), result):
             reasons.append(f"type: expected {expected_value}, represented by subtype/profile on {actual_value}")
+            warning_categories.append("taxonomy_type_covered_by_metadata")
             if status == "PASS":
                 status = "WARN"
             return
@@ -93,6 +95,7 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         if _decimal(expected_total) != _decimal(actual_total):
             if _is_return_taxonomy(result):
                 reasons.append(f"total: expected {expected_total}, got {actual_total}; return/credit amount sign requires review")
+                warning_categories.append("return_credit_amount_direction_review")
                 if status == "PASS":
                     status = "WARN"
             else:
@@ -113,6 +116,10 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
                 reason += f"; review candidates present: {review_candidate_count}"
             if vl_candidate_count:
                 reason += f"; vl candidates present: {vl_candidate_count}"
+            if review_candidate_count or vl_candidate_count:
+                warning_categories.append("line_item_recall_with_review_candidates")
+            else:
+                warning_categories.append("line_item_recall_low")
             reasons.append(reason)
             status = "WARN" if status == "PASS" else status
 
@@ -157,6 +164,7 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         "processing_time_ms": result.get("processing_time_ms"),
         "status": status,
         "reasons": reasons,
+        "warning_categories": _dedupe(warning_categories),
         "source": source,
     }
 
@@ -255,6 +263,16 @@ def _format_counts(counts: dict[str, int]) -> str:
     return ", ".join(f"{key} x{count}" if count > 1 else key for key, count in sorted(counts.items()))
 
 
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
 def _markdown_report(rows: list[dict[str, Any]]) -> str:
     summary = _report_summary(rows)
     lines = [
@@ -270,19 +288,21 @@ def _markdown_report(rows: list[dict[str, Any]]) -> str:
         f"- Processing Statuses: {summary['processing_statuses'] or '-'}",
         f"- Top Review Signals: {summary['top_review_signals'] or '-'}",
         f"- Top Row-Level Signals: {summary['top_row_signals'] or '-'}",
+        f"- Top Warning Categories: {summary['top_warning_categories'] or '-'}",
         "",
         "## Document Results",
         "",
-        "| Status | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Row Signals | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues | Review Reasons | Report Reasons |",
-        "|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---|---:|---:|---|---|---|",
+        "| Status | Warning Categories | Processing | Review Required | Filename | Type | Subtype | Profile | Doc No | Total | Currency | Items | Row Signals | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues | Review Reasons | Report Reasons |",
+        "|---|---|---|---:|---|---|---|---|---|---:|---|---:|---|---|---|---:|---:|---|---|---|",
     ]
     for row in rows:
         reasons = "<br>".join(row.get("reasons") or [])
         values = {key: row.get(key) if row.get(key) is not None else "" for key in row}
         values["reasons"] = reasons
         values["vl_candidate_issue_codes_text"] = ", ".join(row.get("vl_candidate_issue_codes") or [])
+        values["warning_categories_text"] = ", ".join(row.get("warning_categories") or [])
         lines.append(
-            "| {status} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {row_signal_summary} | {provider_used} | {fallback_reason} | {review_candidates_count} | {vl_candidate_count} | {vl_candidate_issue_codes_text} | {review_reason_summary} | {reasons} |".format(
+            "| {status} | {warning_categories_text} | {processing_status} | {review_required} | {filename} | {actual_type} | {actual_subtype} | {actual_profile} | {actual_doc_no} | {actual_total} | {actual_currency} | {actual_line_items_count} | {row_signal_summary} | {provider_used} | {fallback_reason} | {review_candidates_count} | {vl_candidate_count} | {vl_candidate_issue_codes_text} | {review_reason_summary} | {reasons} |".format(
                 **values,
             )
         )
@@ -295,6 +315,7 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     processing_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
     row_signal_counts: dict[str, int] = {}
+    warning_category_counts: dict[str, int] = {}
     review_required = 0
     for row in rows:
         status = str(row.get("status") or "")
@@ -310,6 +331,10 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 reason_counts[key] = reason_counts.get(key, 0) + 1
         for signal, count in _parse_count_summary(row.get("row_signal_summary") or "").items():
             row_signal_counts[signal] = row_signal_counts.get(signal, 0) + count
+        for category in row.get("warning_categories") or []:
+            key = str(category or "").strip()
+            if key:
+                warning_category_counts[key] = warning_category_counts.get(key, 0) + 1
     total = len(rows)
     processing_summary = ", ".join(f"{key} x{value}" for key, value in sorted(processing_counts.items()))
     top_reasons = ", ".join(
@@ -317,6 +342,10 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     top_row_signals = ", ".join(
         f"{key} x{value}" for key, value in sorted(row_signal_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    )
+    top_warning_categories = ", ".join(
+        f"{key} x{value}"
+        for key, value in sorted(warning_category_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
     )
     return {
         "total": total,
@@ -328,6 +357,7 @@ def _report_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "processing_statuses": processing_summary,
         "top_review_signals": top_reasons,
         "top_row_signals": top_row_signals,
+        "top_warning_categories": top_warning_categories,
     }
 
 
