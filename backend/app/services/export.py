@@ -1,4 +1,5 @@
 import io
+import html
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -400,8 +401,8 @@ def _compact_vl_candidate(candidate: dict) -> dict:
     if not isinstance(validation, dict):
         validation = candidate.get("validation") if isinstance(candidate.get("validation"), dict) else {}
     issue_codes = _string_list(candidate.get("issue_codes")) or _string_list(validation.get("issue_codes"))
-    text_preview = candidate.get("text_preview") or candidate.get("output_preview")
-    if isinstance(text_preview, str) and len(text_preview) > 1200:
+    text_preview = _sanitize_vl_text_preview(candidate.get("text_preview") or candidate.get("output_preview"))
+    if text_preview and len(text_preview) > 1200:
         text_preview = text_preview[:1200] + "..."
     return {
         "source": candidate.get("source") or candidate.get("provider") or "paddleocr_vl_1_6_gguf",
@@ -417,6 +418,64 @@ def _compact_vl_candidate(candidate: dict) -> dict:
         "matched_terms": _string_list(candidate.get("matched_terms") or (candidate.get("validation") or {}).get("matched_terms")),
         "missing_required_values": _json_safe(validation.get("missing_required_values") or {}),
         "inference_time_ms": _json_safe(candidate.get("inference_time_ms") or candidate.get("elapsed_ms")),
+    }
+
+
+def _sanitize_vl_text_preview(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw in _strip_preview_html(value).splitlines():
+        line = _normalize_vl_preview_line(raw)
+        if not line:
+            continue
+        if _is_vl_artifact_path_line(line) or _is_vl_layout_label_line(line):
+            continue
+        key = line.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
+    return "\n".join(lines) if lines else None
+
+
+def _strip_preview_html(value: str) -> str:
+    value = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value)
+    value = re.sub(r"(?i)</\s*(p|div|li|tr|h[1-6])\s*>", "\n", value)
+    value = re.sub(r"<[^>]+>", " ", value)
+    return html.unescape(value)
+
+
+def _normalize_vl_preview_line(value: str) -> str:
+    value = html.unescape(value).replace("\u00a0", " ")
+    value = re.sub(r"[ \t\r\f\v]+", " ", value)
+    return value.strip(" |")
+
+
+def _is_vl_artifact_path_line(value: str) -> bool:
+    lowered = value.lower()
+    if not lowered.endswith((".png", ".jpg", ".jpeg", ".pdf")):
+        return False
+    if lowered.startswith(("imgs/", "./imgs/")):
+        return True
+    return lowered.startswith(("/tmp/", "/var/tmp/", "/root/", "/app/")) or "/docuparse_e2e_logs/" in lowered
+
+
+def _is_vl_layout_label_line(value: str) -> bool:
+    return value.strip().casefold() in {
+        "number",
+        "footnote",
+        "header",
+        "header_image",
+        "footer",
+        "footer_image",
+        "aside_text",
+        "paragraph_title",
+        "seal",
+        "seal_image",
+        "text",
+        "table",
     }
 
 

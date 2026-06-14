@@ -304,7 +304,13 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
                         "message": "The source PDF total is missing in the VL output.",
                     }
                 ],
-                "text_preview": "1 베어링 하우징 ... 2 S45C PIN ... 3 M8 볼트/와서 ...",
+                "text_preview": (
+                    "/tmp/docuparse_e2e_logs/paddleocr_vl_gguf_smoke/21/sample_page_1.png\n"
+                    "number\n"
+                    "seal\n"
+                    "1 베어링 하우징 ... 2 S45C PIN ... 3 M8 볼트/와서 ...\n"
+                    "footer_image\n"
+                ),
                 "manual_visual_check_validation": {
                     "severity": "warn",
                     "issue_codes": ["vl_candidate_missing_document_total"],
@@ -330,7 +336,12 @@ def test_export_includes_vl_candidates_without_line_item_promotion():
     assert payload["canonical_export"]["review_candidates"]["vl_candidate_summary"]["provider_available_candidate"] is False
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["candidate_only"] is True
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["parser_integrated"] is False
-    assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["text_preview"].startswith("1 베어링")
+    text_preview = payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["text_preview"]
+    assert text_preview.startswith("1 베어링")
+    assert "sample_page_1.png" not in text_preview
+    assert "number" not in text_preview
+    assert "seal" not in text_preview
+    assert "footer_image" not in text_preview
     assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["issue_details"][0]["expected_value"] == "418,000"
     assert "vl_candidate_review_required" in payload["canonical_export"]["policy"]["export_warning"]
     assert rows[0]["vl_candidate_count"] == "1"
