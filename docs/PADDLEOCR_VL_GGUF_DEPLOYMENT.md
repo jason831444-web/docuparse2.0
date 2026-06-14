@@ -133,6 +133,17 @@ manual visual check is `warn` or `fail`. The current staged result is one PASS
 and two WARN reports, so the GGUF path remains candidate-only and PP-OCRv4
 continues as the production OCR path.
 
+The summary also includes per-sample `recommended_handling`:
+
+- `candidate_evidence_only`: readable candidate evidence, still not confirmed
+  ERP truth.
+- `use_parser_primary_vl_auxiliary`: keep the validated text-layer/parser path
+  primary and show VL only as auxiliary evidence.
+- `review_candidate_only`: show VL output as review context only; do not
+  promote it to confirmed fields.
+- `reject_vl_candidate`: discard the VL candidate because manual validation
+  found a dangerous error.
+
 The default backend image intentionally remains the safe PP-OCRv4 runtime. If a
 backend-container smoke run reports `paddleocr_vl_runtime_missing_dependency`,
 that means the GGUF candidate runner dependencies are absent from the production
