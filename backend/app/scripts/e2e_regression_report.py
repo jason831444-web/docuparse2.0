@@ -128,6 +128,11 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
         status = "FAIL"
     review_reasons = _review_reason_counts(result.get("review_reasons") or [])
     row_signal_counts = _row_signal_counts(result)
+    if row_signal_counts:
+        if "row_level_review_signals" not in warning_categories:
+            warning_categories.append("row_level_review_signals")
+        if status == "PASS":
+            status = "WARN"
 
     return {
         "filename": result.get("filename"),

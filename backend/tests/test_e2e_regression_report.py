@@ -40,7 +40,7 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert row["row_signal_count"] == 6
     assert row["processing_status"] == "needs_review"
     assert row["review_required"] is True
-    assert row["warning_categories"] == ["taxonomy_type_covered_by_metadata"]
+    assert row["warning_categories"] == ["taxonomy_type_covered_by_metadata", "row_level_review_signals"]
 
     markdown = _markdown_report([row])
     assert "## Operational Summary" in markdown
@@ -49,7 +49,7 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert "Processing Statuses: needs_review x1" in markdown
     assert "Top Review Signals: missing_quantity x3" in markdown
     assert "Top Row-Level Signals: row_missing_quantity x3, inspection_quantity_breakdown_missing x2, vl_candidate_missing_document_total x1" in markdown
-    assert "Top Warning Categories: taxonomy_type_covered_by_metadata x1" in markdown
+    assert "Top Warning Categories: row_level_review_signals x1, taxonomy_type_covered_by_metadata x1" in markdown
     assert "| Status | Warning Categories | Processing | Review Required |" in markdown
     assert "Row Signals | Provider | Fallback | BBox Candidates | VL Candidates | VL Issues" in markdown
     assert "vl_candidate_missing_document_total" in markdown
@@ -102,11 +102,12 @@ def test_e2e_report_surfaces_priced_row_missing_unit_price_as_review_signal():
         source="/tmp/image.log",
     )
 
-    assert row["status"] == "PASS"
+    assert row["status"] == "WARN"
     assert row["row_signal_summary"] == (
         "missing_quantity, quantity_cell_blank, row_missing_quantity, row_missing_unit_price"
     )
     assert row["row_signal_count"] == 4
+    assert row["warning_categories"] == ["row_level_review_signals"]
 
 
 def test_e2e_report_explains_low_recall_when_review_candidates_are_preserved():
@@ -218,10 +219,11 @@ def test_e2e_report_surfaces_row_level_warning_summary_without_forcing_failure()
         source="/tmp/photo.log",
     )
 
-    assert row["status"] == "PASS"
+    assert row["status"] == "WARN"
     assert row["row_signal_summary"] == (
         "fax_row_boundary_uncertain x2, row_missing_quantity x2, untrusted_ocr_amount x2"
     )
+    assert row["warning_categories"] == ["row_level_review_signals"]
     markdown = _markdown_report([row])
     assert "Top Row-Level Signals: fax_row_boundary_uncertain x2" in markdown
     assert "untrusted_ocr_amount x2" in markdown
