@@ -179,6 +179,23 @@ def validate_output_text(text: str, expected_terms: list[str] | None = None) -> 
     return {"ok": ok, "status": status, "text_length": len(stripped), "matched_terms": matched_terms}
 
 
+def classify_smoke_exception(exc: Exception) -> str:
+    message = repr(exc).lower()
+    if isinstance(exc, ImportError) and "paddleocrvl" in message:
+        return "paddleocr_vl_runtime_missing_dependency"
+    if "gguf_model_missing" in message:
+        return "gguf_model_missing"
+    if "sample_missing" in message:
+        return "sample_missing"
+    if "urlopen" in message or "connection" in message:
+        return "llama_server_unreachable"
+    if "timeout" in message:
+        return "official_runtime_timeout"
+    if "missing" in message:
+        return "model_or_sample_missing"
+    return "paddleocr_vl_gguf_backend_error"
+
+
 def _line_containing(text: str, needle: str) -> str | None:
     needle_folded = needle.casefold()
     for line in text.splitlines():
@@ -629,15 +646,7 @@ def run_smoke(
         )
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc!r}"
-        message = repr(exc).lower()
-        if "missing" in message:
-            report["classification"] = "model_or_sample_missing"
-        elif "urlopen" in message or "connection" in message:
-            report["classification"] = "llama_server_unreachable"
-        elif "timeout" in message:
-            report["classification"] = "official_runtime_timeout"
-        else:
-            report["classification"] = "paddleocr_vl_gguf_backend_error"
+        report["classification"] = classify_smoke_exception(exc)
     finally:
         report["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         report["docuparse_candidate_metadata"] = build_docuparse_vl_candidate_metadata(report)

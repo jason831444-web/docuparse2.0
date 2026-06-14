@@ -1,6 +1,7 @@
 from app.scripts.smoke_paddleocr_vl_gguf import (
     _evaluate_manual_visual_check,
     build_docuparse_vl_candidate_metadata,
+    classify_smoke_exception,
     decide_provider_available_candidate,
 )
 
@@ -239,3 +240,13 @@ def test_gguf_candidate_metadata_deduplicates_issue_codes_but_keeps_details():
         "110.00",
         "90.00",
     ]
+
+
+def test_gguf_smoke_classifies_runtime_and_model_failures_precisely():
+    assert (
+        classify_smoke_exception(ImportError("cannot import name 'PaddleOCRVL' from 'paddleocr'"))
+        == "paddleocr_vl_runtime_missing_dependency"
+    )
+    assert classify_smoke_exception(FileNotFoundError("gguf_model_missing")) == "gguf_model_missing"
+    assert classify_smoke_exception(FileNotFoundError("sample_missing: missing.pdf")) == "sample_missing"
+    assert classify_smoke_exception(TimeoutError("timeout while waiting")) == "official_runtime_timeout"
