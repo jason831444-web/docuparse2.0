@@ -180,6 +180,21 @@ def _is_artifact_path_line(value: str) -> bool:
     return lowered.startswith(("/tmp/", "/var/tmp/", "/root/", "/app/")) or "/docuparse_e2e_logs/" in lowered
 
 
+def _is_layout_label_noise_line(value: str) -> bool:
+    return value.strip().casefold() in {
+        "number",
+        "footnote",
+        "header",
+        "header_image",
+        "footer",
+        "footer_image",
+        "aside_text",
+        "paragraph_title",
+        "text",
+        "table",
+    }
+
+
 def _walk_strings(value: Any, fragments: list[str]) -> None:
     if isinstance(value, dict):
         for key in ["block_content", "rec_text", "text", "content", "markdown", "html"]:
@@ -209,6 +224,8 @@ def extract_text(output: Any) -> str:
             if not line:
                 continue
             if _is_artifact_path_line(line):
+                continue
+            if _is_layout_label_noise_line(line):
                 continue
             key = line.casefold()
             if key not in seen:
@@ -635,7 +652,7 @@ def recommend_candidate_handling(
     issue_codes = {str(code) for code in manual_validation.get("issue_codes") or [] if code}
     if severity == "fail":
         return "reject_vl_candidate"
-    if "vl_candidate_known_input_limitation" in issue_codes:
+    if "vl_candidate_known_input_limitation" in issue_codes or "vl_candidate_missing_line_amount" in issue_codes:
         return "use_parser_primary_vl_auxiliary"
     if issue_codes:
         return "review_candidate_only"

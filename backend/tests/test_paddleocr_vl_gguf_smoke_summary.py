@@ -50,7 +50,7 @@ def test_gguf_smoke_summary_blocks_production_active_when_any_report_warns(tmp_p
     assert summary["manual_severity_counts"] == {"pass": 1, "warn": 1}
     assert summary["severity_counts"] == {"pass": 1, "warn": 1}
     assert summary["rows"][0]["recommended_handling"] == "candidate_evidence_only"
-    assert summary["rows"][1]["recommended_handling"] == "review_candidate_only"
+    assert summary["rows"][1]["recommended_handling"] == "use_parser_primary_vl_auxiliary"
     assert summary["issue_counts"] == {
         "vl_candidate_missing_line_amount": 1,
         "vl_candidate_missing_row_cell": 1,
@@ -63,7 +63,7 @@ def test_gguf_smoke_summary_blocks_production_active_when_any_report_warns(tmp_p
     assert "manual_visual_check_warn" in markdown
     assert "vl_candidate_missing_line_amount" in markdown
     assert "candidate_evidence_only" in markdown
-    assert "review_candidate_only" in markdown
+    assert "use_parser_primary_vl_auxiliary" in markdown
 
 
 def test_gguf_smoke_summary_recommends_active_only_when_all_candidates_pass(tmp_path):
