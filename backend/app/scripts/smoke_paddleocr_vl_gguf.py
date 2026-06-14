@@ -120,6 +120,24 @@ def extract_text(output: Any) -> str:
     return "\n".join(lines)
 
 
+def summarize_output(output: Any, *, max_items: int = 80) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for index, item in enumerate(output or []):
+        if len(summary) >= max_items:
+            break
+        entry: dict[str, Any] = {"index": index, "type": type(item).__name__}
+        for attr in ["json", "markdown", "html", "text"]:
+            value = _coerce_payload(getattr(item, attr, None))
+            if value is None:
+                continue
+            if isinstance(value, str):
+                entry[attr] = value[:1000]
+            else:
+                entry[attr] = value
+        summary.append(entry)
+    return summary
+
+
 def validate_output_text(text: str, expected_terms: list[str] | None = None) -> dict[str, Any]:
     expected_terms = expected_terms or []
     stripped = text.strip()
@@ -206,16 +224,22 @@ def _evaluate_manual_visual_check(text: str, manual_visual_check: dict[str, Any]
     }
 
 
-def _render_first_page(sample: Path, output_dir: Path) -> dict[str, Any]:
+def _render_first_page(sample: Path, output_dir: Path, *, scale: float = 2.0) -> dict[str, Any]:
     import fitz
 
     output_dir.mkdir(parents=True, exist_ok=True)
     png = output_dir / "sample_page_1.png"
     doc = fitz.open(str(sample))
     page = doc[0]
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
     pix.save(str(png))
-    return {"page_count": doc.page_count, "image_path": str(png), "width": pix.width, "height": pix.height}
+    return {
+        "page_count": doc.page_count,
+        "image_path": str(png),
+        "width": pix.width,
+        "height": pix.height,
+        "scale": scale,
+    }
 
 
 def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
@@ -257,6 +281,7 @@ def run_smoke(
     *,
     manual_visual_check: dict[str, Any] | None = None,
     expected_terms: list[str] | None = None,
+    render_scale: float = 2.0,
 ) -> dict[str, Any]:
     _configure_runtime_env()
     settings = get_settings()
@@ -292,7 +317,7 @@ def run_smoke(
             raise FileNotFoundError("gguf_model_missing")
         report["llama_server_health"] = _get_json(f"{server_base}/health")
         report["llama_server_models"] = _get_json(f"{server_base}/v1/models")
-        render = _render_first_page(sample, output_dir)
+        render = _render_first_page(sample, output_dir, scale=render_scale)
         report["render"] = render
         from paddleocr import PaddleOCRVL
 
@@ -310,6 +335,7 @@ def run_smoke(
         predict_started = time.perf_counter()
         output = pipeline.predict(render["image_path"])
         report["predict_ms"] = int((time.perf_counter() - predict_started) * 1000)
+        report["output_blocks_preview"] = summarize_output(output)
         text = extract_text(output)
         terms = expected_terms if expected_terms is not None else _expected_terms_for_sample(sample)
         validation = validate_output_text(text, terms)
@@ -361,12 +387,19 @@ def main() -> None:
         default=None,
         help="Expected text fragment for output validation. Repeat to override sample defaults.",
     )
+    parser.add_argument(
+        "--render-scale",
+        type=float,
+        default=2.0,
+        help="PyMuPDF render scale for the first page image passed to PaddleOCR-VL.",
+    )
     args = parser.parse_args()
     report = run_smoke(
         args.sample,
         args.output_dir,
         manual_visual_check=_load_manual_visual_check(args.manual_visual_check_file),
         expected_terms=args.expected_term,
+        render_scale=args.render_scale,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     raise SystemExit(0 if report.get("ok") else 1)
