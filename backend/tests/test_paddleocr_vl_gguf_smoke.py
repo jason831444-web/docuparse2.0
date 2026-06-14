@@ -9,6 +9,7 @@ from app.scripts.smoke_paddleocr_vl_gguf import (
     decide_provider_available_candidate,
     extract_text,
     manual_visual_check_template_for_sample,
+    recommend_candidate_handling,
     write_manual_visual_check_template,
 )
 from app.core.config import get_settings
@@ -307,8 +308,10 @@ def test_gguf_smoke_report_builds_candidate_only_docuparse_metadata():
     assert metadata["vl_candidate_summary"]["candidate_count"] == 1
     assert metadata["vl_candidate_summary"]["warning_count"] == 1
     assert metadata["vl_candidate_summary"]["provider_available_candidate"] is False
+    assert metadata["vl_candidate_summary"]["recommended_handling"] == "review_candidate_only"
     assert metadata["vl_candidates"][0]["candidate_only"] is True
     assert metadata["vl_candidates"][0]["parser_integrated"] is False
+    assert metadata["vl_candidates"][0]["recommended_handling"] == "review_candidate_only"
     assert metadata["vl_candidates"][0]["review_flags"] == ["vl_candidate_missing_document_total"]
 
 
@@ -343,6 +346,39 @@ def test_gguf_candidate_metadata_deduplicates_issue_codes_but_keeps_details():
         "110.00",
         "90.00",
     ]
+
+
+def test_gguf_candidate_handling_recommends_parser_primary_for_known_input_limitation():
+    handling = recommend_candidate_handling(
+        provider_available_candidate=False,
+        manual_validation={
+            "severity": "warn",
+            "issue_codes": ["vl_candidate_known_input_limitation", "vl_candidate_missing_line_amount"],
+        },
+    )
+
+    assert handling == "use_parser_primary_vl_auxiliary"
+
+
+def test_gguf_candidate_handling_rejects_manual_failures():
+    handling = recommend_candidate_handling(
+        provider_available_candidate=False,
+        manual_validation={
+            "severity": "fail",
+            "issue_codes": ["vl_candidate_hallucinated_blank_quantity"],
+        },
+    )
+
+    assert handling == "reject_vl_candidate"
+
+
+def test_gguf_candidate_handling_keeps_pass_as_evidence_only():
+    handling = recommend_candidate_handling(
+        provider_available_candidate=True,
+        manual_validation={"severity": "pass", "issue_codes": []},
+    )
+
+    assert handling == "candidate_evidence_only"
 
 
 def test_gguf_smoke_classifies_runtime_and_model_failures_precisely():

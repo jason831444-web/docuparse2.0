@@ -625,6 +625,25 @@ def decide_provider_available_candidate(
     return True, "manual_visual_check_passed"
 
 
+def recommend_candidate_handling(
+    *,
+    provider_available_candidate: bool,
+    manual_validation: dict[str, Any] | None,
+) -> str:
+    manual_validation = manual_validation or {}
+    severity = manual_validation.get("severity")
+    issue_codes = {str(code) for code in manual_validation.get("issue_codes") or [] if code}
+    if severity == "fail":
+        return "reject_vl_candidate"
+    if "vl_candidate_known_input_limitation" in issue_codes:
+        return "use_parser_primary_vl_auxiliary"
+    if issue_codes:
+        return "review_candidate_only"
+    if provider_available_candidate and severity == "pass":
+        return "candidate_evidence_only"
+    return "candidate_only"
+
+
 def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, Any]:
     validation = report.get("validation") if isinstance(report.get("validation"), dict) else {}
     manual_validation = (
@@ -642,11 +661,16 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
     ]
     issue_codes = list(dict.fromkeys(raw_issue_codes))
     severity = manual_validation.get("severity")
+    recommended_handling = recommend_candidate_handling(
+        provider_available_candidate=bool(report.get("provider_available_candidate")),
+        manual_validation=manual_validation,
+    )
     candidate = {
         "source": "paddleocr_vl_gguf_smoke",
         "provider": "paddleocr_vl_1_6_gguf",
         "candidate_only": True,
         "parser_integrated": False,
+        "recommended_handling": recommended_handling,
         "provider_available_candidate": bool(report.get("provider_available_candidate")),
         "provider_available_decision_reason": report.get("provider_available_decision_reason"),
         "validation_severity": severity,
@@ -665,6 +689,7 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         "parser_integrated": False,
         "provider": "paddleocr_vl_1_6_gguf",
         "provider_available_candidate": bool(report.get("provider_available_candidate")),
+        "recommended_handling": recommended_handling,
     }
     return {
         "vl_candidates": [candidate] if summary["candidate_count"] else [],
