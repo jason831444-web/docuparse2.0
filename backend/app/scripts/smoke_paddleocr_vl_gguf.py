@@ -440,11 +440,15 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         if isinstance(report.get("manual_visual_check_validation"), dict)
         else {}
     )
-    issue_codes = [
+    issue_details = [
+        issue for issue in manual_validation.get("issues", []) if isinstance(issue, dict)
+    ][:20]
+    raw_issue_codes = [
         str(code)
         for code in manual_validation.get("issue_codes", [])
         if code not in (None, "")
     ]
+    issue_codes = list(dict.fromkeys(raw_issue_codes))
     severity = manual_validation.get("severity")
     candidate = {
         "source": "paddleocr_vl_gguf_smoke",
@@ -455,6 +459,7 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         "provider_available_decision_reason": report.get("provider_available_decision_reason"),
         "validation_severity": severity,
         "issue_codes": issue_codes,
+        "issue_details": issue_details,
         "review_flags": issue_codes,
         "matched_terms": validation.get("matched_terms") or [],
         "text_preview": str(report.get("text_preview") or "")[:1200],

@@ -206,3 +206,36 @@ def test_gguf_smoke_report_builds_candidate_only_docuparse_metadata():
     assert metadata["vl_candidates"][0]["candidate_only"] is True
     assert metadata["vl_candidates"][0]["parser_integrated"] is False
     assert metadata["vl_candidates"][0]["review_flags"] == ["vl_candidate_missing_document_total"]
+
+
+def test_gguf_candidate_metadata_deduplicates_issue_codes_but_keeps_details():
+    report = {
+        "provider_available_candidate": False,
+        "provider_available_decision_reason": "manual_visual_check_warn",
+        "validation": {"matched_terms": ["INV-US-2026-0916-EX"]},
+        "manual_visual_check_validation": {
+            "severity": "warn",
+            "issue_codes": [
+                "vl_candidate_missing_line_amount",
+                "vl_candidate_missing_line_amount",
+                "vl_candidate_missing_line_amount",
+            ],
+            "issues": [
+                {"code": "vl_candidate_missing_line_amount", "expected_value": "450.00"},
+                {"code": "vl_candidate_missing_line_amount", "expected_value": "110.00"},
+                {"code": "vl_candidate_missing_line_amount", "expected_value": "90.00"},
+            ],
+        },
+        "text_preview": "COMMERCIAL INVOICE ...",
+        "elapsed_ms": 176350,
+    }
+
+    metadata = build_docuparse_vl_candidate_metadata(report)
+
+    assert metadata["vl_candidate_summary"]["issue_codes"] == ["vl_candidate_missing_line_amount"]
+    assert metadata["vl_candidates"][0]["review_flags"] == ["vl_candidate_missing_line_amount"]
+    assert [issue["expected_value"] for issue in metadata["vl_candidates"][0]["issue_details"]] == [
+        "450.00",
+        "110.00",
+        "90.00",
+    ]
