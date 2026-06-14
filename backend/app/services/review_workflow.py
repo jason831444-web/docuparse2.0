@@ -184,6 +184,8 @@ def validate_approval(document: Document) -> ApprovalValidation:
         for index, item in enumerate(document.line_items, start=1):
             if not item.get("item_name") or item.get("quantity") in (None, ""):
                 blocking.append(f"missing_inventory_item_or_quantity:item_{index}")
+    if _has_vl_candidate_issues(document):
+        warnings.append("vl_candidate_review_required")
     return ApprovalValidation(blocking=list(dict.fromkeys(blocking)), warnings=list(dict.fromkeys(warnings)))
 
 
@@ -208,6 +210,20 @@ def _doc_type(document: Document) -> str:
 
 def _items_required(document: Document, profiles: set[str]) -> bool:
     return _doc_type(document) in {"purchase_order", "quotation", "transaction_statement", "delivery_note", "invoice", "inspection_report"} or bool(profiles & {"return_document", "inventory_movement_document", "quality_document"})
+
+
+def _has_vl_candidate_issues(document: Document) -> bool:
+    metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
+    layout = metadata.get("layout_debug") if isinstance(metadata.get("layout_debug"), dict) else {}
+    summary = metadata.get("vl_candidate_summary") if isinstance(metadata.get("vl_candidate_summary"), dict) else {}
+    if not summary and isinstance(layout.get("vl_candidate_summary"), dict):
+        summary = layout.get("vl_candidate_summary") or {}
+    candidates = metadata.get("vl_candidates") if isinstance(metadata.get("vl_candidates"), list) else layout.get("vl_candidates")
+    candidate_count = int(summary.get("candidate_count") or (len(candidates) if isinstance(candidates, list) else 0))
+    issue_codes = summary.get("issue_codes")
+    warning_count = int(summary.get("warning_count") or 0)
+    failure_count = int(summary.get("failure_count") or 0)
+    return bool(candidate_count and (issue_codes or warning_count or failure_count))
 
 
 def _tax_blocks(document: Document) -> list[str]:
