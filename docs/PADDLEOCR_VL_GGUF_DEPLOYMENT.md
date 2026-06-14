@@ -156,6 +156,12 @@ Do not set `PADDLEOCR_VL_GGUF_SMOKE_PASSED=true` until the staged smoke path has
 passed through the service deployment. A running `llama-server` alone is not
 enough.
 
+Keep `PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED=false` for the production backend.
+The current safe path is isolated smoke or a future dedicated VL worker. If the
+smoke gate has passed but in-process integration is still disabled, health
+should show `primary_provider_candidate_available=true` and
+`primary_provider_available=false`, with PP-OCRv4 still serving production OCR.
+
 Suggested gated rollout:
 
 1. `08_image_quote_missing_quantity.pdf`

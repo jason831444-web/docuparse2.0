@@ -605,6 +605,11 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         use_gguf = self.settings.ai_primary_provider == "paddleocr_vl_1_6_gguf"
         if use_gguf and not self.settings.enable_paddleocr_vl_gguf:
             raise RuntimeError("PaddleOCR-VL GGUF provider is disabled by ENABLE_PADDLEOCR_VL_GGUF=false.")
+        if use_gguf and not self.settings.paddleocr_vl_gguf_in_process_enabled:
+            raise RuntimeError(
+                "PaddleOCR-VL GGUF in-process provider is disabled because the PaddleOCRVL runtime can crash "
+                "the backend process. Use the isolated GGUF smoke/worker path and keep PP-OCRv4 fallback."
+            )
         if not use_gguf and not self.settings.enable_paddleocr_vl:
             raise RuntimeError("PaddleOCR-VL provider is disabled by ENABLE_PADDLEOCR_VL=false.")
 

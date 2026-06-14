@@ -29,9 +29,11 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
     "paddleocr_vl_unavailable";
   const candidate = providers.primary_provider === "paddleocr_vl_1_6_gguf" ? " · VL 후보: GGUF" : "";
   const reasonLabel = providerFallbackReasonLabel(String(reason));
+  const candidateReady = providers.primary_provider_candidate_available || providers.paddleocr_vl_gguf?.candidate_available;
+  const statusPrefix = candidateReady ? "AI 문서 파싱 후보 검증됨 · 운영 연동 대기" : "AI 문서 파싱 비활성";
   return {
     label: `OCR 정상 · ${workerModel}`,
-    detail: `AI 문서 파싱 비활성${candidate}: ${reasonLabel} (${reason}). Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
+    detail: `${statusPrefix}${candidate}: ${reasonLabel} (${reason}). Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
     tone: "fallback",
   };
 }
@@ -48,6 +50,9 @@ export function providerFallbackReasonLabel(reason: string): string {
   }
   if (reason.includes("model_missing")) {
     return "VL 모델 파일 없음";
+  }
+  if (reason.includes("in_process")) {
+    return "backend 직접 실행 차단";
   }
   if (reason.includes("disabled")) {
     return "VL 후보 비활성";

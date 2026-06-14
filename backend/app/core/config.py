@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     paddleocr_vl_gguf_max_pages: int = 1
     paddleocr_vl_gguf_concurrency: int = 1
     paddleocr_vl_gguf_smoke_passed: bool = False
+    paddleocr_vl_gguf_in_process_enabled: bool = False
     enable_paddleocr_vl: bool = False
     paddleocr_vl_model_dir: Path | None = None
     paddleocr_vl_layout_model_dir: Path | None = None

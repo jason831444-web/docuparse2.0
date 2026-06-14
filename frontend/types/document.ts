@@ -174,6 +174,7 @@ export interface ProviderHealth {
     primary_provider?: string | null;
     primary_provider_enabled?: boolean | null;
     primary_provider_available?: boolean | null;
+    primary_provider_candidate_available?: boolean | null;
     primary_provider_status?: string | null;
     fallback_provider?: string | null;
     fallback_provider_available?: boolean | null;
@@ -198,6 +199,8 @@ export interface ProviderHealth {
       status?: string | null;
       enabled?: boolean | null;
       available?: boolean | null;
+      candidate_available?: boolean | null;
+      in_process_enabled?: boolean | null;
       error?: string | null;
       server_url?: string | null;
       model_file?: string | null;

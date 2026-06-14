@@ -127,6 +127,7 @@ PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS=120
 PADDLEOCR_VL_GGUF_MAX_PAGES=1
 PADDLEOCR_VL_GGUF_CONCURRENCY=1
 PADDLEOCR_VL_GGUF_SMOKE_PASSED=false
+PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED=false
 
 OCR_WORKER_URL=http://ocr-worker:8010
 PREFER_OCR_WORKER=true
@@ -135,6 +136,12 @@ PREFER_OCR_WORKER=true
 `PADDLEOCR_VL_GGUF_SMOKE_PASSED` must remain false until the service path has
 passed the staged smoke set. A running `llama-server` alone is not enough to
 mark the provider available.
+
+`PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED` defaults to false. The server smoke path
+uses an isolated PaddleOCRVL process because importing the official runtime
+inside the production backend container has shown native crash risk. Keep the
+backend primary route disabled until a dedicated isolated VL worker path is
+implemented and tested.
 
 ## Health Semantics
 
@@ -146,6 +153,7 @@ Health distinguishes:
 - `llama_server_ready`
 - `smoke_not_run`
 - `active_candidate`
+- `active_candidate_not_integrated`
 - `fallback`
 
 `primary_provider_available=true` requires all of the following:
@@ -154,7 +162,14 @@ Health distinguishes:
 - GGUF model and mmproj files present;
 - llama-server health OK;
 - service smoke gate marked as passed;
+- backend in-process integration explicitly enabled, or a future isolated
+  backend worker path replacing it;
 - PP-OCRv4 fallback remains available.
+
+When the smoke gate has passed but `PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED=false`,
+health reports `primary_provider_candidate_available=true` and
+`primary_provider_available=false`. This is intentional: the GGUF result may be
+used as auxiliary evidence, but PP-OCRv4 remains the production extraction path.
 
 ## Guardrails
 

@@ -35,6 +35,7 @@ def _ocr_settings(**overrides):
         "paddleocr_vl_gguf_max_pages": 1,
         "paddleocr_vl_gguf_concurrency": 1,
         "paddleocr_vl_gguf_smoke_passed": False,
+        "paddleocr_vl_gguf_in_process_enabled": False,
         "enable_paddleocr_vl": True,
         "paddleocr_vl_model_name": "PaddleOCR-VL-1.6",
         "paddleocr_vl_model_dir": None,
@@ -350,7 +351,7 @@ def test_provider_health_reports_gguf_disabled_with_ppocr_fallback(monkeypatch):
     assert payload["paddleocr_vl_official_full"]["status"] == "memory_blocked_on_8gb_cpu"
 
 
-def test_provider_health_reports_gguf_candidate_when_smoke_gate_passed(monkeypatch, tmp_path):
+def test_provider_health_keeps_gguf_candidate_inactive_until_backend_integration_enabled(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     (model_dir / "PaddleOCR-VL-1.6-GGUF.gguf").write_text("model")
@@ -379,10 +380,53 @@ def test_provider_health_reports_gguf_candidate_when_smoke_gate_passed(monkeypat
 
     payload = ocr_module.provider_health()
 
+    assert payload["ocr_engine"] == "PP-OCRv4"
+    assert payload["ocr_model"] == "PP-OCRv4"
+    assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
+    assert payload["primary_provider_available"] is False
+    assert payload["primary_provider_candidate_available"] is True
+    assert payload["primary_provider_status"] == "active_candidate_not_integrated"
+    assert payload["runtime_strategy"] == "ppocrv4_fallback"
+    assert payload["fallback_reason"] == "paddleocr_vl_gguf_in_process_disabled"
+    assert payload["paddleocr_vl_runtime_mode"] == "candidate_not_integrated"
+    assert payload["paddleocr_vl_gguf"]["status"] == "active_candidate_not_integrated"
+
+
+def test_provider_health_reports_gguf_primary_only_when_in_process_enabled(monkeypatch, tmp_path):
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "PaddleOCR-VL-1.6-GGUF.gguf").write_text("model")
+    (model_dir / "PaddleOCR-VL-1.6-GGUF-mmproj.gguf").write_text("mmproj")
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: _ocr_settings(
+            enable_paddleocr_vl_gguf=True,
+            paddleocr_vl_gguf_model_dir=model_dir,
+            paddleocr_vl_gguf_smoke_passed=True,
+            paddleocr_vl_gguf_in_process_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
+    monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(ocr_module, "_paddleocr_vl_status", lambda: {"importable": True, "usable": True, "error": None})
+    monkeypatch.setattr(ocr_module.urllib.request, "urlopen", lambda request, timeout=5.0: _JsonResponse({"status": "ok"}))
+    monkeypatch.setattr(
+        ocr_module,
+        "_ocr_worker_health",
+        lambda url, timeout: (
+            {"status": "ok", "ocr_engine": "PP-OCRv4", "model": "PP-OCRv4", "ocr_version": "PP-OCRv4"},
+            None,
+        ),
+    )
+
+    payload = ocr_module.provider_health()
+
     assert payload["ocr_engine"] == "PaddleOCR-VL GGUF"
     assert payload["ocr_model"] == "PaddleOCR-VL-1.6-GGUF.gguf"
     assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
     assert payload["primary_provider_available"] is True
+    assert payload["primary_provider_candidate_available"] is True
     assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
     assert payload["paddleocr_vl_gguf"]["status"] == "active_candidate"
 
