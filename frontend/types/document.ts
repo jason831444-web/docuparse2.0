@@ -97,6 +97,35 @@ export interface LayoutDebugMetadata {
   source?: string | null;
 }
 
+export interface VLCandidate {
+  source?: string | null;
+  provider?: string | null;
+  candidate_only?: boolean | null;
+  parser_integrated?: boolean | null;
+  provider_available_candidate?: boolean | null;
+  validation_severity?: string | null;
+  issue_codes?: string[];
+  review_flags?: string[];
+  text_preview?: string | null;
+  matched_terms?: string[];
+  inference_time_ms?: number | string | null;
+}
+
+export interface VLCandidateSummary {
+  candidate_count?: number;
+  warning_count?: number;
+  failure_count?: number;
+  issue_codes?: string[];
+  parser_integrated?: boolean;
+  provider?: string | null;
+  provider_available_candidate?: boolean | null;
+}
+
+export interface VLCandidateMetadata {
+  vl_candidates?: VLCandidate[];
+  vl_candidate_summary?: VLCandidateSummary;
+}
+
 export interface FolderSummary {
   label: string;
   value: string;

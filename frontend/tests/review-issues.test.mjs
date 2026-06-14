@@ -14,6 +14,8 @@ import {
   reviewIssueSummary,
   reviewIssueSummaryItems,
   titleCaseLabel,
+  vlCandidateIssueLabel,
+  vlCandidateMetadata,
 } from "../lib/utils.ts";
 
 const amountIssue = {
@@ -107,6 +109,35 @@ assert.equal(layoutDebug?.bbox_table_candidates?.[0]?.source_text, "16000 1600C 
 assert.deepEqual(layoutDebug?.bbox_table_candidates?.[0]?.review_flags, ["missing_item_name_from_ocr", "row_boundary_uncertain", "untrusted_ocr_amount"]);
 assert.equal(bboxReviewFlagLabel("missing_item_name_from_ocr"), "품목명 OCR 없음");
 assert.equal(layoutDebugMetadata({ workflow_metadata: null }), null);
+const vlMetadata = vlCandidateMetadata({
+  workflow_metadata: {
+    vl_candidates: [
+      {
+        provider: "paddleocr_vl_1_6_gguf",
+        candidate_only: true,
+        parser_integrated: false,
+        provider_available_candidate: false,
+        validation_severity: "warn",
+        issue_codes: ["vl_candidate_missing_document_total"],
+        text_preview: "FAX-PO-2026-0921 ...",
+      },
+    ],
+    vl_candidate_summary: {
+      candidate_count: 1,
+      warning_count: 1,
+      failure_count: 0,
+      issue_codes: ["vl_candidate_missing_document_total"],
+      provider: "paddleocr_vl_1_6_gguf",
+      provider_available_candidate: false,
+    },
+  },
+});
+assert.equal(vlMetadata?.vl_candidate_summary?.candidate_count, 1);
+assert.equal(vlMetadata?.vl_candidate_summary?.provider_available_candidate, false);
+assert.equal(vlMetadata?.vl_candidates?.[0]?.candidate_only, true);
+assert.equal(vlMetadata?.vl_candidates?.[0]?.parser_integrated, false);
+assert.equal(vlCandidateIssueLabel("vl_candidate_missing_document_total"), "문서 합계 누락");
+assert.equal(vlCandidateMetadata({ workflow_metadata: null }), null);
 assert.equal(titleCaseLabel("credit_note"), "차감/크레딧 문서");
 assert.equal(titleCaseLabel("internal_transfer"), "내부 이동서");
 assert.equal(titleCaseLabel("return_note"), "반품 문서");

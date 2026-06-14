@@ -2,8 +2,8 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems } from "@/lib/utils";
-import type { BBoxTableCandidate, DocumentRecord, LayoutDebugMetadata } from "@/types/document";
+import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems, vlCandidateIssueLabel, vlCandidateMetadata } from "@/lib/utils";
+import type { BBoxTableCandidate, DocumentRecord, LayoutDebugMetadata, VLCandidateMetadata } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
   if (!items.length) return null;
@@ -119,6 +119,36 @@ function LayoutDebugBlock({ layoutDebug }: { layoutDebug: LayoutDebugMetadata | 
   );
 }
 
+function VLCandidateBlock({ metadata }: { metadata: VLCandidateMetadata | null }) {
+  if (!metadata) return null;
+  const candidates = metadata.vl_candidates || [];
+  const summary = metadata.vl_candidate_summary;
+  const candidateCount = summary?.candidate_count ?? candidates.length;
+  const issueCodes = Array.from(new Set([...(summary?.issue_codes || []), ...candidates.flatMap((candidate) => candidate.issue_codes || [])]));
+  if (!candidateCount && !issueCodes.length) return null;
+  return (
+    <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-medium uppercase tracking-normal text-violet-900">VL 문서 이해 후보</p>
+        <Badge className="border-violet-300 bg-white text-violet-800">확정값 아님</Badge>
+        <Badge variant="outline" className="border-slate-300 bg-white text-slate-700">ERP 내보내기 제외</Badge>
+      </div>
+      <p className="mt-2 text-sm text-violet-950">
+        PaddleOCR-VL GGUF가 참고 후보 {candidateCount ?? 0}건을 만들었습니다.
+        이 값은 품목/금액 테이블에 자동 반영하지 않고 원본 대조용으로만 사용합니다.
+      </p>
+      {issueCodes.length ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {issueCodes.map((code) => <Badge key={code} variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{vlCandidateIssueLabel(code)}</Badge>)}
+        </div>
+      ) : null}
+      {candidates[0]?.text_preview ? (
+        <p className="mt-2 line-clamp-4 whitespace-pre-wrap rounded border bg-white p-2 text-xs text-slate-700">{candidates[0].text_preview}</p>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkflowPanel({ document }: { document: DocumentRecord }) {
   const labels = documentFieldLabels(document.document_type);
   const blockingIssues = blockingReviewIssues(document);
@@ -129,6 +159,7 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
   const issueDate = businessIssueDate(document);
   const exportReady = !document.review_required && document.processing_status === "confirmed";
   const layoutDebug = layoutDebugMetadata(document);
+  const vlMetadata = vlCandidateMetadata(document);
 
   return (
     <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
@@ -161,6 +192,7 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
         <ListBlock title="검토 필요 항목" items={reviewItems} warning />
         <ListBlock title="처리 경고" items={warningItems} warning />
         <LayoutDebugBlock layoutDebug={layoutDebug} />
+        <VLCandidateBlock metadata={vlMetadata} />
         <InfoDetails items={infoItems} />
         <ListBlock title="주요 날짜" items={document.key_dates} />
       </CardContent>

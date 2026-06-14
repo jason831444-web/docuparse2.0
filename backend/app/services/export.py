@@ -57,6 +57,8 @@ def serialize_document(document: Document) -> dict:
         "review_candidates": {
             "bbox_table_candidates": _layout_debug(document).get("bbox_table_candidates", []),
             "bbox_candidate_summary": _layout_candidate_summary(document),
+            "vl_candidates": _vl_candidates(document),
+            "vl_candidate_summary": _vl_candidate_summary(document),
         },
     }
     return data
@@ -159,6 +161,7 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
         taxonomy = _export_taxonomy(document)
         policy = _export_policy(document, taxonomy)
         layout_summary = _layout_candidate_summary(document)
+        vl_summary = _vl_candidate_summary(document)
         review_reasons = _review_reason_text(document)
         has_line_items = bool(document.line_items)
         line_items = document.line_items or [{}]
@@ -221,6 +224,11 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "bbox_candidate_count": layout_summary["candidate_count"],
                 "bbox_uncertain_candidate_count": layout_summary["uncertain_count"],
                 "bbox_review_flags": ", ".join(layout_summary["review_flags"]),
+                "vl_candidate_count": vl_summary["candidate_count"],
+                "vl_candidate_warning_count": vl_summary["warning_count"],
+                "vl_candidate_failure_count": vl_summary["failure_count"],
+                "vl_candidate_issue_codes": ", ".join(vl_summary["issue_codes"]),
+                "vl_candidate_provider": vl_summary["provider"],
             })
     return rows
 
@@ -282,6 +290,9 @@ def _export_policy(document: Document, taxonomy: dict) -> dict:
         warnings.append("review_required")
     if review.get("approval_validation", {}).get("blocking"):
         warnings.append("approval_validation_blocking")
+    vl_summary = _vl_candidate_summary(document)
+    if vl_summary["candidate_count"] and (vl_summary["issue_codes"] or vl_summary["warning_count"] or vl_summary["failure_count"]):
+        warnings.append("vl_candidate_review_required")
     return {
         "amount_required": bool(amount_required),
         "party_required": bool(party_required),
@@ -364,6 +375,78 @@ def _layout_candidate_summary(document: Document) -> dict:
         "parser_integrated": bool(layout.get("parser_integrated")),
         "review_flags": list(layout.get("bbox_review_flags") or []),
     }
+
+
+def _vl_candidate_source(document: Document) -> dict:
+    metadata = document.workflow_metadata or {}
+    layout = _layout_debug(document)
+    if isinstance(metadata.get("vl_candidates"), list) or isinstance(metadata.get("vl_candidate_summary"), dict):
+        return metadata
+    if isinstance(layout.get("vl_candidates"), list) or isinstance(layout.get("vl_candidate_summary"), dict):
+        return layout
+    return {}
+
+
+def _vl_candidates(document: Document) -> list[dict]:
+    source = _vl_candidate_source(document)
+    candidates = source.get("vl_candidates")
+    if not isinstance(candidates, list):
+        return []
+    return [_compact_vl_candidate(candidate) for candidate in candidates if isinstance(candidate, dict)][:5]
+
+
+def _compact_vl_candidate(candidate: dict) -> dict:
+    validation = candidate.get("manual_visual_check_validation")
+    if not isinstance(validation, dict):
+        validation = candidate.get("validation") if isinstance(candidate.get("validation"), dict) else {}
+    issue_codes = _string_list(candidate.get("issue_codes")) or _string_list(validation.get("issue_codes"))
+    text_preview = candidate.get("text_preview") or candidate.get("output_preview")
+    if isinstance(text_preview, str) and len(text_preview) > 1200:
+        text_preview = text_preview[:1200] + "..."
+    return {
+        "source": candidate.get("source") or candidate.get("provider") or "paddleocr_vl_1_6_gguf",
+        "provider": candidate.get("provider") or "paddleocr_vl_1_6_gguf",
+        "candidate_only": True,
+        "parser_integrated": False,
+        "provider_available_candidate": bool(candidate.get("provider_available_candidate")),
+        "validation_severity": candidate.get("validation_severity") or validation.get("severity"),
+        "issue_codes": issue_codes,
+        "review_flags": _string_list(candidate.get("review_flags")) or issue_codes,
+        "text_preview": text_preview,
+        "matched_terms": _string_list(candidate.get("matched_terms") or (candidate.get("validation") or {}).get("matched_terms")),
+        "missing_required_values": _json_safe(validation.get("missing_required_values") or {}),
+        "inference_time_ms": _json_safe(candidate.get("inference_time_ms") or candidate.get("elapsed_ms")),
+    }
+
+
+def _vl_candidate_summary(document: Document) -> dict:
+    source = _vl_candidate_source(document)
+    summary = source.get("vl_candidate_summary") if isinstance(source.get("vl_candidate_summary"), dict) else {}
+    candidates = _vl_candidates(document)
+    issue_codes = _string_list(summary.get("issue_codes"))
+    severities: list[str] = []
+    for candidate in candidates:
+        issue_codes.extend(code for code in _string_list(candidate.get("issue_codes")) if code not in issue_codes)
+        severity = candidate.get("validation_severity")
+        if severity:
+            severities.append(str(severity))
+    warning_count = int(summary.get("warning_count") or sum(1 for value in severities if value == "warn"))
+    failure_count = int(summary.get("failure_count") or sum(1 for value in severities if value == "fail"))
+    return {
+        "candidate_count": int(summary.get("candidate_count") or len(candidates)),
+        "warning_count": warning_count,
+        "failure_count": failure_count,
+        "issue_codes": issue_codes,
+        "parser_integrated": False,
+        "provider": summary.get("provider") or (candidates[0].get("provider") if candidates else None),
+        "provider_available_candidate": bool(summary.get("provider_available_candidate")),
+    }
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item not in (None, "")]
 
 
 def _line_review_flags(document: Document, item_index: int) -> str:

@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { BBoxTableCandidate, DocumentCalendarItem, DocumentRecord, DocumentTaxonomy, LayoutDebugMetadata } from "@/types/document";
+import type { BBoxTableCandidate, DocumentCalendarItem, DocumentRecord, DocumentTaxonomy, LayoutDebugMetadata, VLCandidate, VLCandidateMetadata } from "@/types/document";
 import type { DocumentReviewMetadata } from "@/types/document";
 
 export function cn(...inputs: ClassValue[]) {
@@ -148,6 +148,24 @@ function normalizedBBoxCandidate(value: unknown): BBoxTableCandidate | null {
   };
 }
 
+function normalizedVLCandidate(value: unknown): VLCandidate | null {
+  const record = asRecord(value);
+  if (!Object.keys(record).length) return null;
+  return {
+    source: optionalString(record.source),
+    provider: optionalString(record.provider),
+    candidate_only: optionalBoolean(record.candidate_only),
+    parser_integrated: optionalBoolean(record.parser_integrated),
+    provider_available_candidate: optionalBoolean(record.provider_available_candidate),
+    validation_severity: optionalString(record.validation_severity),
+    issue_codes: optionalStringList(record.issue_codes),
+    review_flags: optionalStringList(record.review_flags),
+    text_preview: optionalString(record.text_preview),
+    matched_terms: optionalStringList(record.matched_terms),
+    inference_time_ms: typeof record.inference_time_ms === "number" || typeof record.inference_time_ms === "string" ? record.inference_time_ms : null,
+  };
+}
+
 export function layoutDebugMetadata(document: { workflow_metadata?: Record<string, unknown> | null }): LayoutDebugMetadata | null {
   const workflow = asRecord(document.workflow_metadata);
   const layoutDebug = asRecord(workflow.layout_debug);
@@ -181,6 +199,32 @@ export function layoutDebugMetadata(document: { workflow_metadata?: Record<strin
   };
 }
 
+export function vlCandidateMetadata(document: { workflow_metadata?: Record<string, unknown> | null }): VLCandidateMetadata | null {
+  const workflow = asRecord(document.workflow_metadata);
+  const layoutDebug = asRecord(workflow.layout_debug);
+  const candidatesSource = Array.isArray(workflow.vl_candidates) ? workflow.vl_candidates : layoutDebug.vl_candidates;
+  const candidates = Array.isArray(candidatesSource)
+    ? candidatesSource.map(normalizedVLCandidate).filter((candidate): candidate is VLCandidate => Boolean(candidate))
+    : [];
+  const summarySource = asRecord(workflow.vl_candidate_summary);
+  const layoutSummarySource = asRecord(layoutDebug.vl_candidate_summary);
+  const issueCodes = optionalStringList(summarySource.issue_codes, layoutSummarySource.issue_codes, ...candidates.map((candidate) => candidate.issue_codes || []));
+  const summary = {
+    candidate_count: optionalNumber(summarySource.candidate_count, layoutSummarySource.candidate_count) ?? candidates.length,
+    warning_count: optionalNumber(summarySource.warning_count, layoutSummarySource.warning_count),
+    failure_count: optionalNumber(summarySource.failure_count, layoutSummarySource.failure_count),
+    issue_codes: issueCodes,
+    parser_integrated: optionalBoolean(summarySource.parser_integrated, layoutSummarySource.parser_integrated) ?? false,
+    provider: optionalString(summarySource.provider, layoutSummarySource.provider, candidates[0]?.provider),
+    provider_available_candidate: optionalBoolean(summarySource.provider_available_candidate, layoutSummarySource.provider_available_candidate, candidates[0]?.provider_available_candidate),
+  };
+  if (!candidates.length && !summary.candidate_count && !summary.issue_codes.length) return null;
+  return {
+    vl_candidates: candidates,
+    vl_candidate_summary: summary,
+  };
+}
+
 export function bboxReviewFlagLabel(value?: string | null) {
   if (!value) return null;
   const labels: Record<string, string> = {
@@ -191,6 +235,20 @@ export function bboxReviewFlagLabel(value?: string | null) {
     low_ocr_confidence: "OCR 신뢰도 낮음",
     missing_quantity_from_ocr: "수량 OCR 없음",
     missing_amount_from_ocr: "금액 OCR 없음",
+  };
+  return labels[value] || titleCaseLabel(value);
+}
+
+export function vlCandidateIssueLabel(value?: string | null) {
+  if (!value) return null;
+  const labels: Record<string, string> = {
+    vl_candidate_missing_line_amount: "품목 금액 누락",
+    vl_candidate_missing_document_total: "문서 합계 누락",
+    vl_candidate_hallucinated_blank_quantity: "빈 수량 추정 위험",
+    vl_candidate_exchange_rate_as_amount: "환율/금액 혼동 위험",
+    vl_candidate_missing_required_value: "필수 원문 값 누락",
+    vl_candidate_dangerous_manual_error: "위험 오류 확인됨",
+    vl_candidate_manual_hallucination: "원문 없는 값 생성",
   };
   return labels[value] || titleCaseLabel(value);
 }

@@ -278,3 +278,55 @@ def test_export_includes_bbox_layout_candidate_summary_without_line_item_promoti
     assert "bbox_uncertain_candidate_count" in csv
     assert "bbox_review_flags" in csv
     assert "missing_item_name_from_ocr" in csv
+
+
+def test_export_includes_vl_candidates_without_line_item_promotion():
+    document = _document("FAX-PO-2026-0921", "오성테크", Decimal("418000"))
+    document.document_type = DocumentType.purchase_order
+    document.processing_status = ProcessingStatus.needs_review
+    document.review_required = True
+    document.line_items = [
+        {"item_name": "베어링 하우징", "line_total": Decimal("176000")},
+        {"item_name": "S45C PIN 8X60", "line_total": Decimal("66000")},
+    ]
+    document.workflow_metadata = {
+        "vl_candidates": [
+            {
+                "source": "paddleocr_vl_1_6_gguf",
+                "provider": "paddleocr_vl_1_6_gguf",
+                "provider_available_candidate": False,
+                "validation_severity": "warn",
+                "issue_codes": ["vl_candidate_missing_document_total"],
+                "text_preview": "1 베어링 하우징 ... 2 S45C PIN ... 3 M8 볼트/와서 ...",
+                "manual_visual_check_validation": {
+                    "severity": "warn",
+                    "issue_codes": ["vl_candidate_missing_document_total"],
+                    "missing_expected_values": {"total_amount": "418,000"},
+                },
+            }
+        ],
+        "vl_candidate_summary": {
+            "candidate_count": 1,
+            "warning_count": 1,
+            "failure_count": 0,
+            "issue_codes": ["vl_candidate_missing_document_total"],
+            "provider": "paddleocr_vl_1_6_gguf",
+            "provider_available_candidate": False,
+        },
+    }
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert len(payload["canonical_export"]["line_items"]) == 2
+    assert payload["canonical_export"]["review_candidates"]["vl_candidate_summary"]["candidate_count"] == 1
+    assert payload["canonical_export"]["review_candidates"]["vl_candidate_summary"]["provider_available_candidate"] is False
+    assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["candidate_only"] is True
+    assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["parser_integrated"] is False
+    assert payload["canonical_export"]["review_candidates"]["vl_candidates"][0]["text_preview"].startswith("1 베어링")
+    assert "vl_candidate_review_required" in payload["canonical_export"]["policy"]["export_warning"]
+    assert rows[0]["vl_candidate_count"] == "1"
+    assert rows[0]["vl_candidate_warning_count"] == "1"
+    assert rows[0]["vl_candidate_failure_count"] == "0"
+    assert rows[0]["vl_candidate_issue_codes"] == "vl_candidate_missing_document_total"
+    assert rows[0]["vl_candidate_provider"] == "paddleocr_vl_1_6_gguf"
