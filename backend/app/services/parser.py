@@ -2040,7 +2040,7 @@ class DocumentParser:
         supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
         tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
         total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
-        if tax is not None and total is not None and tax > total:
+        if tax is not None and total is not None and total >= 0 and tax > total:
             warnings.append("invalid_tax_greater_than_total")
         if supply is not None and tax is not None and supply > 0 and tax > supply:
             warnings.append("invalid_tax_greater_than_supply")

@@ -100,6 +100,31 @@ def test_ocr_malformed_amount_row_keeps_numbers_and_flags_line_warning():
     assert "invalid_tax_greater_than_total" in parsed.line_items[0]["validation_warnings"]
 
 
+def test_negative_rounding_adjustment_does_not_look_like_tax_greater_than_total_error():
+    text = "\n".join([
+        "세금계산서",
+        "문서번호 INV-ROUND-NEG",
+        "공급업체 성진전자부품",
+        "고객사 네오팩토리",
+        "품목명 품목코드 수량 단위 단가 공급가액 세액 합계금액",
+        "PCB Connector 12P CON-PCB-12P 333 EA 301 100233 10023 110256",
+        "Cable Harness 500 CBL-HAR-500 77 EA 2201 169477 16948 186425",
+        "조정금액 ROUND-ADJ 1 식 -1 -1 0 -1",
+        "공급가액 269709",
+        "세액 26971",
+        "합계금액 296680",
+    ])
+
+    parsed = DocumentParser().parse(text, "negative_rounding_adjustment.txt")
+
+    adjustment = parsed.line_items[-1]
+    assert "조정금액" in adjustment["item_name"]
+    assert adjustment["supply_amount"] == -1
+    assert adjustment["tax_amount"] == 0
+    assert adjustment["line_total"] == -1
+    assert "invalid_tax_greater_than_total" not in adjustment.get("validation_warnings", [])
+
+
 def test_ai_escalates_when_ocr_has_item_like_rows_but_parser_result_has_no_items():
     normalized = NormalizedDocument(
         source_file_type="pdf",
