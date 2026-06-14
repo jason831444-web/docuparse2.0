@@ -65,6 +65,23 @@ def test_vl_candidate_parser_flags_manual_mismatches_as_review_only_issues():
     assert "vl_candidate_row_count_mismatch" not in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_flags_low_confidence_source_quality_for_review():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join([
+            "계산서번호 INV-2026-0810-LOW",
+            "품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+            "베어린 한읙징 BRG-H-100 100mm 25 EA 12000 300000 30000 330000",
+            "총액:627,000",
+            "※ 저품질 스캔: OCR confidence/table confidence 낮음 및 AI escalation 판단 테스트용",
+        ]),
+        filename="poor_scan_invoice.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_untrusted_source_quality" in candidate["issue_codes"]
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

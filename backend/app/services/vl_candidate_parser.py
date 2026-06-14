@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -33,7 +34,7 @@ class VLCandidateParser:
         if not cleaned:
             return None
         parsed = self.parser.parse(cleaned, filename)
-        issues = self._issues(parsed, manual_visual_check or {}, validation or {})
+        issues = self._issues(parsed, cleaned, manual_visual_check or {}, validation or {})
         return {
             "source": "vl_candidate_parser",
             "provider": self.provider,
@@ -105,10 +106,12 @@ class VLCandidateParser:
     def _issues(
         self,
         parsed: ParsedDocument,
+        text: str,
         manual_visual_check: dict[str, Any],
         validation: dict[str, Any],
     ) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
+        issues.extend(self._source_quality_issues(text))
         issues.extend(self._line_item_warning_issues(parsed))
         expected = manual_visual_check.get("expected_from_pdf") if isinstance(manual_visual_check, dict) else {}
         if isinstance(expected, dict):
@@ -123,6 +126,21 @@ class VLCandidateParser:
                 }
             )
         return issues
+
+    def _source_quality_issues(self, text: str) -> list[dict[str, Any]]:
+        if not re.search(
+            r"(저품질|낮은\s*신뢰|confidence\s*(?:낮|low)|table\s*confidence|distort|왜곡|poor\s*scan)",
+            text or "",
+            flags=re.IGNORECASE,
+        ):
+            return []
+        return [
+            {
+                "code": "vl_candidate_untrusted_source_quality",
+                "severity": "warn",
+                "message": "VL output contains low-confidence or distorted-source signals; require review before ERP export.",
+            }
+        ]
 
     def _line_item_warning_issues(self, parsed: ParsedDocument) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
