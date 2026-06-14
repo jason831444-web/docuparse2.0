@@ -41,7 +41,31 @@ assert.equal(degraded.label, "OCR 정상 · PP-OCRv4");
 assert.equal(degraded.tone, "fallback");
 assert.match(degraded.detail, /AI 문서 파싱 비활성/);
 assert.match(degraded.detail, /VL 후보: GGUF/);
+assert.match(degraded.detail, /VL 후보 비활성/);
 assert.match(degraded.detail, /paddleocr_vl_gguf_disabled/);
+
+const smokePending = providerHealthLabel({
+  providers: {
+    ocr_engine: "PP-OCRv4",
+    ocr_model: "PP-OCRv4",
+    primary_provider: "paddleocr_vl_1_6_gguf",
+    primary_provider_available: false,
+    fallback_provider: "paddleocr_ppocrv4",
+    fallback_reason: "paddleocr_vl_gguf_smoke_not_run",
+    paddleocr_vl_gguf: {
+      status: "llama_server_ready",
+      error: "paddleocr_vl_gguf_smoke_not_run",
+    },
+    ocr_worker_health: {
+      model: "PP-OCRv4",
+    },
+  },
+});
+
+assert.equal(smokePending.label, "OCR 정상 · PP-OCRv4");
+assert.equal(smokePending.tone, "fallback");
+assert.match(smokePending.detail, /서버 smoke 검증 전/);
+assert.match(smokePending.detail, /paddleocr_vl_gguf_smoke_not_run/);
 
 const loading = providerHealthLabel(null);
 assert.equal(loading.label, "OCR 상태 확인 중");

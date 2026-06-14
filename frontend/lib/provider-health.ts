@@ -28,9 +28,32 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
     providers.paddleocr_vl_init_error ||
     "paddleocr_vl_unavailable";
   const candidate = providers.primary_provider === "paddleocr_vl_1_6_gguf" ? " · VL 후보: GGUF" : "";
+  const reasonLabel = providerFallbackReasonLabel(String(reason));
   return {
     label: `OCR 정상 · ${workerModel}`,
-    detail: `AI 문서 파싱 비활성${candidate}: ${reason}. Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
+    detail: `AI 문서 파싱 비활성${candidate}: ${reasonLabel} (${reason}). Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
     tone: "fallback",
   };
+}
+
+export function providerFallbackReasonLabel(reason: string): string {
+  if (reason.includes("smoke_not_run")) {
+    return "서버 smoke 검증 전";
+  }
+  if (reason.includes("smoke_failed")) {
+    return "서버 smoke 검증 실패";
+  }
+  if (reason.includes("llama_server_unreachable")) {
+    return "VL worker 연결 불가";
+  }
+  if (reason.includes("model_missing")) {
+    return "VL 모델 파일 없음";
+  }
+  if (reason.includes("disabled")) {
+    return "VL 후보 비활성";
+  }
+  if (reason.includes("memory_blocked")) {
+    return "현재 서버 메모리 한계";
+  }
+  return "VL 후보 사용 불가";
 }
