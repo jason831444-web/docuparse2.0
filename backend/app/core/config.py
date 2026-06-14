@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     paddleocr_vl_gguf_max_pages: int = 1
     paddleocr_vl_gguf_concurrency: int = 1
     paddleocr_vl_gguf_smoke_passed: bool = False
-    enable_paddleocr_vl: bool = True
+    enable_paddleocr_vl: bool = False
     paddleocr_vl_model_dir: Path | None = None
     paddleocr_vl_layout_model_dir: Path | None = None
     paddleocr_vl_hf_repo: str = "PaddlePaddle/PaddleOCR-VL-1.6"
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     ocr_worker_timeout_seconds: float = 120.0
     local_paddleocr_enabled: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator(
         "llama_cpp_model_path",
