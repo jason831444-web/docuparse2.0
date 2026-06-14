@@ -299,6 +299,16 @@ class DocumentWorkflowEnrichmentService:
                 reasons.append(self._review_reason("missing_item_name", f"{index}번째 품목의 품목명이 비어 있습니다.", "line_items.item_name", index - 1))
             if item.get("quantity") in (None, "", []):
                 reasons.append(self._review_reason("missing_quantity", f"{index}번째 품목의 수량이 비어 있습니다.", "line_items.quantity", index - 1))
+            if doc_type == "inspection_report" and not any(
+                item.get(field) not in (None, "", [])
+                for field in ["received_quantity", "accepted_quantity", "rejected_quantity"]
+            ):
+                reasons.append(self._review_reason(
+                    "inspection_quantities_require_review",
+                    f"{index}번째 검사 품목의 입고/합격/불량 수량을 확인해야 합니다.",
+                    "line_items.received_quantity",
+                    index - 1,
+                ))
             if not no_price_quantity_doc and doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 reasons.append(self._review_reason("missing_price_or_total", f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.", "line_items.unit_price", index - 1))
             for warning in item.get("validation_warnings") or []:
@@ -522,6 +532,7 @@ class DocumentWorkflowEnrichmentService:
             "item_code_name_conflict",
             "amount_direction_requires_review",
             "statement_balance_summary_requires_review",
+            "inspection_quantities_require_review",
             "internal_item_unmatched",
             "internal_item_ambiguous",
             "item_matching_skipped",

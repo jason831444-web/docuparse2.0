@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -338,6 +339,39 @@ def test_real_inspection_report_preserves_lot_and_inspection_quantities():
     assert second["quantity"] == 300
     assert second["accepted_quantity"] == 300
     assert second["rejected_quantity"] == 0
+
+
+def test_inspection_report_without_inspection_quantity_breakdown_requires_review():
+    document = Document(
+        original_filename="inspection_photo_ocr.txt",
+        stored_file_path="/tmp/inspection_photo_ocr.txt",
+        mime_type="text/plain",
+        document_type=DocumentType.inspection_report,
+        vendor_name="대영부품",
+        customer_name="오성테크",
+        document_number="IQC-2026-0918-044",
+        issue_date=date(2026, 9, 18),
+        line_items=[
+            {
+                "item_name": "베어링하우징",
+                "quantity": 100,
+                "unit": "EA",
+                "internal_item_code": "P-BRG-H-100",
+            },
+            {
+                "item_name": "S45C PIN 8X60",
+                "quantity": 300,
+                "unit": "EA",
+                "internal_item_code": "P-PIN-S45C-08X60",
+            },
+        ],
+    )
+
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, "입고검사성적서")
+    issue_codes = {issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]}
+
+    assert "inspection_quantities_require_review" in issue_codes
+    assert workflow.workflow_metadata["review_required"] is True
 
 
 def test_real_long_invoice_suppresses_ghost_line_totals_when_supply_matches_document_total():
