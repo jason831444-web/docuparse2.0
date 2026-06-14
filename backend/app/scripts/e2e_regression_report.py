@@ -106,7 +106,14 @@ def _compare_result(result: dict[str, Any], expected: dict[str, Any] | None, *, 
     actual_count = result.get("line_items_count")
     if expected_count not in (None, "", []):
         if actual_count is None or int(actual_count) < int(expected_count):
-            reasons.append(f"line_items_count: expected at least {expected_count}, got {actual_count}")
+            reason = f"line_items_count: expected at least {expected_count}, got {actual_count}"
+            review_candidate_count = _int_or_none(result.get("review_candidates_count"))
+            vl_candidate_count = _int_or_none(result.get("vl_candidate_count"))
+            if review_candidate_count:
+                reason += f"; review candidates present: {review_candidate_count}"
+            if vl_candidate_count:
+                reason += f"; vl candidates present: {vl_candidate_count}"
+            reasons.append(reason)
             status = "WARN" if status == "PASS" else status
 
     if result.get("error"):
@@ -196,6 +203,15 @@ def _decimal(value: Any) -> Decimal | None:
             return None
         return Decimal(str(value)).quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value in (None, "", []):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
         return None
 
 

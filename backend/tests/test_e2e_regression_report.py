@@ -44,3 +44,36 @@ def test_e2e_report_preserves_review_reason_summary_without_changing_pass_status
     assert "non-blocking informational codes" in markdown
     assert "missing_quantity x3" in markdown
     assert "needs_review" in markdown
+
+
+def test_e2e_report_explains_low_recall_when_review_candidates_are_preserved():
+    row = _compare_result(
+        {
+            "filename": "15_photo_tax_invoice_rounding_adjustment.pdf",
+            "document_type": "invoice",
+            "document_subtype": "tax_invoice",
+            "document_profile": "tax_document",
+            "document_profiles": ["tax_document", "priced_document"],
+            "document_number": "INV-2026-0915-ROUND",
+            "currency": "KRW",
+            "extracted_amount": "296680.00",
+            "line_items_count": 1,
+            "processing_status": "needs_review",
+            "review_required": True,
+            "review_reasons": ["missing_quantity", "missing_document_item_code"],
+            "review_candidates_count": 2,
+            "vl_candidate_count": 0,
+        },
+        {
+            "document_type": "tax_invoice",
+            "document_number": "INV-2026-0915-ROUND",
+            "currency": "KRW",
+            "total_amount": 296680,
+            "line_items": 3,
+        },
+        source="/tmp/photo.log",
+    )
+
+    assert row["status"] == "WARN"
+    assert "line_items_count: expected at least 3, got 1; review candidates present: 2" in row["reasons"]
+    assert row["review_candidates_count"] == 2
