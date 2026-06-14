@@ -340,7 +340,7 @@ def test_real_inspection_report_preserves_lot_and_inspection_quantities():
     assert second["rejected_quantity"] == 0
 
 
-def test_real_long_invoice_keeps_explicit_row_amounts_without_tax_synthesis():
+def test_real_long_invoice_suppresses_ghost_line_totals_when_supply_matches_document_total():
     text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/20_real_invoice_multipage_many_lines.txt").read_text()
     parsed = DocumentParser().parse(text, "20_real_invoice_multipage_many_lines.txt")
 
@@ -350,8 +350,9 @@ def test_real_long_invoice_keeps_explicit_row_amounts_without_tax_synthesis():
     assert parsed.line_items[0]["quantity"] == 110
     assert parsed.line_items[0]["unit_price"] == 105
     assert parsed.line_items[0]["supply_amount"] == 11550
-    assert parsed.line_items[0]["line_total"] == 12705
+    assert sum(item["supply_amount"] for item in parsed.line_items) == 392000
     assert all(item.get("tax_amount") is None for item in parsed.line_items)
+    assert all(item.get("line_total") is None for item in parsed.line_items)
 
 
 def test_internal_transfer_pipe_table_extracts_quantity_only_rows_without_amounts():

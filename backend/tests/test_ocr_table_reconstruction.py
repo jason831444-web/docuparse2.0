@@ -1379,24 +1379,24 @@ def test_visual_return_credit_numbered_table_prioritizes_deduction_total():
 
 def test_visual_numbered_long_invoice_text_layer_recovers_all_rows():
     rows = []
-    for number, name, spec, quantity, unit_price, supply, total in [
-        (1, "M8 육각볼트", "M8x20", 110, 105, "11,550", "12,705"),
-        (2, "SUS WASHER M8", "M8", 120, 110, "13,200", "14,520"),
-        (3, "M8 육각볼트", "M8x20", 130, 115, "14,950", "16,445"),
-        (4, "SUS WASHER M8", "M8", 140, 120, "16,800", "18,480"),
-        (5, "M8 육각볼트", "M8x20", 150, 125, "18,750", "20,625"),
-        (6, "SUS WASHER M8", "M8", 160, 130, "20,800", "22,880"),
-        (7, "M8 육각볼트", "M8x20", 170, 135, "22,950", "25,245"),
-        (8, "SUS WASHER M8", "M8", 180, 140, "25,200", "27,720"),
-        (9, "M8 육각볼트", "M8x20", 190, 145, "27,550", "30,305"),
-        (10, "SUS WASHER M8", "M8", 200, 150, "30,000", "33,000"),
-        (11, "M8 육각볼트", "M8x20", 210, 155, "32,550", "35,805"),
-        (12, "SUS WASHER M8", "M8", 220, 160, "35,200", "38,720"),
-        (13, "M8 육각볼트", "M8x20", 230, 165, "37,950", "41,745"),
-        (14, "SUS WASHER M8", "M8", 240, 170, "40,800", "44,880"),
-        (15, "M8 육각볼트", "M8x20", 250, 175, "43,750", "48,125"),
+    for number, name, spec, quantity, unit_price, supply in [
+        (1, "M8 육각볼트", "M8x20", 110, 105, "11,550"),
+        (2, "SUS WASHER M8", "M8", 120, 110, "13,200"),
+        (3, "M8 육각볼트", "M8x20", 130, 115, "14,950"),
+        (4, "SUS WASHER M8", "M8", 140, 120, "16,800"),
+        (5, "M8 육각볼트", "M8x20", 150, 125, "18,750"),
+        (6, "SUS WASHER M8", "M8", 160, 130, "20,800"),
+        (7, "M8 육각볼트", "M8x20", 170, 135, "22,950"),
+        (8, "SUS WASHER M8", "M8", 180, 140, "25,200"),
+        (9, "M8 육각볼트", "M8x20", 190, 145, "27,550"),
+        (10, "SUS WASHER M8", "M8", 200, 150, "30,000"),
+        (11, "M8 육각볼트", "M8x20", 210, 155, "32,550"),
+        (12, "SUS WASHER M8", "M8", 220, 160, "35,200"),
+        (13, "M8 육각볼트", "M8x20", 230, 165, "37,950"),
+        (14, "SUS WASHER M8", "M8", 240, 170, "40,800"),
+        (15, "M8 육각볼트", "M8x20", 250, 175, "43,750"),
     ]:
-        rows.extend([str(number), name, spec, str(quantity), "EA", str(unit_price), supply, total])
+        rows.extend([str(number), name, spec, str(quantity), "EA", str(unit_price), supply])
     text = "\n".join([
         "거래처 월합계 인보이스",
         "계산서번호",
@@ -1408,7 +1408,6 @@ def test_visual_numbered_long_invoice_text_layer_recovers_all_rows():
         "단위",
         "단가",
         "공급가액",
-        "합계",
         *rows,
         "합계금액",
         "431,200",
@@ -1419,9 +1418,11 @@ def test_visual_numbered_long_invoice_text_layer_recovers_all_rows():
     assert parsed.document_number == "INV-2026-0920-LONG"
     assert parsed.extracted_amount == 431200
     assert len(parsed.line_items) == 15
-    assert parsed.line_items[0]["line_total"] == 12705
+    assert parsed.line_items[0]["supply_amount"] == 11550
+    assert parsed.line_items[0].get("line_total") is None
     assert parsed.line_items[-1]["quantity"] == 250
-    assert parsed.line_items[-1]["line_total"] == 48125
+    assert parsed.line_items[-1]["supply_amount"] == 43750
+    assert parsed.line_items[-1].get("line_total") is None
 
 
 def test_visual_fax_numbered_table_avoids_over_split_and_normalizes_ocr_zero_amounts():

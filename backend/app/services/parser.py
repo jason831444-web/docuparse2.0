@@ -2034,6 +2034,7 @@ class DocumentParser:
             return line_items
         if any("|" in line for line in lines) and any(self._line_item_amount_warnings(item) for item in line_items):
             return line_items
+        line_items = self._suppress_unsafe_line_totals_when_supply_matches_document_total(line_items, amount, tax, lines)
         current_total = self._line_items_total(line_items)
         if current_total is None or abs(current_total - amount) <= max(Decimal("1"), abs(amount) * Decimal("0.02")):
             return line_items
@@ -2132,6 +2133,7 @@ class DocumentParser:
                     remaining_supply -= supply_value
                     remaining_tax -= tax_value
                     remaining_total -= total_value
+        repaired = self._suppress_unsafe_line_totals_when_supply_matches_document_total(repaired, amount, tax, lines)
         for item in repaired:
             supply_value = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
             quantity_value = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
@@ -2147,6 +2149,62 @@ class DocumentParser:
             ):
                 self._repair_quantity_price_from_ocr_context(item, supply_value, lines)
         return [self._normalize_line_item(item) for item in repaired]
+
+    def _suppress_unsafe_line_totals_when_supply_matches_document_total(
+        self,
+        line_items: list[dict],
+        amount: Decimal | None,
+        document_tax: Decimal | None,
+        lines: list[str],
+    ) -> list[dict]:
+        if not line_items or amount is None:
+            return line_items
+        if document_tax is not None and abs(document_tax) > Decimal("0.01"):
+            return line_items
+        context = "\n".join(lines).lower()
+        if re.search(r"(거\s*래\s*명\s*세\s*서|transaction\s+statement|전월\s*이월|총\s*미수금|금월\s*합계)", context, flags=re.IGNORECASE):
+            return line_items
+        supply_sum = Decimal("0")
+        line_total_sum = Decimal("0")
+        supply_count = 0
+        line_total_count = 0
+        tax_count = 0
+        implied_tax_total_count = 0
+        for item in line_items:
+            supply_value = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
+            tax_value = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
+            line_total_value = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+            if supply_value is not None:
+                supply_sum += supply_value
+                supply_count += 1
+            if tax_value is not None:
+                tax_count += 1
+            if line_total_value is not None:
+                line_total_sum += line_total_value
+                line_total_count += 1
+                if supply_value is not None and abs(line_total_value - supply_value * Decimal("1.1")) <= max(Decimal("1"), abs(line_total_value) * Decimal("0.02")):
+                    implied_tax_total_count += 1
+        if supply_count != len(line_items) or line_total_count == 0:
+            return line_items
+        tolerance = max(Decimal("1"), abs(amount) * Decimal("0.02"))
+        document_total_matches_supply = abs(supply_sum - amount) <= tolerance and abs(line_total_sum - amount) > tolerance
+        line_totals_look_tax_inferred = (
+            tax_count == 0
+            and implied_tax_total_count == line_total_count
+            and abs(line_total_sum - amount) <= tolerance
+        )
+        if not (document_total_matches_supply or line_totals_look_tax_inferred):
+            return line_items
+        cleaned: list[dict] = []
+        for item in line_items:
+            next_item = dict(item)
+            supply_value = self._to_decimal(str(next_item.get("supply_amount"))) if next_item.get("supply_amount") is not None else None
+            line_total_value = self._to_decimal(str(next_item.get("line_total"))) if next_item.get("line_total") is not None else None
+            if supply_value is not None and line_total_value is not None and line_total_value != supply_value:
+                next_item.pop("tax_amount", None)
+                next_item.pop("line_total", None)
+            cleaned.append(next_item)
+        return cleaned
 
     def _valid_amount_triples_from_lines(self, lines: list[str]) -> list[tuple[Decimal, Decimal, Decimal]]:
         values: list[Decimal] = []
