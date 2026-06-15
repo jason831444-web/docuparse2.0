@@ -781,6 +781,10 @@ class DocumentParser:
         text = re.sub(r"\s+", " ", str(row or "")).strip(" |")
         if not text or re.search(r"^(?:total|subtotal|vat|tax|공급가액|부가세|총액|합계)", text, flags=re.IGNORECASE):
             return None
+        if self._vl_inline_no_price_context(doc_type):
+            no_price_item = self._vl_inline_no_price_item_from_row(text, doc_type)
+            if no_price_item:
+                return no_price_item
         pattern = re.compile(
             r"^(?P<body>.+?)\s+"
             r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
@@ -794,6 +798,8 @@ class DocumentParser:
         match = pattern.match(text)
         missing_supply_match = None
         missing_quantity_match = None
+        supply_only_match = None
+        supply_without_unit_price_match = None
         if not match:
             missing_supply_match = re.match(
                 r"^(?P<body>.+?)\s+"
@@ -802,6 +808,25 @@ class DocumentParser:
                 r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
                 r"(?P<tax_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
                 r"(?P<line_total>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if not match and not missing_supply_match:
+            supply_only_match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
+                r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if not match and not missing_supply_match and not supply_only_match:
+            supply_without_unit_price_match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
+                r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
                 text,
                 flags=re.IGNORECASE,
             )
@@ -816,7 +841,7 @@ class DocumentParser:
                 text,
                 flags=re.IGNORECASE,
             )
-        row_match = match or missing_supply_match or missing_quantity_match
+        row_match = match or missing_supply_match or supply_only_match or supply_without_unit_price_match or missing_quantity_match
         if not row_match:
             return None
         body = re.sub(r"^\d+\s+", "", row_match.group("body")).strip(" -|")
@@ -830,8 +855,9 @@ class DocumentParser:
             "item_code": item_code,
             "specification": specification,
             "unit": row_match.group("unit"),
-            "unit_price": row_match.group("unit_price"),
         }
+        if "unit_price" in row_match.groupdict():
+            item["unit_price"] = row_match.group("unit_price")
         warnings: list[str] = []
         if match:
             item["quantity"] = match.group("quantity")
@@ -851,9 +877,11 @@ class DocumentParser:
                 and abs(first_amount - expected_supply) <= max(Decimal("1"), abs(expected_supply) * Decimal("0.02"))
             ):
                 item["supply_amount"] = self._number_value(first_amount)
-                item["line_total"] = self._number_value(second_amount) if second_amount is not None else missing_supply_match.group("line_total")
                 if second_amount is not None and second_amount > first_amount:
+                    item["line_total"] = self._number_value(second_amount)
                     warnings.append("line_total_without_tax_column")
+                elif second_amount is not None:
+                    warnings.append("trailing_fragment_ignored")
             inferred_supply = second_amount - first_amount if second_amount is not None and first_amount is not None else None
             if (
                 "supply_amount" not in item
@@ -873,6 +901,12 @@ class DocumentParser:
             item["tax_amount"] = missing_quantity_match.group("tax_amount")
             item["line_total"] = missing_quantity_match.group("line_total")
             warnings.extend(["missing_quantity", "quantity_cell_blank"])
+        elif supply_only_match:
+            item["quantity"] = supply_only_match.group("quantity")
+            item["supply_amount"] = supply_only_match.group("supply_amount")
+        elif supply_without_unit_price_match:
+            item["quantity"] = supply_without_unit_price_match.group("quantity")
+            item["supply_amount"] = supply_without_unit_price_match.group("supply_amount")
 
         quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
         unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None
@@ -890,6 +924,80 @@ class DocumentParser:
         if warnings:
             item["validation_warnings"] = sorted(set(warnings))
         return {key: value for key, value in item.items() if value not in (None, "", [])}
+
+    def _vl_inline_no_price_context(self, doc_type: DocumentType | None) -> bool:
+        return doc_type in {DocumentType.delivery_note, DocumentType.inspection_report, DocumentType.general_document, DocumentType.memo}
+
+    def _vl_inline_no_price_item_from_row(self, text: str, doc_type: DocumentType | None) -> dict | None:
+        if not re.match(r"^\d+\s+", text):
+            return None
+        if doc_type == DocumentType.inspection_report or re.search(r"\bLOT[-\w]+\b|합격수량|불량수량", text, flags=re.IGNORECASE):
+            match = re.match(
+                r"^\d+\s+(?P<body>.+?)\s+(?P<lot>LOT[-\w]+)\s+(?P<spec>\\S+)\s+"
+                r"(?P<received>[-+]?\d[\d,]*)\s+(?P<accepted>[-+]?\d[\d,]*)\s+(?P<rejected>[-+]?\d[\d,]*)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                return {
+                    "item_name": self._clean_value(match.group("body")),
+                    "document_item_code": match.group("lot"),
+                    "specification": match.group("spec"),
+                    "quantity": match.group("received"),
+                    "received_quantity": match.group("received"),
+                    "accepted_quantity": match.group("accepted"),
+                    "rejected_quantity": match.group("rejected"),
+                }
+        if doc_type in {DocumentType.delivery_note, DocumentType.general_document, DocumentType.memo}:
+            match = re.match(
+                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]+)\s+(?P<spec>\\S+)\s+"
+                r"(?P<first>[-+]?\d[\d,]*)\s+(?P<second>[-+]?\d[\d,]*)(?:\s+(?P<third>[-+]?\d[\d,]*))?\s*(?P<unit>[A-Za-z가-힣]{1,8})?\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                item = {
+                    "item_name": self._clean_value(match.group("body")),
+                    "document_item_code": self._clean_code_value(match.group("code")),
+                    "specification": self._normalize_vl_inline_specification(match.group("spec")),
+                    "quantity": match.group("second"),
+                    "ordered_quantity": match.group("first"),
+                    "delivered_quantity": match.group("second"),
+                }
+                if match.group("third"):
+                    item["remaining_quantity"] = match.group("third")
+                if match.group("unit"):
+                    item["unit"] = match.group("unit")
+                return item
+            transfer_match = re.match(
+                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]+(?:x\\d+)?)(?P<spec>\\d+x\\d+(?:x\\d+)?)?\s+"
+                r"(?P<quantity>[-+]?\d[\d,]*)\s+(?P<unit>[A-Za-z가-힣]{1,8})\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if transfer_match:
+                code = transfer_match.group("code")
+                spec = transfer_match.group("spec")
+                if not spec:
+                    code, spec = self._split_compacted_code_spec(code)
+                return {
+                    "item_name": self._clean_value(transfer_match.group("body")),
+                    "document_item_code": self._clean_code_value(code),
+                    "specification": self._normalize_vl_inline_specification(spec),
+                    "quantity": transfer_match.group("quantity"),
+                    "requested_quantity": transfer_match.group("quantity"),
+                    "unit": transfer_match.group("unit"),
+                }
+        return None
+
+    def _split_compacted_code_spec(self, code: str) -> tuple[str, str | None]:
+        text = str(code or "")
+        match = re.search(r"(\d+x\d+(?:x\d+)?)$", text, flags=re.IGNORECASE)
+        if not match:
+            return text, None
+        spec = match.group(1)
+        prefix = text[: match.start()].rstrip("-_ ")
+        return prefix or text, spec
 
     def _split_vl_inline_item_identity(self, body: str) -> tuple[str | None, str | None, str | None]:
         tokens = body.split()
