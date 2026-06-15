@@ -163,6 +163,8 @@ services:
       - "${PADDLEOCR_VL_GGUF_THREADS:-2}"
       - -c
       - "${PADDLEOCR_VL_GGUF_CONTEXT:-4096}"
+      - --n-predict
+      - "${PADDLEOCR_VL_GGUF_N_PREDICT:-512}"
     expose:
       - "8080"
     volumes:
@@ -203,6 +205,7 @@ services:
     volumes:
       - uploaded_files:/app/uploads
       - ${PADDLEOCR_VL_GGUF_HOST_MODEL_DIR:-./models/paddleocr_vl_1_6_gguf}:/app/models/paddleocr_vl_1_6_gguf:ro
+      - ${PADDLEX_CACHE_HOST_DIR:-./models/paddlex_cache}:/root/.paddlex
     depends_on:
       - vl-worker-gguf
 

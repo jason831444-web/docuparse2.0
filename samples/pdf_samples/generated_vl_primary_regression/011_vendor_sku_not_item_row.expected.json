@@ -1,0 +1,51 @@
+{
+  "document_type": "invoice",
+  "document_subtype": null,
+  "document_profile": null,
+  "document_number": "INV-GEN-2026-011",
+  "issue_date": "2026-10-11",
+  "vendor": "미래정밀",
+  "customer": "한빛제조",
+  "currency": "KRW",
+  "total_amount": 1342000,
+  "subtotal": 1220000,
+  "tax_amount": 122000,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": [
+    "item_name",
+    "document_item_code",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "supply_amount",
+    "tax_amount",
+    "line_total"
+  ],
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "PCB Connector 12P",
+      "document_item_code": "VSKU-CON-12P",
+      "spec": "12P",
+      "quantity": 1500,
+      "unit": "EA",
+      "unit_price": 300,
+      "supply_amount": 450000,
+      "tax_amount": 45000,
+      "line_total": 495000
+    },
+    {
+      "item_name": "Cable Harness 500",
+      "document_item_code": "VSKU-CBL-500",
+      "spec": "500mm",
+      "quantity": 350,
+      "unit": "EA",
+      "unit_price": 2200,
+      "supply_amount": 770000,
+      "tax_amount": 77000,
+      "line_total": 847000
+    }
+  ]
+}

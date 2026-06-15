@@ -1,0 +1,59 @@
+{
+  "document_type": "quotation",
+  "document_subtype": null,
+  "document_profile": null,
+  "document_number": "QT-GEN-2026-002",
+  "issue_date": "2026-10-02",
+  "vendor": "한성산업",
+  "customer": "제일기계",
+  "currency": "KRW",
+  "total_amount": 473000,
+  "subtotal": 430000,
+  "tax_amount": 43000,
+  "no_price_document": false,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "document_item_code",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "supply_amount"
+  ],
+  "hidden_or_cropped_columns": [
+    "tax_amount",
+    "line_total"
+  ],
+  "line_items": [
+    {
+      "item_name": "고정 플레이트",
+      "document_item_code": "PLT-FIX-02",
+      "spec": "120x60x5T",
+      "quantity": null,
+      "unit": "EA",
+      "unit_price": 2800,
+      "supply_amount": 280000,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "missing_quantity",
+        "row_amount_hidden_do_not_infer"
+      ]
+    },
+    {
+      "item_name": "스테인리스 브라켓",
+      "document_item_code": "BRK-SUS-01",
+      "spec": "50x80x3T",
+      "quantity": 100,
+      "unit": "EA",
+      "unit_price": 1500,
+      "supply_amount": 150000,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "row_amount_hidden_do_not_infer"
+      ]
+    }
+  ]
+}

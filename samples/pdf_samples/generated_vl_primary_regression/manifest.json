@@ -1,0 +1,98 @@
+[
+  {
+    "filename": "001_po_clean_image.pdf",
+    "expected": "001_po_clean_image.expected.json",
+    "visual": "001_po_clean_image.visual.md",
+    "document_type": "purchase_order",
+    "visual_crop": false,
+    "text_layer": false
+  },
+  {
+    "filename": "002_quote_blank_qty_hidden_total.pdf",
+    "expected": "002_quote_blank_qty_hidden_total.expected.json",
+    "visual": "002_quote_blank_qty_hidden_total.visual.md",
+    "document_type": "quotation",
+    "visual_crop": true,
+    "text_layer": false
+  },
+  {
+    "filename": "003_delivery_no_price_partial_crop.pdf",
+    "expected": "003_delivery_no_price_partial_crop.expected.json",
+    "visual": "003_delivery_no_price_partial_crop.visual.md",
+    "document_type": "delivery_note",
+    "visual_crop": true,
+    "text_layer": false
+  },
+  {
+    "filename": "004_commercial_invoice_exchange_hidden_amount.pdf",
+    "expected": "004_commercial_invoice_exchange_hidden_amount.expected.json",
+    "visual": "004_commercial_invoice_exchange_hidden_amount.visual.md",
+    "document_type": "invoice",
+    "visual_crop": true,
+    "text_layer": false
+  },
+  {
+    "filename": "005_internal_transfer_quantity_only.pdf",
+    "expected": "005_internal_transfer_quantity_only.expected.json",
+    "visual": "005_internal_transfer_quantity_only.visual.md",
+    "document_type": "general_document",
+    "visual_crop": true,
+    "text_layer": false
+  },
+  {
+    "filename": "006_return_credit_full_visible.pdf",
+    "expected": "006_return_credit_full_visible.expected.json",
+    "visual": "006_return_credit_full_visible.visual.md",
+    "document_type": "general_document",
+    "visual_crop": false,
+    "text_layer": false
+  },
+  {
+    "filename": "007_inspection_report_no_price_crop_decision.pdf",
+    "expected": "007_inspection_report_no_price_crop_decision.expected.json",
+    "visual": "007_inspection_report_no_price_crop_decision.visual.md",
+    "document_type": "inspection_report",
+    "visual_crop": true,
+    "text_layer": false
+  },
+  {
+    "filename": "008_statement_text_layer_hidden_total.pdf",
+    "expected": "008_statement_text_layer_hidden_total.expected.json",
+    "visual": "008_statement_text_layer_hidden_total.visual.md",
+    "document_type": "transaction_statement",
+    "visual_crop": true,
+    "text_layer": true
+  },
+  {
+    "filename": "009_tax_invoice_rounding_hidden_row_tax.pdf",
+    "expected": "009_tax_invoice_rounding_hidden_row_tax.expected.json",
+    "visual": "009_tax_invoice_rounding_hidden_row_tax.visual.md",
+    "document_type": "invoice",
+    "visual_crop": true,
+    "text_layer": false
+  },
+  {
+    "filename": "010_fax_po_o0_row_boundary.pdf",
+    "expected": "010_fax_po_o0_row_boundary.expected.json",
+    "visual": "010_fax_po_o0_row_boundary.visual.md",
+    "document_type": "purchase_order",
+    "visual_crop": false,
+    "text_layer": false
+  },
+  {
+    "filename": "011_vendor_sku_not_item_row.pdf",
+    "expected": "011_vendor_sku_not_item_row.expected.json",
+    "visual": "011_vendor_sku_not_item_row.visual.md",
+    "document_type": "invoice",
+    "visual_crop": false,
+    "text_layer": false
+  },
+  {
+    "filename": "012_option_quote_no_final_total.pdf",
+    "expected": "012_option_quote_no_final_total.expected.json",
+    "visual": "012_option_quote_no_final_total.visual.md",
+    "document_type": "quotation",
+    "visual_crop": true,
+    "text_layer": false
+  }
+]

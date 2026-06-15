@@ -1,0 +1,55 @@
+{
+  "document_type": "transaction_statement",
+  "document_subtype": null,
+  "document_profile": null,
+  "document_number": "TS-GEN-2026-008",
+  "issue_date": "2026-10-08",
+  "vendor": "한빛제조",
+  "customer": "오성테크",
+  "currency": "KRW",
+  "total_amount": 705100,
+  "subtotal": 641000,
+  "tax_amount": 64100,
+  "no_price_document": false,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price"
+  ],
+  "hidden_or_cropped_columns": [
+    "supply_amount",
+    "tax_amount",
+    "line_total"
+  ],
+  "line_items": [
+    {
+      "item_name": "SUS304 3T PLATE",
+      "spec": "1000x2000",
+      "quantity": 3,
+      "unit": "EA",
+      "unit_price": 35000,
+      "supply_amount": null,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "row_amount_hidden_do_not_infer"
+      ]
+    },
+    {
+      "item_name": "M8 육각볼트",
+      "spec": "M8x20",
+      "quantity": 2000,
+      "unit": "EA",
+      "unit_price": 120,
+      "supply_amount": null,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "row_amount_hidden_do_not_infer"
+      ]
+    }
+  ]
+}

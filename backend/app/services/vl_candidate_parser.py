@@ -30,10 +30,12 @@ class VLCandidateParser:
         manual_visual_check: dict[str, Any] | None = None,
         validation: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        cleaned = self._clean_text(text)
+        doc_type = self.parser._guess_document_type(str(text or ""), filename)
+        cleaned = self._clean_text(text, doc_type=doc_type)
         if not cleaned:
             return None
         parsed = self.parser.parse(cleaned, filename)
+        parsed.line_items = self._line_items_for_visible_columns_only(cleaned, doc_type, parsed.line_items)
         issues = self._issues(parsed, cleaned, manual_visual_check or {}, validation or {})
         return {
             "source": "vl_candidate_parser",
@@ -50,13 +52,202 @@ class VLCandidateParser:
             "review_flags": list(dict.fromkeys(issue["code"] for issue in issues if issue.get("code"))),
         }
 
-    def _clean_text(self, text: str) -> str:
+    def _clean_text(self, text: str, doc_type: Any | None = None) -> str:
         lines = []
         for raw in (text or "").splitlines():
             line = " ".join(raw.strip().split())
             if line:
-                lines.append(line)
+                lines.extend(self._expand_inline_table_line(line, doc_type))
         return "\n".join(lines)
+
+    def _expand_inline_table_line(self, line: str, doc_type: Any | None = None) -> list[str]:
+        """Restore row boundaries when VL returns a whole table as one line."""
+
+        tokens = str(line or "").split()
+        if len(tokens) < 12:
+            return [line]
+        header_start = self._inline_header_start(tokens)
+        if header_start is None:
+            return [line]
+        header_end = self._inline_header_end(tokens, header_start)
+        if header_end <= header_start or header_end >= len(tokens):
+            return [line]
+
+        prefix = " ".join(tokens[:header_start]).strip()
+        header = " ".join(tokens[header_start:header_end]).strip()
+        table_tokens = tokens[header_end:]
+        summary_start = self._inline_summary_start(table_tokens)
+        summary = ""
+        if summary_start is not None:
+            summary = " ".join(table_tokens[summary_start:]).strip()
+            table_tokens = table_tokens[:summary_start]
+
+        rows = self._split_inline_table_rows(table_tokens, doc_type)
+        if not rows:
+            return [line]
+        expanded = [value for value in (prefix, header, *rows, summary) if value]
+        return expanded or [line]
+
+    def _inline_header_start(self, tokens: list[str]) -> int | None:
+        best_index: int | None = None
+        best_hits = 0
+        for index, token in enumerate(tokens):
+            if not self._is_inline_header_token(token):
+                continue
+            hits = 0
+            for candidate in tokens[index : min(len(tokens), index + 14)]:
+                if self._is_inline_header_token(candidate):
+                    hits += 1
+            if hits > best_hits:
+                best_hits = hits
+                best_index = index
+        return best_index if best_index is not None and best_hits >= 4 else None
+
+    def _inline_header_end(self, tokens: list[str], start: int) -> int:
+        index = start
+        last_header = start
+        while index < len(tokens):
+            token = tokens[index]
+            if self._is_inline_header_token(token):
+                last_header = index + 1
+                index += 1
+                continue
+            if index + 1 < len(tokens) and self._is_inline_header_token(f"{token} {tokens[index + 1]}"):
+                last_header = index + 2
+                index += 2
+                continue
+            break
+        return last_header
+
+    def _is_inline_header_token(self, token: str) -> bool:
+        normalized = re.sub(r"[\s_/-]+", "", str(token or "").casefold())
+        header_tokens = {
+            "no",
+            "품목명",
+            "품명",
+            "반품품목",
+            "품목코드",
+            "문서품목코드",
+            "내부품목코드",
+            "거래처품목코드",
+            "item",
+            "itemname",
+            "itemcode",
+            "description",
+            "vendorsku",
+            "vendor",
+            "sku",
+            "lot",
+            "lotno",
+            "규격",
+            "spec",
+            "수량",
+            "요청수량",
+            "발주수량",
+            "납품수량",
+            "입고수량",
+            "합격수량",
+            "불량수량",
+            "잔량",
+            "qty",
+            "quantity",
+            "단위",
+            "unit",
+            "단가",
+            "unitprice",
+            "price",
+            "공급가액",
+            "세액",
+            "합계금액",
+            "amount",
+            "tax",
+            "total",
+            "판정",
+            "비고",
+        }
+        return normalized in header_tokens
+
+    def _inline_summary_start(self, tokens: list[str]) -> int | None:
+        for index, token in enumerate(tokens):
+            normalized = re.sub(r"[\s_/-]+", "", str(token or "").casefold())
+            if normalized in {"공급가액", "세액", "총액", "합계", "합계금액", "subtotal", "tax", "vat", "total"}:
+                return index
+        return None
+
+    def _split_inline_table_rows(self, tokens: list[str], doc_type: Any | None = None) -> list[str]:
+        rows: list[str] = []
+        index = 0
+        while index < len(tokens):
+            candidates: list[tuple[int, int, str]] = []
+            max_end = min(len(tokens), index + 16)
+            for end in range(index + 4, max_end + 1):
+                row_text = " ".join(tokens[index:end])
+                item = self.parser._vl_inline_table_item_from_row(row_text, doc_type)
+                if not item:
+                    continue
+                score = self._inline_row_score(item)
+                if score >= 4:
+                    candidates.append((score, end, row_text))
+            if not candidates:
+                remainder = " ".join(tokens[index:]).strip()
+                if remainder:
+                    rows.append(remainder)
+                break
+            candidates.sort(key=lambda candidate: (-candidate[0], candidate[1]))
+            score, end, row_text = candidates[0]
+            rows.append(row_text)
+            index = end
+        return rows
+
+    def _inline_row_score(self, item: dict[str, Any]) -> int:
+        score = 0
+        for field in ("item_name", "unit", "quantity", "unit_price", "supply_amount", "tax_amount", "line_total"):
+            if item.get(field) not in (None, "", []):
+                score += 1
+        if item.get("document_item_code") or item.get("item_code"):
+            score += 1
+        return score
+
+    def _line_items_for_visible_columns_only(
+        self,
+        text: str,
+        doc_type: Any | None,
+        fallback_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not self._has_hidden_or_truncated_amount_signal(text):
+            return fallback_items
+        inline_items = self.parser._extract_vl_inline_table_items(text.splitlines(), doc_type)
+        if not inline_items:
+            return fallback_items
+        return [self._suppress_hidden_positive_line_amount(item) for item in inline_items]
+
+    def _has_hidden_or_truncated_amount_signal(self, text: str) -> bool:
+        return bool(
+            re.search(
+                r"(hidden|clipped|cropped|truncated|not\s+visible|visual(?:ly)?\s+confirmed|"
+                r"잘림|잘려|가려|오른쪽|보이지\s*않|공급\s*$|단가\s+공(?:\s|$))",
+                text or "",
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+        )
+
+    def _suppress_hidden_positive_line_amount(self, item: dict[str, Any]) -> dict[str, Any]:
+        safe_item = dict(item)
+        supply = self._decimal_value(safe_item.get("supply_amount"))
+        if (
+            supply is not None
+            and supply > 0
+            and safe_item.get("unit_price") in (None, "", [])
+            and safe_item.get("quantity") not in (None, "", [])
+            and safe_item.get("unit") not in (None, "", [])
+        ):
+            safe_item["unit_price"] = safe_item.pop("supply_amount")
+            warnings = list(safe_item.get("validation_warnings") or [])
+            for warning in ("missing_line_amount", "row_amount_hidden_do_not_infer"):
+                if warning not in warnings:
+                    warnings.append(warning)
+            safe_item["validation_warnings"] = warnings
+        return safe_item
 
     def _compact_document(self, parsed: ParsedDocument) -> dict[str, Any]:
         return {
@@ -67,9 +258,9 @@ class VLCandidateParser:
             "issue_date": self._safe_value(parsed.issue_date or parsed.extracted_date),
             "due_date": self._safe_value(parsed.due_date),
             "currency": parsed.currency,
-            "subtotal": self._safe_value(parsed.subtotal),
-            "tax": self._safe_value(parsed.tax),
-            "total": self._safe_value(parsed.extracted_amount),
+            "subtotal": self._safe_nonnegative_amount(parsed.subtotal),
+            "tax": self._safe_nonnegative_amount(parsed.tax),
+            "total": self._safe_nonnegative_amount(parsed.extracted_amount),
             "business_fields": self._safe_value(parsed.business_fields),
         }
 
@@ -135,6 +326,23 @@ class VLCandidateParser:
         money_document = doc_type in {"purchase_order", "quotation", "transaction_statement", "invoice"}
         no_price_document = doc_type in {"delivery_note", "inspection_report", "general_document", "memo"}
 
+        for field_name, value in (
+            ("subtotal", parsed.subtotal),
+            ("tax", parsed.tax),
+            ("total", parsed.extracted_amount),
+        ):
+            numeric_value = self._decimal_value(value)
+            if numeric_value is not None and numeric_value < 0:
+                issues.append(
+                    {
+                        "code": "vl_candidate_negative_document_amount_suppressed",
+                        "severity": "warn",
+                        "field": field_name,
+                        "actual_value": str(numeric_value),
+                        "message": "A negative document-level amount was suppressed; negative values may remain only as row-level adjustments.",
+                    }
+                )
+
         if money_document and self._text_has_total_label(text) and parsed.extracted_amount is None:
             issues.append(
                 {
@@ -164,6 +372,16 @@ class VLCandidateParser:
 
         for index, item in enumerate(line_items, start=1):
             name = str(item.get("item_name") or "")
+            if self._row_boundary_needs_fax_review(text):
+                issues.append(
+                    {
+                        "code": "vl_candidate_fax_row_boundary_uncertain",
+                        "severity": "warn",
+                        "line_index": index,
+                        "item_name": item.get("item_name"),
+                        "message": "Fax-like or O/0-confusable source signals are present; row boundaries and numeric cells require review.",
+                    }
+                )
             if self._looks_like_table_header(name):
                 issues.append(
                     {
@@ -182,6 +400,26 @@ class VLCandidateParser:
                         "line_index": index,
                         "item_name": item.get("item_name"),
                         "message": "A no-price VL row appears unparsed; keep it as a review candidate.",
+                    }
+                )
+            if self._delivery_row_has_hidden_remaining_quantity(text, item):
+                issues.append(
+                    {
+                        "code": "vl_candidate_remaining_quantity_hidden",
+                        "severity": "warn",
+                        "line_index": index,
+                        "item_name": item.get("item_name"),
+                        "message": "The delivery table contains a remaining-quantity column, but the row value was not visible or parsed.",
+                    }
+                )
+            if self._inspection_row_has_hidden_decision(text, item):
+                issues.append(
+                    {
+                        "code": "vl_candidate_inspection_decision_hidden",
+                        "severity": "warn",
+                        "line_index": index,
+                        "item_name": item.get("item_name"),
+                        "message": "The inspection table contains a decision column, but the row decision was not visible or parsed.",
                     }
                 )
 
@@ -301,6 +539,32 @@ class VLCandidateParser:
             and len(normalized.split()) >= 6
         )
 
+    def _delivery_row_has_hidden_remaining_quantity(self, text: str, item: dict[str, Any]) -> bool:
+        if not re.search(r"(잔량|remaining\s+qty|balance\s+qty)", text or "", flags=re.IGNORECASE):
+            return False
+        has_ordered = item.get("ordered_quantity") not in (None, "", [])
+        has_delivered = item.get("delivered_quantity") not in (None, "", [])
+        has_remaining = item.get("remaining_quantity") not in (None, "", [])
+        return has_ordered and has_delivered and not has_remaining
+
+    def _inspection_row_has_hidden_decision(self, text: str, item: dict[str, Any]) -> bool:
+        if not re.search(r"(판정|inspection\s+result|decision)", text or "", flags=re.IGNORECASE):
+            return False
+        has_breakdown = any(
+            item.get(field) not in (None, "", [])
+            for field in ("received_quantity", "accepted_quantity", "rejected_quantity")
+        )
+        has_decision = any(
+            item.get(field) not in (None, "", [])
+            for field in ("decision", "inspection_result", "judgement", "result")
+        )
+        return has_breakdown and not has_decision
+
+    def _row_boundary_needs_fax_review(self, text: str) -> bool:
+        return bool(
+            re.search(r"(\bfax\b|팩스|O/0|0/O|row\s*boundary|row boundary|행\s*경계)", text or "", flags=re.IGNORECASE)
+        )
+
     def _source_quality_issues(self, text: str) -> list[dict[str, Any]]:
         if not re.search(
             r"(저품질|낮은\s*신뢰|confidence\s*(?:낮|low)|table\s*confidence|distort|왜곡|poor\s*scan)",
@@ -403,3 +667,9 @@ class VLCandidateParser:
         if isinstance(value, list):
             return [self._safe_value(inner) for inner in value]
         return value
+
+    def _safe_nonnegative_amount(self, value: Any) -> Any:
+        numeric_value = self._decimal_value(value)
+        if numeric_value is not None and numeric_value < 0:
+            return None
+        return self._safe_value(value)

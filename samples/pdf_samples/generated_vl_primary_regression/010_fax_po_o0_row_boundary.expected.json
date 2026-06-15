@@ -1,0 +1,67 @@
+{
+  "document_type": "purchase_order",
+  "document_subtype": null,
+  "document_profile": null,
+  "document_number": "FAX-PO-GEN-010",
+  "issue_date": "2026-10-10",
+  "vendor": "오성테크",
+  "customer": "한빛제조",
+  "currency": "KRW",
+  "total_amount": 418000,
+  "subtotal": 380000,
+  "tax_amount": 38000,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": [
+    "item_name",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "supply_amount",
+    "tax_amount",
+    "line_total"
+  ],
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "spec": "100mm",
+      "quantity": 20,
+      "unit": "EA",
+      "unit_price": 8000,
+      "supply_amount": 160000,
+      "tax_amount": 16000,
+      "line_total": 176000,
+      "expected_review_flags": [
+        "fax_row_boundary_uncertain"
+      ]
+    },
+    {
+      "item_name": "S45C PIN 8X60",
+      "spec": "8x60",
+      "quantity": 100,
+      "unit": "EA",
+      "unit_price": 600,
+      "supply_amount": 60000,
+      "tax_amount": 6000,
+      "line_total": 66000,
+      "expected_review_flags": [
+        "fax_row_boundary_uncertain"
+      ]
+    },
+    {
+      "item_name": "M8 볼트 / 와셔 SET",
+      "spec": "M8",
+      "quantity": 1000,
+      "unit": "SET",
+      "unit_price": 160,
+      "supply_amount": 160000,
+      "tax_amount": 16000,
+      "line_total": 176000,
+      "expected_review_flags": [
+        "fax_row_boundary_uncertain"
+      ]
+    }
+  ]
+}

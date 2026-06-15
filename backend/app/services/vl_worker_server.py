@@ -65,6 +65,7 @@ def health() -> dict[str, Any]:
         "pipeline_initialized": _pipeline is not None,
         "concurrency": settings.paddleocr_vl_gguf_concurrency,
         "max_pages": settings.paddleocr_vl_gguf_max_pages,
+        "n_predict": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
         "last_error": _last_error,
     }
 
@@ -92,8 +93,12 @@ def analyze(request: VLAnalyzeRequest) -> dict[str, Any]:
         if not path.exists():
             raise FileNotFoundError(f"file_path_not_found: {path}")
         image_path = _prepare_input_image(path)
+        settings = get_settings()
         with _inference_lock:
-            output = _get_pipeline().predict(str(image_path))
+            output = _get_pipeline().predict(
+                str(image_path),
+                max_new_tokens=getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+            )
         text = extract_text(output)
         validation = validate_output_text(text, [])
         report.update(

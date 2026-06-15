@@ -35,6 +35,7 @@ def _ocr_settings(**overrides):
         "paddleocr_vl_gguf_timeout_seconds": 120.0,
         "paddleocr_vl_gguf_max_pages": 1,
         "paddleocr_vl_gguf_concurrency": 1,
+        "paddleocr_vl_gguf_n_predict": 512,
         "paddleocr_vl_gguf_smoke_passed": False,
         "paddleocr_vl_gguf_primary_reader_enabled": True,
         "paddleocr_vl_gguf_upload_pipeline_enabled": True,

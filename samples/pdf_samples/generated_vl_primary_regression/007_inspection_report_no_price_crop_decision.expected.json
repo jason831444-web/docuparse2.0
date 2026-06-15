@@ -1,0 +1,46 @@
+{
+  "document_type": "inspection_report",
+  "document_subtype": "incoming_inspection",
+  "document_profile": "quality_document",
+  "document_number": "IQC-GEN-2026-007",
+  "issue_date": "2026-10-07",
+  "vendor": "미래정밀",
+  "customer": "정우금속",
+  "currency": null,
+  "total_amount": null,
+  "subtotal": null,
+  "tax_amount": null,
+  "no_price_document": true,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "lot_no",
+    "spec",
+    "received_quantity",
+    "accepted_quantity",
+    "rejected_quantity"
+  ],
+  "hidden_or_cropped_columns": [
+    "decision"
+  ],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "lot_no": "LOT-BRG-1007-A",
+      "spec": "100mm",
+      "received_quantity": 50,
+      "accepted_quantity": 49,
+      "rejected_quantity": 1,
+      "decision": null
+    },
+    {
+      "item_name": "S45C PIN 8X60",
+      "lot_no": "LOT-PIN-1007-B",
+      "spec": "8x60",
+      "received_quantity": 300,
+      "accepted_quantity": 300,
+      "rejected_quantity": 0,
+      "decision": null
+    }
+  ]
+}

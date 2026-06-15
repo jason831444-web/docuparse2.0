@@ -15,6 +15,7 @@ sys.modules.setdefault(
 from app.models.document import Document, DocumentType, ProcessingStatus
 from app.services.document_processor import DocumentProcessor
 from app.services.file_ingestion import NormalizedDocument
+from app.services.parser import ParsedDocument
 
 
 class FakeVLWorker:
@@ -172,6 +173,194 @@ def test_vl_upload_pipeline_partially_promotes_blank_quantity_candidate():
     issue_codes = metadata["vl_candidate_summary"]["issue_codes"]
     assert "vl_candidate_requires_review" in issue_codes
     assert metadata["normalized_review_issues"][0]["code"] == "vl_candidate_review_required"
+
+
+def test_vl_upload_pipeline_suppresses_mismatched_amounts_during_promotion():
+    document = _document(document_type=DocumentType.transaction_statement)
+    structured = {
+        "document": {"document_type": "transaction_statement", "document_number": "TS-GEN-2026-008"},
+        "line_items": [
+            {
+                "item_name": "SUS304 3T PLATE",
+                "quantity": 3,
+                "unit": "EA",
+                "unit_price": 35000,
+                "supply_amount": 10,
+                "validation_warnings": ["explicit_quantity_price_amount_mismatch"],
+            }
+        ],
+    }
+
+    DocumentProcessor()._apply_vl_structured_candidate(document, structured)
+
+    assert len(document.line_items or []) == 1
+    assert document.line_items[0]["quantity"] == 3
+    assert document.line_items[0]["unit_price"] == 35000
+    assert "supply_amount" not in document.line_items[0]
+    assert "line_total" not in document.line_items[0]
+    assert "vl_amount_suppressed_due_to_arithmetic_mismatch" in document.line_items[0]["validation_warnings"]
+
+
+def test_vl_upload_pipeline_suppresses_mismatched_amounts_at_final_assignment_boundary():
+    line_items = [
+        {
+            "item_name": "SUS304 3T PLATE",
+            "quantity": 3,
+            "unit_price": 35000,
+            "supply_amount": 10,
+            "tax_amount": 1,
+            "line_total": 11,
+            "validation_warnings": ["explicit_quantity_price_amount_mismatch"],
+        }
+    ]
+
+    safe_items = DocumentProcessor()._line_items_for_extraction_method(
+        line_items,
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert safe_items[0]["quantity"] == 3
+    assert safe_items[0]["unit_price"] == 35000
+    assert "supply_amount" not in safe_items[0]
+    assert "tax_amount" not in safe_items[0]
+    assert "line_total" not in safe_items[0]
+    assert "vl_amount_suppressed_due_to_arithmetic_mismatch" in safe_items[0]["review_flags"]
+
+
+def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching():
+    processor = DocumentProcessor()
+    parsed = ParsedDocument(
+        document_type=DocumentType.transaction_statement,
+        document_number="TS-GEN-2026-008",
+        extracted_amount=Decimal("705100"),
+        currency="KRW",
+        line_items=[
+            {
+                "item_name": "SUS304 3T PLATE",
+                "quantity": 1,
+                "unit": "EA",
+                "unit_price": 35000,
+                "supply_amount": 35000,
+            }
+        ],
+    )
+    structured = {
+        "document": {
+            "document_type": "transaction_statement",
+            "document_number": "TS-GEN-2026-008",
+            "currency": "KRW",
+            "total": "705100",
+        },
+        "line_items": [
+            {
+                "item_name": "SUS304 3T PLATE",
+                "quantity": 3,
+                "unit": "EA",
+                "unit_price": 35000,
+                "validation_warnings": ["missing_line_amount", "row_amount_hidden_do_not_infer"],
+            }
+        ],
+    }
+
+    processor._apply_vl_structured_candidate_to_parsed(parsed, structured)
+
+    assert parsed.document_number == "TS-GEN-2026-008"
+    assert parsed.extracted_amount == Decimal("705100")
+    assert len(parsed.line_items) == 1
+    assert parsed.line_items[0]["quantity"] == 3
+    assert parsed.line_items[0]["unit_price"] == 35000
+    assert "supply_amount" not in parsed.line_items[0]
+    assert "row_amount_hidden_do_not_infer" in parsed.line_items[0]["validation_warnings"]
+
+
+def test_vl_upload_pipeline_does_not_promote_negative_document_level_amounts():
+    document = _document(document_type=DocumentType.general_document)
+    structured = {
+        "document": {
+            "document_type": "general_document",
+            "document_number": "RTN-GEN-2026-006",
+            "currency": "KRW",
+            "subtotal": "-3",
+            "tax": None,
+            "total": "12100",
+        },
+        "line_items": [],
+    }
+
+    DocumentProcessor()._apply_vl_structured_candidate(document, structured)
+
+    assert document.document_number == "RTN-GEN-2026-006"
+    assert document.currency == "KRW"
+    assert document.subtotal is None
+    assert document.extracted_amount == Decimal("12100")
+
+
+def test_document_processor_suppresses_negative_document_level_amount_boundary():
+    processor = DocumentProcessor()
+
+    assert processor._nonnegative_document_amount(Decimal("-3")) is None
+    assert processor._nonnegative_document_amount(Decimal("0")) == Decimal("0")
+    assert processor._nonnegative_document_amount(Decimal("12100")) == Decimal("12100")
+
+
+def test_document_processor_normalizes_internal_transfer_broad_type_boundary():
+    parsed = SimpleNamespace(document_type=DocumentType.other)
+
+    assert DocumentProcessor()._internal_transfer_document_type(parsed) == DocumentType.general_document
+
+
+def test_process_keeps_vl_internal_transfer_as_no_price_general_document(tmp_path):
+    path = tmp_path / "transfer.pdf"
+    path.write_bytes(b"%PDF-1.4\n% fake test file not read when VL succeeds\n")
+    text = """
+    사업장간 자재 이동 요청서
+    문서번호 TRF-GEN-2026-005
+    출고창고 1공장 원자재창고 입고창고 2공장 생산라인
+    No 품목명 내부품목코드 규격 요청수량 단위
+    1 SUS304 2T PLATE M-PLT-SUS304-2T-1000X2000 1000x2000 2 EA
+    2 M8 육각 볼트 P-BOLT-M8-20-ZN M8x20 500 EA
+    금액 없는 내부 이동 문서
+    """
+    document = Document(
+        original_filename="transfer.pdf",
+        stored_file_path=str(path),
+        mime_type="application/pdf",
+        processing_status=ProcessingStatus.uploaded,
+    )
+    processor = _processor(
+        FakeVLWorker(
+            {
+                "ok": True,
+                "provider": "paddleocr_vl_1_6_gguf",
+                "classification": "warn",
+                "text": text,
+                "validation": {"status": "warn", "ok": False},
+            }
+        )
+    )
+
+    class BrokenIngestion:
+        def ingest(self, *args, **kwargs):
+            raise AssertionError("PP-OCRv4 ingestion should be skipped for safe internal transfer VL promotion")
+
+    processor.ingestion = BrokenIngestion()
+
+    result = processor.process(FakeSession(document), document)
+
+    assert result.extraction_method == "paddleocr_vl_1_6_gguf_primary_reader"
+    assert result.document_type == DocumentType.general_document
+    assert result.document_number == "TRF-GEN-2026-005"
+    assert result.extracted_amount is None
+    assert result.currency is None
+    assert result.category == "internal_transfer"
+    assert "internal_transfer" in result.tags
+    assert result.workflow_metadata["document_subtype"] == "internal_transfer"
+    assert result.workflow_metadata["document_profile"] == "inventory_movement_document"
+    assert "no_price_document" in result.workflow_metadata["document_profiles"]
+    assert len(result.line_items or []) == 2
+    assert result.line_items[0]["quantity"] == 2
+    assert result.line_items[0]["requested_quantity"] == 2
+    assert "supply_amount" not in result.line_items[0]
 
 
 def test_vl_upload_pipeline_is_noop_when_worker_is_disabled():

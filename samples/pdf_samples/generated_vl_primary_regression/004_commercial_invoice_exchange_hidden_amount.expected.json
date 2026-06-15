@@ -1,0 +1,52 @@
+{
+  "document_type": "invoice",
+  "document_subtype": "commercial_invoice",
+  "document_profile": "foreign_currency_document",
+  "document_number": "INV-US-GEN-004",
+  "issue_date": "2026-10-04",
+  "vendor": "Global Motion Parts LLC",
+  "customer": "NeoFactory Korea",
+  "currency": "USD",
+  "total_amount": 650.0,
+  "subtotal": 650.0,
+  "tax_amount": 0.0,
+  "no_price_document": false,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "document_item_code",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price"
+  ],
+  "hidden_or_cropped_columns": [
+    "line_total"
+  ],
+  "line_items": [
+    {
+      "item_name": "Linear Guide Rail HGW20",
+      "document_item_code": "HGW20-1000",
+      "spec": "1000mm",
+      "quantity": 10,
+      "unit": "EA",
+      "unit_price": 45.0,
+      "line_total": null,
+      "expected_review_flags": [
+        "amount_column_not_visible"
+      ]
+    },
+    {
+      "item_name": "Cable Harness 500",
+      "document_item_code": "CBL-HAR-500",
+      "spec": "500mm",
+      "quantity": 50,
+      "unit": "EA",
+      "unit_price": 2.2,
+      "line_total": null,
+      "expected_review_flags": [
+        "amount_column_not_visible"
+      ]
+    }
+  ]
+}

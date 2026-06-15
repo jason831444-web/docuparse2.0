@@ -1,0 +1,51 @@
+{
+  "document_type": "purchase_order",
+  "document_subtype": null,
+  "document_profile": null,
+  "document_number": "PO-GEN-2026-001",
+  "issue_date": "2026-10-01",
+  "vendor": "대성정공",
+  "customer": "한빛제조",
+  "currency": "KRW",
+  "total_amount": 363000,
+  "subtotal": 330000,
+  "tax_amount": 33000,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": [
+    "item_name",
+    "document_item_code",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "supply_amount",
+    "tax_amount",
+    "line_total"
+  ],
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "SUS304 2T PLATE",
+      "document_item_code": "STS304-2T",
+      "spec": "1000x2000",
+      "quantity": 6,
+      "unit": "EA",
+      "unit_price": 25000,
+      "supply_amount": 150000,
+      "tax_amount": 15000,
+      "line_total": 165000
+    },
+    {
+      "item_name": "M8 육각볼트",
+      "document_item_code": "BOLT-M8-20",
+      "spec": "M8x20",
+      "quantity": 1500,
+      "unit": "EA",
+      "unit_price": 120,
+      "supply_amount": 180000,
+      "tax_amount": 18000,
+      "line_total": 198000
+    }
+  ]
+}

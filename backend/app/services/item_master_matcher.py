@@ -55,7 +55,10 @@ def normalize_item_text(value: object) -> str:
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
+    text = re.sub(r"\b(sus|sts)\s*3[o0]4\b", r"\g<1>304", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(sus|sts)\s*3[o0]4\s*([_-]?\s*\d+t)?\b", r"\g<1>304\g<2>", text, flags=re.IGNORECASE)
     text = re.sub(r"\bsus[\s\-_]*304\b", "sus304", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bsts[\s\-_]*304\b", "sus304", text, flags=re.IGNORECASE)
     text = re.sub(r"(\d+)\.0+t\b", r"\1t", text, flags=re.IGNORECASE)
     text = re.sub(r"[^0-9a-z가-힣]+", "", text)
     return text
@@ -223,6 +226,10 @@ class ItemMasterMatcher:
                     item["internal_item_code"] = best["internal_item_code"]
                     item["item_master_match_status"] = "alias_matched"
                     item["item_master_match_reason"] = "DOCUMENT_CODE_MATCHED_ITEM_ALIAS"
+            elif best and best.get("prefix_code_match") and Decimal(str(best["score"])) >= self.auto_threshold and not self._is_ambiguous(best, candidates) and not material_ambiguous:
+                item["internal_item_code"] = best["internal_item_code"]
+                item["item_master_match_status"] = "auto_matched"
+                item["item_master_match_reason"] = "PARTIAL_DOCUMENT_CODE_WITH_EXPLICIT_NAME_SPEC_MATCH"
             elif best and Decimal(str(best["score"])) >= self.auto_threshold and not self._is_ambiguous(best, candidates) and not material_ambiguous:
                 item["internal_item_code"] = best["internal_item_code"]
                 item["item_master_match_status"] = "auto_matched"
@@ -235,6 +242,9 @@ class ItemMasterMatcher:
                 item["internal_item_code"] = item.get("internal_item_code") if self._looks_like_real_code(item.get("internal_item_code")) else None
                 item["item_master_match_status"] = "unmatched"
                 item["item_master_match_reason"] = "NO_CONFIDENT_MATCH"
+            item["item_name"] = self._normalize_ocr_material_grade_display(item.get("item_name"))
+            if best and item.get("internal_item_code") == best.get("internal_item_code"):
+                self._suppress_conflicting_ocr_spec(item, best)
             if best:
                 logger.info(
                     "[DocuParse] item master candidate selected: item_index=%s, best_code=%s, score=%s, status=%s",
@@ -271,6 +281,13 @@ class ItemMasterMatcher:
         source_code = str(item.get("item_code") or "").strip()
         source_code_normalized = normalize_item_text(source_code)
         internal_code = str(getattr(master, "internal_item_code", "") or "").strip()
+        internal_code_normalized = normalize_item_text(internal_code)
+        prefix_code_match = bool(
+            source_code_normalized
+            and len(source_code_normalized) >= 8
+            and source_code_normalized != internal_code_normalized
+            and internal_code_normalized.startswith(source_code_normalized)
+        )
         alias_entries = self._active_alias_entries(master)
         alias_values = [entry["name"] for entry in alias_entries]
         alias_code_match = bool(source_code_normalized and any(source_code_normalized == normalize_item_text(alias) for alias in alias_values))
@@ -294,6 +311,13 @@ class ItemMasterMatcher:
             score = Decimal("1.00")
         else:
             score = (name_score * Decimal("0.55")) + (spec_score * Decimal("0.20")) + (unit_score * Decimal("0.15")) + (price_score * Decimal("0.10"))
+            if prefix_code_match:
+                source_thickness = self._thickness_token(" ".join(str(item.get(key) or "") for key in ["item_name", "specification", "item_code"]))
+                candidate_thickness = self._thickness_token(" ".join(str(value or "") for value in [internal_code, getattr(master, "item_name", None), getattr(master, "spec", None)]))
+                if source_thickness and source_thickness == candidate_thickness:
+                    score = max(score, Decimal("0.92"))
+                else:
+                    score = max(score, Decimal("0.70"))
         score = score.quantize(Decimal("0.001"))
         return {
             "item_master_id": str(getattr(master, "id", "")) if getattr(master, "id", None) is not None else None,
@@ -304,6 +328,7 @@ class ItemMasterMatcher:
             "standard_price": str(getattr(master, "standard_price", "")) if getattr(master, "standard_price", None) is not None else None,
             "score": str(score),
             "direct_code_match": direct_code_match,
+            "prefix_code_match": prefix_code_match,
             "alias_code_match": alias_code_match,
             "alias_name_match": bool(not direct_code_match and not alias_code_match and alias_score >= Decimal("0.96")),
             "score_breakdown": {
@@ -411,6 +436,37 @@ class ItemMasterMatcher:
             if re.search(pattern, compact):
                 return grade
         return None
+
+    def _thickness_token(self, value: object) -> str | None:
+        compact = normalize_item_text(value)
+        match = re.search(r"(\d+(?:\.\d+)?)t", compact)
+        if not match:
+            return None
+        return f"{match.group(1).rstrip('0').rstrip('.')}t"
+
+    def _normalize_ocr_material_grade_display(self, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        text = re.sub(r"\bSUS\s*3[oO]4\b", "SUS304", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bSTS\s*3[oO]4\b", "STS304", text, flags=re.IGNORECASE)
+        return text
+
+    def _suppress_conflicting_ocr_spec(self, item: dict[str, Any], best: dict[str, Any]) -> None:
+        source_spec = item.get("specification")
+        master_spec = best.get("spec")
+        if source_spec in (None, "", []) or master_spec in (None, "", []):
+            return
+        if self._spec_score(source_spec, master_spec) >= Decimal("0.45"):
+            return
+        item["source_specification"] = item.get("source_specification") or source_spec
+        item["matched_master_spec"] = master_spec
+        item.pop("specification", None)
+        for field in ("review_flags", "validation_warnings"):
+            values = list(item.get(field) or [])
+            if "specification_conflict_with_item_master" not in values:
+                values.append("specification_conflict_with_item_master")
+            item[field] = values
 
     def _looks_like_real_code(self, value: object) -> bool:
         text = str(value or "").strip()

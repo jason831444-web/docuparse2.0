@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.document import Document, DocumentType, ProcessingStatus
 from app.services.ai_document_understanding import LocalDocumentAIService, get_document_ai_service
 from app.services.ai_escalation import should_escalate_to_ai
@@ -36,6 +37,7 @@ _PROCESSING_SEMAPHORE = threading.BoundedSemaphore(3)
 
 class DocumentProcessor:
     def __init__(self, ocr: OCRService | None = None, parser: DocumentParser | None = None) -> None:
+        self.settings = get_settings()
         self.ocr = ocr or OCRService()
         self.parser = parser or DocumentParser()
         self.ingestion = FileIngestionService(ocr=self.ocr)
@@ -77,6 +79,9 @@ class DocumentProcessor:
                 normalized = self.ingestion.ingest(stored_path, document.original_filename, document.mime_type)
             raw_text = normalized.normalized_text
             parsed = self.parser.parse(raw_text, document.original_filename)
+            vl_promoted_structured = self._vl_promoted_structured_candidate(vl_primary_attempt)
+            if vl_promoted_structured:
+                self._apply_vl_structured_candidate_to_parsed(parsed, vl_promoted_structured)
             extraction_quality = self.quality.evaluate_extraction(normalized, parsed)
             route = self.router.route(normalized, parsed, extraction_quality)
             analysis_path = normalized.primary_image_path or stored_path
@@ -150,9 +155,12 @@ class DocumentProcessor:
             document.title = sanitize_for_postgres(ai_result.title or parsed.title)
             deterministic_first = self._parsed_manufacturing_has_business_data(parsed)
             document.extracted_date = parsed.extracted_date or ai_result.extracted_date if deterministic_first else ai_result.extracted_date or parsed.extracted_date
-            document.extracted_amount = parsed.extracted_amount or ai_result.extracted_amount if deterministic_first else ai_result.extracted_amount or parsed.extracted_amount
-            document.subtotal = (parsed.subtotal or ai_result.subtotal) if deterministic_first else (ai_result.subtotal or parsed.subtotal)
-            document.tax = (parsed.tax or ai_result.tax) if deterministic_first else (ai_result.tax or parsed.tax)
+            selected_extracted_amount = parsed.extracted_amount or ai_result.extracted_amount if deterministic_first else ai_result.extracted_amount or parsed.extracted_amount
+            selected_subtotal = (parsed.subtotal or ai_result.subtotal) if deterministic_first else (ai_result.subtotal or parsed.subtotal)
+            selected_tax = (parsed.tax or ai_result.tax) if deterministic_first else (ai_result.tax or parsed.tax)
+            document.extracted_amount = self._nonnegative_document_amount(selected_extracted_amount)
+            document.subtotal = self._nonnegative_document_amount(selected_subtotal)
+            document.tax = self._nonnegative_document_amount(selected_tax)
             document.currency = ai_result.currency or parsed.currency
             document.merchant_name = sanitize_for_postgres(ai_result.merchant_name or parsed.merchant_name)
             document.vendor_name = sanitize_for_postgres((parsed.vendor_name or ai_result.vendor_name) if deterministic_first else (ai_result.vendor_name or parsed.vendor_name) or document.merchant_name)
@@ -162,7 +170,10 @@ class DocumentProcessor:
             document.due_date = (parsed.due_date or ai_result.due_date) if deterministic_first else (ai_result.due_date or parsed.due_date)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.issue_date, document.due_date = self._normalize_manufacturing_dates(parsed, document.issue_date, document.due_date)
-            document.line_items = sanitize_for_postgres((parsed.line_items or ai_result.line_items) if deterministic_first else (ai_result.line_items or parsed.line_items or []))
+            selected_line_items = (parsed.line_items or ai_result.line_items) if deterministic_first else (ai_result.line_items or parsed.line_items or [])
+            document.line_items = sanitize_for_postgres(
+                self._line_items_for_extraction_method(selected_line_items, normalized.extraction_method)
+            )
             document.low_confidence_fields = sanitize_for_postgres([] if deterministic_first and parsed.line_items else ai_result.low_confidence_fields or [])
             document.category = ai_result.category or parsed.category
             document.tags = sanitize_for_postgres(ai_result.tags or parsed.tags)
@@ -194,34 +205,51 @@ class DocumentProcessor:
                 document.ai_document_type = parsed.document_type
                 document.document_number = sanitize_for_postgres(parsed.document_number or document.document_number)
                 if getattr(parsed, "line_items", None):
-                    document.line_items = sanitize_for_postgres(parsed.line_items)
+                    document.line_items = sanitize_for_postgres(
+                        self._line_items_for_extraction_method(parsed.line_items, normalized.extraction_method)
+                    )
                 document.category = "return_note"
                 document.tags = ["return_note"]
             if self._is_internal_transfer_parsed_document(parsed, raw_text):
-                document.document_type = parsed.document_type
-                document.ai_document_type = parsed.document_type
+                internal_transfer_type = self._internal_transfer_document_type(parsed)
+                document.document_type = internal_transfer_type
+                document.ai_document_type = internal_transfer_type
                 document.document_number = sanitize_for_postgres(parsed.document_number or document.document_number)
                 document.extracted_amount = None
                 document.subtotal = None
                 document.tax = None
                 document.currency = None
                 if getattr(parsed, "line_items", None):
-                    document.line_items = sanitize_for_postgres(parsed.line_items)
+                    document.line_items = sanitize_for_postgres(
+                        self._line_items_for_extraction_method(parsed.line_items, normalized.extraction_method)
+                    )
                 document.category = "internal_transfer"
                 document.tags = ["internal_transfer"]
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
-                document.document_type = parsed.document_type
-                document.ai_document_type = parsed.document_type
-                document.category = parsed.category or parsed.document_type.value
-                document.tags = [parsed.document_type.value]
-                document.line_items = sanitize_for_postgres(self.item_master_matcher.match_line_items(db, document.line_items or []))
+                if self._is_internal_transfer_parsed_document(parsed, raw_text):
+                    internal_transfer_type = self._internal_transfer_document_type(parsed)
+                    document.document_type = internal_transfer_type
+                    document.ai_document_type = internal_transfer_type
+                    document.category = parsed.category or "internal_transfer"
+                    document.tags = ["internal_transfer"]
+                else:
+                    document.document_type = parsed.document_type
+                    document.ai_document_type = parsed.document_type
+                    document.category = parsed.category or parsed.document_type.value
+                    document.tags = [parsed.document_type.value]
+                document.line_items = sanitize_for_postgres(
+                    self.item_master_matcher.match_line_items(
+                        db,
+                        self._line_items_for_extraction_method(document.line_items or [], normalized.extraction_method),
+                    )
+                )
             document.title = self._clean_final_title(document.title, interpretation)
             document.merchant_name = self._clean_final_merchant(document.merchant_name)
             if interpretation.summary_hint:
                 document.summary = sanitize_for_postgres(interpretation.summary_hint)
             document.tags = self._merge_tags(document.tags, interpretation, document.document_type)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
-                document.tags = [parsed.document_type.value]
+                document.tags = ["internal_transfer"] if self._is_internal_transfer_parsed_document(parsed, raw_text) else [parsed.document_type.value]
             taxonomy = self.taxonomy.classify(
                 document,
                 ai_result.cleaned_raw_text or raw_text,
@@ -345,6 +373,54 @@ class DocumentProcessor:
     ) -> dict | None:
         attempt = self._vl_primary_reader_attempt(stored_path, document, workflow_metadata)
         return attempt.get("metadata") if attempt else None
+
+    def _vl_promoted_structured_candidate(self, attempt: dict | None) -> dict | None:
+        if not isinstance(attempt, dict) or not attempt.get("promoted"):
+            return None
+        metadata = attempt.get("metadata") if isinstance(attempt.get("metadata"), dict) else {}
+        for candidate in metadata.get("vl_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            structured = candidate.get("structured_candidate") if isinstance(candidate.get("structured_candidate"), dict) else None
+            if structured and (
+                candidate.get("confirmed_promotion")
+                or (metadata.get("vl_candidate_summary") or {}).get("promotion_applied")
+            ):
+                return structured
+        return None
+
+    def _apply_vl_structured_candidate_to_parsed(self, parsed: Any, structured: dict) -> None:
+        candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}
+        if candidate_doc.get("document_type"):
+            try:
+                parsed.document_type = DocumentType(str(candidate_doc["document_type"]))
+            except Exception:
+                pass
+        for attr, key in (
+            ("document_number", "document_number"),
+            ("vendor_name", "vendor_name"),
+            ("customer_name", "customer_name"),
+            ("currency", "currency"),
+        ):
+            value = candidate_doc.get(key)
+            if value not in (None, "", []):
+                setattr(parsed, attr, value)
+        issue_date = self._vl_date(candidate_doc.get("issue_date"))
+        due_date = self._vl_date(candidate_doc.get("due_date"))
+        if issue_date:
+            parsed.issue_date = issue_date
+            parsed.extracted_date = issue_date
+        if due_date:
+            parsed.due_date = due_date
+        for attr, key in (("subtotal", "subtotal"), ("tax", "tax"), ("extracted_amount", "total")):
+            value = self._vl_decimal(candidate_doc.get(key))
+            if value is not None:
+                if attr in {"subtotal", "tax", "extracted_amount"} and value < 0:
+                    continue
+                setattr(parsed, attr, value)
+        line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
+        if line_items:
+            parsed.line_items = self._safe_vl_promoted_line_items(line_items)
 
     def _vl_primary_reader_metadata_from_result(
         self,
@@ -506,10 +582,12 @@ class DocumentProcessor:
         for attr, key in (("subtotal", "subtotal"), ("tax", "tax"), ("extracted_amount", "total")):
             value = self._vl_decimal(candidate_doc.get(key))
             if value is not None:
+                if attr in {"subtotal", "tax", "extracted_amount"} and value < 0:
+                    continue
                 setattr(document, attr, value)
         line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
         if line_items:
-            document.line_items = sanitize_for_postgres(line_items)
+            document.line_items = sanitize_for_postgres(self._safe_vl_promoted_line_items(line_items))
             document.low_confidence_fields = []
         field_sources = dict(document.field_sources or {})
         for field in ("document_number", "vendor_name", "customer_name", "issue_date", "due_date", "currency", "subtotal", "tax", "extracted_amount", "line_items"):
@@ -531,6 +609,42 @@ class DocumentProcessor:
             return Decimal(str(value).replace(",", ""))
         except Exception:
             return None
+
+    def _safe_vl_promoted_line_items(self, line_items: list[dict]) -> list[dict]:
+        safe_items: list[dict] = []
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            safe_item = dict(item)
+            warnings = list(safe_item.get("validation_warnings") or [])
+            warning_set = {str(warning) for warning in warnings}
+            if "explicit_quantity_price_amount_mismatch" in warning_set:
+                for field in ("supply_amount", "tax_amount", "line_total"):
+                    safe_item.pop(field, None)
+                if "vl_amount_suppressed_due_to_arithmetic_mismatch" not in warning_set:
+                    warnings.append("vl_amount_suppressed_due_to_arithmetic_mismatch")
+                safe_item["validation_warnings"] = sorted(set(warnings))
+                review_flags = list(safe_item.get("review_flags") or [])
+                if "vl_amount_suppressed_due_to_arithmetic_mismatch" not in review_flags:
+                    review_flags.append("vl_amount_suppressed_due_to_arithmetic_mismatch")
+                safe_item["review_flags"] = sorted(set(review_flags))
+            safe_items.append(safe_item)
+        return safe_items
+
+    def _line_items_for_extraction_method(self, line_items: list[dict], extraction_method: str | None) -> list[dict]:
+        if extraction_method == "paddleocr_vl_1_6_gguf_primary_reader":
+            return self._safe_vl_promoted_line_items(line_items or [])
+        return line_items or []
+
+    def _nonnegative_document_amount(self, value: Any) -> Any:
+        if value is None:
+            return None
+        try:
+            if Decimal(str(value)) < 0:
+                return None
+        except Exception:
+            return value
+        return value
 
     def _bbox_layout_debug_metadata(
         self,
@@ -1047,6 +1161,13 @@ class DocumentProcessor:
             or re.search(r"\binternal_transfer\b", f"{category} {tags}", flags=re.IGNORECASE)
             or re.search(r"(내부\s*(?:자재\s*)?이동|자재\s*이동|출고창고|입고창고|내부품목코드|요청수량)", text, flags=re.IGNORECASE)
         )
+
+    def _internal_transfer_document_type(self, parsed: object):
+        parsed_type = getattr(parsed, "document_type", None)
+        parsed_value = getattr(parsed_type, "value", str(parsed_type or ""))
+        if parsed_value in {"", "other", "memo", "document", "general_document"}:
+            return DocumentType.general_document
+        return parsed_type
 
     def _sum_line_item_field(self, line_items: list[dict], field: str) -> Decimal | None:
         total = Decimal("0")

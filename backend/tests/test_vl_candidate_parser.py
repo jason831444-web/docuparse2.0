@@ -1,5 +1,8 @@
 from app.services.vl_candidate_parser import VLCandidateParser
 from app.scripts.smoke_paddleocr_vl_gguf import build_docuparse_vl_candidate_metadata
+from app.models.document import DocumentType
+from app.services.parser import ParsedDocument
+from decimal import Decimal
 
 
 VL_08_TEXT = """견적번호 QT-2026-0808-009 견적일 2026-08-08
@@ -104,6 +107,171 @@ def test_vl_candidate_parser_flags_priced_rows_missing_line_amounts():
     assert "vl_candidate_missing_line_amount" in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_flags_delivery_remaining_quantity_hidden():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join([
+            "납품서",
+            "문서번호 DN-GEN-2026-003",
+            "No 품목명 문서품목코드 규격 발주수량 납품수량 잔량 단위",
+            "1 베어링 하우징 BRG-H-100 100mm 80 50 EA",
+            "2 S45C PIN 8X60 PIN-8X60 8x60 300 300 EA",
+        ]),
+        filename="delivery-note-cropped-remaining.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_remaining_quantity_hidden" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_flags_inspection_decision_hidden():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join([
+            "입고검사성적서",
+            "문서번호 IQC-GEN-2026-007",
+            "No 품목명 Lot No 규격 입고수량 합격수량 불량수량 판정",
+            "1 베어링 하우징 LOT-BRG-1007-A 100mm 50 49 1",
+            "2 S45C PIN 8X60 LOT-PIN-1007-B 8x60 300 300 0",
+        ]),
+        filename="inspection-report-cropped-decision.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_inspection_decision_hidden" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_flags_fax_row_boundary_uncertainty():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join([
+            "FAX 발주서",
+            "문서번호 FAX-PO-GEN-010",
+            "No 품목명 규격 수량 단위 단가 공급가액 세액 합계금액",
+            "1 베어링 하우징 100mm 20 EA 8000 160000 16000 176000",
+            "2 S45C PIN 8X60 8x60 100 EA 600 60000 6000 66000",
+            "※ 팩스형 품질. 176,0OO처럼 O/0 혼동 가능. row boundary review 필요.",
+        ]),
+        filename="fax-po.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_fax_row_boundary_uncertain" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_restores_single_line_hidden_amount_table_rows():
+    candidate = VLCandidateParser().parse_text(
+        "거래명세서 TS-GEN-008 공급업체 한빛제조 고객사 오성테크 "
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 "
+        "SUS304 3T PLATE STS30 1000x2000 3 EA 35000 10 "
+        "M8 육각볼트 BOLT-M8 M8x20 2000 EA 120 24 "
+        "공급가액 641,000 세액 64,100 총액 705,100",
+        filename="statement-hidden-total.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 2
+    first, second = candidate["line_items"]
+    assert first["item_name"].startswith("SUS304 3T PLATE")
+    assert first["quantity"] == 3
+    assert first["unit_price"] == 35000
+    assert "row_amount_hidden_do_not_infer" in first["validation_warnings"]
+    assert second["item_name"] == "M8 육각볼트"
+    assert second["quantity"] == 2000
+    assert second["unit_price"] == 120
+    assert "row_amount_hidden_do_not_infer" in second["validation_warnings"]
+    assert "vl_candidate_row_amount_hidden_do_not_infer" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_restores_single_line_rounding_adjustment_rows():
+    candidate = VLCandidateParser().parse_text(
+        "세금계산서 TI-GEN-009 공급자 정우금속 공급받는자 네오팩토리 "
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 "
+        "PCB Connector 12P CON-PCB-12P 12P 333 EA 301 100 "
+        "조정금액 ADJ-ROUND - -1 EA 1 -1 "
+        "공급가액 269,709 세액 26,971 총액 296,680",
+        filename="tax-invoice-hidden-row-tax.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 2
+    first, second = candidate["line_items"]
+    assert first["item_name"] == "PCB Connector 12P"
+    assert first["quantity"] == 333
+    assert first["unit_price"] == 301
+    assert "row_amount_hidden_do_not_infer" in first["validation_warnings"]
+    assert second["item_name"] == "조정금액"
+    assert second["quantity"] == -1
+    assert second["unit_price"] == 1
+    assert "row_amount_hidden_do_not_infer" in second["validation_warnings"]
+
+
+def test_vl_candidate_parser_uses_pre_repair_rows_when_visual_amount_column_is_hidden():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "거래명세서",
+                "문서번호 TS-GEN-2026-008",
+                "공급업체 한빛제조",
+                "고객사 오성테크",
+                "No 품목명 품목코드 규격 수량 단위 단가 공",
+                "1 SUS304 3T PLATE 1000x2000 3 EA 35000",
+                "2 M8 육각볼트 M8x20 2000 EA 120",
+                "공급가액 641,000",
+                "세액 64,100",
+                "총액 705,100",
+                "Text layer contains hidden row totals; visual confirmed values must not pretend those columns are visible.",
+            ]
+        ),
+        filename="statement-hidden-total.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 2
+    first, second = candidate["line_items"]
+    assert first["quantity"] == 3
+    assert first["unit_price"] == 35000
+    assert "supply_amount" not in first
+    assert "row_amount_hidden_do_not_infer" in first["validation_warnings"]
+    assert second["quantity"] == 2000
+    assert second["unit_price"] == 120
+    assert "supply_amount" not in second
+    assert "row_amount_hidden_do_not_infer" in second["validation_warnings"]
+
+
+def test_vl_candidate_parser_preserves_negative_adjustment_amount_when_positive_rows_are_hidden():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "전자 세금계산서",
+                "문서번호 TAX-GEN-2026-009",
+                "No 품목명 품목코드 규격 수량 단위 단가 공급",
+                "1 PCB Connector 12P CON-PCB-12P 12P 333 EA 301",
+                "2 조정금액 ROUND-ADJ 원단위 조정 1 식 -1 -1",
+                "공급가액 269,709",
+                "세액 26,971",
+                "총액 296,680",
+                "Row supply amount for the first item is visually clipped; summary subtotal/tax/total remain visible.",
+            ]
+        ),
+        filename="tax-invoice-hidden-row-tax.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 2
+    first, second = candidate["line_items"]
+    assert first["quantity"] == 333
+    assert first["unit_price"] == 301
+    assert "supply_amount" not in first
+    assert "row_amount_hidden_do_not_infer" in first["validation_warnings"]
+    assert second["item_name"] == "조정금액"
+    assert second["supply_amount"] == -1
+
+
 def test_vl_candidate_parser_flags_header_row_promoted_as_item():
     candidate = VLCandidateParser().parse_text(
         "\n".join(
@@ -139,6 +307,23 @@ def test_vl_candidate_parser_flags_return_credit_type_uncertainty():
 
     assert candidate is not None
     assert "vl_candidate_return_credit_type_uncertain" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_suppresses_negative_document_level_amounts():
+    parser = VLCandidateParser()
+    parsed = ParsedDocument(
+        document_type=DocumentType.general_document,
+        document_number="RTN-GEN-2026-006",
+        subtotal=Decimal("-3"),
+        extracted_amount=Decimal("12100"),
+    )
+
+    compact = parser._compact_document(parsed)
+    issues = parser._structural_issues(parsed, "반품/차감요청서 관련납품서 DN-GEN-2026-003 총액 12100")
+
+    assert compact["subtotal"] is None
+    assert compact["total"] == "12100"
+    assert "vl_candidate_negative_document_amount_suppressed" in [issue["code"] for issue in issues]
 
 
 def test_vl_candidate_parser_does_not_flag_inspection_note_as_return_credit():

@@ -1,0 +1,54 @@
+{
+  "document_type": "invoice",
+  "document_subtype": "tax_invoice",
+  "document_profile": "tax_document",
+  "document_number": "TAX-GEN-2026-009",
+  "issue_date": "2026-10-09",
+  "vendor": "정우금속",
+  "customer": "한빛제조",
+  "currency": "KRW",
+  "total_amount": 296680,
+  "subtotal": 269709,
+  "tax_amount": 26971,
+  "no_price_document": false,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "document_item_code",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price"
+  ],
+  "hidden_or_cropped_columns": [
+    "tax_amount",
+    "line_total"
+  ],
+  "line_items": [
+    {
+      "item_name": "PCB Connector 12P",
+      "document_item_code": "CON-PCB-12P",
+      "spec": "12P",
+      "quantity": 333,
+      "unit": "EA",
+      "unit_price": 301,
+      "supply_amount": null,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "row_amount_hidden_do_not_infer"
+      ]
+    },
+    {
+      "item_name": "조정금액",
+      "document_item_code": "ROUND-ADJ",
+      "spec": "원단위 조정",
+      "quantity": 1,
+      "unit": "식",
+      "unit_price": -1,
+      "supply_amount": -1,
+      "tax_amount": null,
+      "line_total": null
+    }
+  ]
+}

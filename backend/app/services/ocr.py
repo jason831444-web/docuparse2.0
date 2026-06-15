@@ -575,6 +575,7 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
         "max_pages": settings.paddleocr_vl_gguf_max_pages,
         "concurrency": settings.paddleocr_vl_gguf_concurrency,
         "timeout_seconds": settings.paddleocr_vl_gguf_timeout_seconds,
+        "n_predict": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
         "smoke_passed": settings.paddleocr_vl_gguf_smoke_passed,
         "primary_reader_enabled": settings.paddleocr_vl_gguf_primary_reader_enabled,
         "primary_reader_available": False,

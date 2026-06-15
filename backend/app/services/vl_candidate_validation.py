@@ -39,6 +39,11 @@ class VLCandidateValidationGate:
         "vl_candidate_total_mismatch",
         "vl_candidate_row_count_mismatch",
         "vl_candidate_malformed_amount_columns_repaired",
+        "vl_candidate_explicit_quantity_price_amount_mismatch",
+        "vl_candidate_row_amount_hidden_do_not_infer",
+        "vl_candidate_remaining_quantity_hidden",
+        "vl_candidate_inspection_decision_hidden",
+        "vl_candidate_fax_row_boundary_uncertain",
     }
 
     non_promotable_issue_codes = {

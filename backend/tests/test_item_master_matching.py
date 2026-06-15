@@ -4,7 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.services.item_master_matcher import ItemMasterMatcher, parse_item_master_csv
+from app.services.item_master_matcher import ItemMasterMatcher, normalize_item_text, parse_item_master_csv
 from app.services.parser import DocumentParser
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 from app.models.document import Document
@@ -85,6 +85,56 @@ def test_item_master_matching_auto_matches_quotation_items():
 
     assert document.line_items[0]["internal_item_code"] == "BRK-SUS-01"
     assert document.line_items[1]["internal_item_code"] == "PLT-FIX-02"
+
+
+def test_item_master_normalization_handles_ocr_o_zero_material_grade_confusion():
+    assert normalize_item_text("SUS3O4 2T PLATE") == normalize_item_text("SUS304 2T PLATE")
+    assert normalize_item_text("STS3O4") == normalize_item_text("SUS304")
+
+
+def test_item_master_matching_uses_code_prefix_with_explicit_thickness_to_resolve_ocr_truncated_code():
+    masters = [
+        SimpleNamespace(
+            internal_item_code="M-PLT-SUS304-2T-1000X2000",
+            item_name="SUS304 스테인리스 판재 2.0T 1000x2000",
+            normalized_item_name=normalize_item_text("SUS304 스테인리스 판재 2.0T 1000x2000"),
+            spec="2.0T 1000x2000",
+            unit="EA",
+            standard_price=Decimal("25000"),
+            active=True,
+            aliases=[],
+        ),
+        SimpleNamespace(
+            internal_item_code="M-PLT-SUS304-3T-1000X2000",
+            item_name="SUS304 스테인리스 판재 3.0T 1000x2000",
+            normalized_item_name=normalize_item_text("SUS304 스테인리스 판재 3.0T 1000x2000"),
+            spec="3.0T 1000x2000",
+            unit="EA",
+            standard_price=Decimal("37000"),
+            active=True,
+            aliases=[],
+        ),
+    ]
+    matched = ItemMasterMatcher().match_line_items_against_masters(
+        [
+            {
+                "item_name": "SUS3O4 2T PLATE",
+                "item_code": "M-PLT-SUS304-",
+                "specification": "M8x20",
+            }
+        ],
+        masters,
+    )[0]
+
+    assert matched["internal_item_code"] == "M-PLT-SUS304-2T-1000X2000"
+    assert matched["item_name"] == "SUS304 2T PLATE"
+    assert "specification" not in matched
+    assert matched["source_specification"] == "M8x20"
+    assert matched["matched_master_spec"] == "2.0T 1000x2000"
+    assert "specification_conflict_with_item_master" in matched["review_flags"]
+    assert matched["item_master_match_status"] == "auto_matched"
+    assert matched["item_master_match_reason"] == "PARTIAL_DOCUMENT_CODE_WITH_EXPLICIT_NAME_SPEC_MATCH"
+    assert matched["item_master_candidates"][0]["prefix_code_match"] is True
 
 
 def test_ambiguous_sus_items_include_m001_candidate_without_forcing_code():

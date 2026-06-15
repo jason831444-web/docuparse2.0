@@ -1,0 +1,41 @@
+{
+  "document_type": "general_document",
+  "document_subtype": "internal_transfer",
+  "document_profile": "inventory_movement_document",
+  "document_number": "TRF-GEN-2026-005",
+  "issue_date": "2026-10-05",
+  "vendor": null,
+  "customer": null,
+  "currency": null,
+  "total_amount": null,
+  "subtotal": null,
+  "tax_amount": null,
+  "no_price_document": true,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "internal_item_code",
+    "spec",
+    "requested_quantity",
+    "unit"
+  ],
+  "hidden_or_cropped_columns": [
+    "note"
+  ],
+  "line_items": [
+    {
+      "item_name": "SUS304 2T PLATE",
+      "internal_item_code": "M-PLT-SUS304-2T-1000X2000",
+      "spec": "1000x2000",
+      "requested_quantity": 2,
+      "unit": "EA"
+    },
+    {
+      "item_name": "M8 육각 볼트",
+      "internal_item_code": "P-BOLT-M8-20-ZN",
+      "spec": "M8x20",
+      "requested_quantity": 500,
+      "unit": "EA"
+    }
+  ]
+}

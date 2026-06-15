@@ -1,0 +1,48 @@
+{
+  "document_type": "general_document",
+  "document_subtype": "credit_note",
+  "document_profile": "return_document",
+  "document_number": "RTN-GEN-2026-006",
+  "issue_date": "2026-10-06",
+  "vendor": "한빛제조",
+  "customer": "오성테크",
+  "currency": "KRW",
+  "total_amount": 12100,
+  "subtotal": 11000,
+  "tax_amount": 1100,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": [
+    "item_name",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "supply_amount",
+    "tax_amount",
+    "line_total"
+  ],
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "spec": "100mm",
+      "quantity": 1,
+      "unit": "EA",
+      "unit_price": 8000,
+      "supply_amount": 8000,
+      "tax_amount": 800,
+      "line_total": 8800
+    },
+    {
+      "item_name": "S45C PIN",
+      "spec": "8x60",
+      "quantity": 5,
+      "unit": "EA",
+      "unit_price": 600,
+      "supply_amount": 3000,
+      "tax_amount": 300,
+      "line_total": 3300
+    }
+  ]
+}

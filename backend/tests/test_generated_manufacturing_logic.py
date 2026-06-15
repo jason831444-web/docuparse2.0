@@ -3,6 +3,8 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.document import Document, DocumentType
 from app.services.item_master_matcher import ItemMasterMatcher, parse_item_master_csv
 from app.services.parser import DocumentParser
@@ -16,6 +18,13 @@ FIXTURE_ROOT = ROOT / "samples" / "generated_logic_tests"
 
 def _text(name: str) -> str:
     return (FIXTURE_ROOT / name).read_text()
+
+
+def _optional_legacy_text(path: str) -> str:
+    fixture = ROOT / path
+    if not fixture.exists():
+        pytest.skip(f"legacy realistic sample fixture is not present: {path}")
+    return fixture.read_text()
 
 
 def _masters(active_only: bool = True):
@@ -308,7 +317,7 @@ def test_internal_transfer_inline_quantity_rows_are_no_price_inventory_document(
 
 
 def test_real_delivery_note_preserves_ordered_delivered_remaining_quantities():
-    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/14_real_delivery_note_partial_receipt_no_prices.txt").read_text()
+    text = _optional_legacy_text("samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/14_real_delivery_note_partial_receipt_no_prices.txt")
     parsed = DocumentParser().parse(text, "14_real_delivery_note_partial_receipt_no_prices.txt")
 
     assert parsed.document_type == DocumentType.delivery_note
@@ -330,7 +339,7 @@ def test_real_delivery_note_preserves_ordered_delivered_remaining_quantities():
 
 
 def test_real_commercial_invoice_rows_keep_usd_amount_columns_without_exchange_rate_leak():
-    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/16_real_commercial_invoice_exchange_rate.txt").read_text()
+    text = _optional_legacy_text("samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/16_real_commercial_invoice_exchange_rate.txt")
     parsed = DocumentParser().parse(text, "16_real_commercial_invoice_exchange_rate.txt")
 
     assert parsed.document_type == DocumentType.invoice
@@ -347,7 +356,7 @@ def test_real_commercial_invoice_rows_keep_usd_amount_columns_without_exchange_r
 
 
 def test_real_inspection_report_preserves_lot_and_inspection_quantities():
-    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/18_real_incoming_inspection_report.txt").read_text()
+    text = _optional_legacy_text("samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/18_real_incoming_inspection_report.txt")
     parsed = DocumentParser().parse(text, "18_real_incoming_inspection_report.txt")
 
     assert parsed.document_type == DocumentType.inspection_report
@@ -358,6 +367,7 @@ def test_real_inspection_report_preserves_lot_and_inspection_quantities():
     assert first["item_name"] == "베어링 하우징"
     assert first["lot_no"] == "LOT-BRG-0918-A"
     assert first["specification"] == "100mm"
+    assert first["lot_no"] == "LOT-BRG-0918-A"
     assert first["quantity"] == 50
     assert first["received_quantity"] == 50
     assert first["accepted_quantity"] == 49
@@ -403,7 +413,7 @@ def test_inspection_report_without_inspection_quantity_breakdown_requires_review
 
 
 def test_real_long_invoice_suppresses_ghost_line_totals_when_supply_matches_document_total():
-    text = (ROOT / "samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/20_real_invoice_multipage_many_lines.txt").read_text()
+    text = _optional_legacy_text("samples/pdf_samples/docuparse_realistic_manufacturing_samples/txt/20_real_invoice_multipage_many_lines.txt")
     parsed = DocumentParser().parse(text, "20_real_invoice_multipage_many_lines.txt")
 
     assert parsed.document_number == "INV-2026-0920-LONG"
@@ -769,6 +779,44 @@ def test_vl_inline_commercial_invoice_rows_keep_vendor_sku_as_item_code():
     assert parsed.line_items[2]["line_total"] == 60
 
 
+def test_vl_invoice_with_named_middle_segment_is_classified_as_invoice():
+    text = "\n".join([
+        "인보이스",
+        "문서번호 INV-GEN-2026-011",
+        "Vendor SKU는 품목코드 후보이며 별도 품목 행이 아닙니다.",
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "Linear Guide Rail HGW20 HGW20-1000 1000mm 10 EA 45000 450000 45000 495000",
+        "Cable Harness 500 CBL-HAR-500 500mm 50 EA 14000 700000 70000 770000",
+        "합계금액 1,265,000",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_generated_invoice.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-GEN-2026-011"
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["item_name"] == "Linear Guide Rail HGW20"
+    assert parsed.line_items[0]["item_code"] == "HGW20-1000"
+    assert parsed.line_items[1]["item_name"] == "Cable Harness 500"
+    assert parsed.line_items[1]["item_code"] == "CBL-HAR-500"
+
+
+def test_vl_inline_specification_normalizes_multiplication_symbol_for_erp_fields():
+    text = "\n".join([
+        "발주서",
+        "문서번호 PO-GEN-2026-001",
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "SUS304 2T PLATE STS304-2T 1000×2000 6 EA 25000 150000 15000 165000",
+        "M8 육각볼트 BOLT-M8-20 M8×20 1500 EA 120 180000 18000 198000",
+        "합계금액 363000",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_spec_multiply_symbol.txt")
+
+    assert parsed.line_items[0]["specification"] == "1000x2000"
+    assert parsed.line_items[1]["specification"] == "M8x20"
+
+
 def test_vl_inline_mixed_language_purchase_order_preserves_three_rows():
     text = "\n".join([
         "발주서",
@@ -979,6 +1027,62 @@ def test_vl_inline_statement_rows_strip_transaction_date_prefix():
     assert parsed.line_items[0]["supply_amount"] == 240000
     assert parsed.line_items[1]["item_name"] == "SUS WASHER"
     assert parsed.line_items[1]["specification"] == "M8"
+
+
+def test_vl_inline_blank_quantity_preserves_visible_price_and_supply_amount():
+    text = "\n".join([
+        "견적서",
+        "문서번호 QT-GEN-2026-002",
+        "No 품목명 품목코드 규격 수량 단위 단가 공급가액",
+        "1 고정 플레이트 PLT-FIX-02 120x60x5T EA 2800 280000",
+        "2 스테인리스 브라켓 BRK-SUS-01 50x80x3T 100 EA 1500 150000",
+        "※첫번째품목수량공란.값을추정하지말것.",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_quote_blank_quantity_visible_supply.txt")
+
+    assert parsed.document_type == DocumentType.quotation
+    assert len(parsed.line_items) == 2
+    first = parsed.line_items[0]
+    assert first["item_name"] == "고정 플레이트"
+    assert first["specification"] == "120x60x5T"
+    assert "quantity" not in first
+    assert first["unit"] == "EA"
+    assert first["unit_price"] == 2800
+    assert first["supply_amount"] == 280000
+    assert "tax_amount" not in first
+    assert "line_total" not in first
+    assert set(first["validation_warnings"]) >= {
+        "missing_quantity",
+        "quantity_cell_blank",
+        "row_amount_hidden_do_not_infer",
+    }
+    second = parsed.line_items[1]
+    assert second["quantity"] == 100
+    assert second["unit_price"] == 1500
+    assert second["supply_amount"] == 150000
+    assert "row_amount_hidden_do_not_infer" in second["validation_warnings"]
+
+
+def test_vl_inline_option_quote_moves_trailing_material_grade_to_specification():
+    text = "\n".join([
+        "견적서",
+        "문서번호 QT-GEN-2026-012-ALT",
+        "No 품목명 규격 수량 단위 단가 공급가액",
+        "1 A1 스텐판 SUS304 2T 10 EA 24500 245000",
+        "2 A2 스텐판 SUS316 2T 10 EA 31000 310000",
+        "옵션 중 하나만 선택하세요. 모두 합산하지 마세요.",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_option_quote_material_grade.txt")
+
+    assert parsed.document_type == DocumentType.quotation
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["item_name"] == "A1 스텐판"
+    assert parsed.line_items[0]["specification"] == "SUS304 2T"
+    assert parsed.line_items[1]["item_name"] == "A2 스텐판"
+    assert parsed.line_items[1]["specification"] == "SUS316 2T"
 
 
 def test_vl_inline_internal_transfer_preserves_codes_and_requested_quantities():

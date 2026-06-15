@@ -207,7 +207,7 @@ class DocumentParser:
                 score += 8
             if document_type == DocumentType.quotation and re.search(r"\bQT[-_ ]?\d{4}|견적서|견적번호", text, flags=re.IGNORECASE):
                 score += 8
-            if document_type == DocumentType.invoice and re.search(r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}|계산서번호|세금계산서|invoice", text, flags=re.IGNORECASE):
+            if document_type == DocumentType.invoice and re.search(r"\bINV[-_ ]?(?:[A-Z0-9]+[-_ ]?)*\d{4}|계산서번호|세금계산서|invoice", text, flags=re.IGNORECASE):
                 score += 8
             if document_type == DocumentType.delivery_note and re.search(r"\bDN[-_ ]?\d{4}|납품서|납품번호", text, flags=re.IGNORECASE):
                 score += 8
@@ -221,7 +221,7 @@ class DocumentParser:
             scored_types.sort(key=lambda entry: -entry[0])
             if scored_types[0][0] >= 7:
                 return scored_types[0][1]
-        if re.search(r"\bINV[-_ ]?\d{4}|\b(?:invoice|tax)\s*(?:no|number)", content, flags=re.IGNORECASE):
+        if re.search(r"\bINV[-_ ]?(?:[A-Z0-9]+[-_ ]?)*\d{4}|\b(?:invoice|tax)\s*(?:no|number)", content, flags=re.IGNORECASE):
             return DocumentType.invoice
         if re.search(r"\bQT[-_ ]?\d{4}|\b(?:quotation|quote)\s*(?:no|number)", content, flags=re.IGNORECASE):
             return DocumentType.quotation
@@ -811,6 +811,7 @@ class DocumentParser:
         match = pattern.match(text)
         missing_supply_match = None
         missing_quantity_match = None
+        missing_quantity_supply_only_match = None
         supply_only_match = None
         supply_without_unit_price_match = None
         if not match:
@@ -843,7 +844,16 @@ class DocumentParser:
                 text,
                 flags=re.IGNORECASE,
             )
-        if not match and not missing_supply_match:
+        if not match and not missing_supply_match and not supply_only_match and not supply_without_unit_price_match:
+            missing_quantity_supply_only_match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
+                r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if not match and not missing_supply_match and not missing_quantity_supply_only_match:
             missing_quantity_match = re.match(
                 r"^(?P<body>.+?)\s+"
                 r"(?P<unit>[A-Za-z가-힣]{1,8})\s+"
@@ -854,7 +864,14 @@ class DocumentParser:
                 text,
                 flags=re.IGNORECASE,
             )
-        row_match = match or missing_supply_match or supply_only_match or supply_without_unit_price_match or missing_quantity_match
+        row_match = (
+            match
+            or missing_supply_match
+            or supply_only_match
+            or supply_without_unit_price_match
+            or missing_quantity_supply_only_match
+            or missing_quantity_match
+        )
         if not row_match:
             if self._vl_inline_no_price_context(doc_type):
                 return self._vl_inline_no_price_item_from_row(text, doc_type)
@@ -919,6 +936,10 @@ class DocumentParser:
         elif supply_only_match:
             item["quantity"] = supply_only_match.group("quantity")
             item["supply_amount"] = supply_only_match.group("supply_amount")
+            warnings.append("row_amount_hidden_do_not_infer")
+        elif missing_quantity_supply_only_match:
+            item["supply_amount"] = missing_quantity_supply_only_match.group("supply_amount")
+            warnings.extend(["missing_quantity", "quantity_cell_blank", "row_amount_hidden_do_not_infer"])
         elif supply_without_unit_price_match:
             item["quantity"] = supply_without_unit_price_match.group("quantity")
             lone_amount = self._to_decimal(supply_without_unit_price_match.group("supply_amount"))
@@ -1170,7 +1191,7 @@ class DocumentParser:
     def _normalize_vl_inline_specification(self, value: str | None) -> str | None:
         if not value:
             return None
-        text = re.sub(r"\s*[xX]\s*", "x", value.strip())
+        text = re.sub(r"\s*[xX×*]\s*", "x", value.strip())
         text = re.sub(r"^SEMI?(\d+)$", r"M\1", text, flags=re.IGNORECASE)
         text = re.sub(r"^SEM(\d+)$", r"M\1", text, flags=re.IGNORECASE)
         text = re.sub(r"^[A-Z]{1,4}(M\d+(?:x\d+)?)$", r"\1", text, flags=re.IGNORECASE)
@@ -1189,6 +1210,10 @@ class DocumentParser:
         safe_items: list[dict] = []
         for item in items:
             next_item = dict(item)
+            if not next_item.get("lot_no"):
+                lot_source = next_item.get("item_code") or next_item.get("document_item_code") or next_item.get("source_item_code")
+                if re.match(r"^LOT[-\w]+$", str(lot_source or ""), flags=re.IGNORECASE):
+                    next_item["lot_no"] = lot_source
             has_breakdown = any(
                 next_item.get(field) not in (None, "", [])
                 for field in ["received_quantity", "accepted_quantity", "rejected_quantity"]
@@ -2436,6 +2461,7 @@ class DocumentParser:
             "tax_amount": item.get("tax_amount"),
             "line_total": item.get("line_total"),
         }
+        normalized = self._split_trailing_material_grade_from_item_name(normalized)
         item_warnings = list(item.get("validation_warnings") or [])
         if item_warnings:
             normalized["validation_warnings"] = item_warnings
@@ -2486,6 +2512,29 @@ class DocumentParser:
         if warnings:
             normalized["validation_warnings"] = warnings
         return {key: value for key, value in normalized.items() if value not in (None, "") and not str(key).startswith("_")}
+
+    def _split_trailing_material_grade_from_item_name(self, item: dict) -> dict:
+        name = self._clean_value(item.get("item_name"))
+        spec = self._clean_value(item.get("specification"))
+        if not name or not spec:
+            return item
+        match = re.match(
+            r"^(?P<base>.+?)\s+(?P<grade>SUS\s*3[O0]4|SUS\s*316|STS\s*3[O0]4|STS\s*316|SS\s*400|S45C)$",
+            name,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return item
+        grade = match.group("grade").upper().replace(" ", "").replace("O", "0")
+        if grade.startswith("STS"):
+            grade = "SUS" + grade[3:]
+        if grade in spec.upper().replace(" ", ""):
+            item["item_name"] = self._clean_value(match.group("base"))
+            return item
+        if re.search(r"\d+(?:\.\d+)?T\b|^\d+(?:\.\d+)?T$", spec, flags=re.IGNORECASE):
+            item["item_name"] = self._clean_value(match.group("base"))
+            item["specification"] = self._clean_value(f"{grade} {spec}")
+        return item
 
     def _suppress_implausible_line_item_numbers(self, item: dict) -> dict:
         quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None

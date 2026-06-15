@@ -1,0 +1,55 @@
+{
+  "document_type": "quotation",
+  "document_subtype": null,
+  "document_profile": null,
+  "document_number": "QT-GEN-2026-012-ALT",
+  "issue_date": "2026-10-12",
+  "vendor": "미래정밀",
+  "customer": "정우금속",
+  "currency": null,
+  "total_amount": null,
+  "subtotal": null,
+  "tax_amount": null,
+  "no_price_document": false,
+  "visual_crop": true,
+  "visible_columns": [
+    "item_name",
+    "spec",
+    "quantity",
+    "unit",
+    "unit_price",
+    "supply_amount"
+  ],
+  "hidden_or_cropped_columns": [
+    "tax_amount",
+    "line_total"
+  ],
+  "line_items": [
+    {
+      "item_name": "A1 스텐판",
+      "spec": "SUS304 2T",
+      "quantity": 10,
+      "unit": "EA",
+      "unit_price": 24500,
+      "supply_amount": 245000,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "row_amount_hidden_do_not_infer"
+      ]
+    },
+    {
+      "item_name": "A2 스텐판",
+      "spec": "SUS316 2T",
+      "quantity": 10,
+      "unit": "EA",
+      "unit_price": 31000,
+      "supply_amount": 310000,
+      "tax_amount": null,
+      "line_total": null,
+      "expected_review_flags": [
+        "row_amount_hidden_do_not_infer"
+      ]
+    }
+  ]
+}

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     paddleocr_vl_gguf_timeout_seconds: float = 240.0
     paddleocr_vl_gguf_max_pages: int = 1
     paddleocr_vl_gguf_concurrency: int = 1
+    paddleocr_vl_gguf_n_predict: int = 512
     paddleocr_vl_gguf_smoke_passed: bool = False
     paddleocr_vl_gguf_primary_reader_enabled: bool = True
     paddleocr_vl_gguf_upload_pipeline_enabled: bool = True
