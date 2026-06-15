@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -271,6 +272,33 @@ def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching()
     assert parsed.line_items[0]["unit_price"] == 35000
     assert "supply_amount" not in parsed.line_items[0]
     assert "row_amount_hidden_do_not_infer" in parsed.line_items[0]["validation_warnings"]
+
+
+def test_vl_structured_candidate_does_not_overwrite_distinct_invoice_issue_date_with_due_date():
+    processor = DocumentProcessor()
+    parsed = ParsedDocument(
+        document_type=DocumentType.invoice,
+        document_number="INV-VIS-2026-003-ROUND",
+        issue_date=date(2026, 11, 3),
+        extracted_date=date(2026, 11, 3),
+        due_date=date(2026, 12, 3),
+        line_items=[],
+    )
+    structured = {
+        "document": {
+            "document_type": "invoice",
+            "document_number": "INV-VIS-2026-003-ROUND",
+            "issue_date": "2026-12-03",
+            "due_date": "2026-12-03",
+        },
+        "line_items": [],
+    }
+
+    processor._apply_vl_structured_candidate_to_parsed(parsed, structured)
+
+    assert parsed.issue_date == date(2026, 11, 3)
+    assert parsed.extracted_date == date(2026, 11, 3)
+    assert parsed.due_date == date(2026, 12, 3)
 
 
 def test_vl_upload_pipeline_does_not_promote_negative_document_level_amounts():

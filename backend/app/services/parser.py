@@ -685,7 +685,7 @@ class DocumentParser:
             DocumentType.quotation: ["견적일", "발행일", "작성일", "quotation date", "quote date", "date"],
             DocumentType.transaction_statement: ["거래일자", "거래일", "발행일", "작성일", "transaction date", "issue date"],
             DocumentType.delivery_note: ["발행일", "작성일", "issue date"],
-            DocumentType.invoice: ["발행일", "발행일자", "작성일", "계산서일자", "invoice date", "issue date", "date"],
+            DocumentType.invoice: ["작성일자", "작성일", "발행일", "발행일자", "계산서일자", "invoice date", "issue date", "date"],
         }
         labels = labels_by_type.get(doc_type, ["발행일", "작성일", "일자", "issue date"])
         return self._extract_labeled_date(text, labels)

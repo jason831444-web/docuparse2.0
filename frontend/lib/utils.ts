@@ -260,11 +260,16 @@ export function bboxReviewFlagLabel(value?: string | null) {
 export function vlCandidateIssueLabel(value?: string | null) {
   if (!value) return null;
   const labels: Record<string, string> = {
-    vl_candidate_missing_line_amount: "품목 금액 누락",
+    vl_candidate_missing_line_amount: "품목 금액 확인",
+    no_price_candidate_amount_conflict: "금액 없는 문서의 금액 후보 확인",
     vl_candidate_missing_document_total: "문서 합계 누락",
     vl_candidate_missing_row_anchor: "품목 행 누락",
     vl_candidate_missing_row_fragment: "품목 행 텍스트 불완전",
     vl_candidate_missing_row_cell: "품목 행 값 누락",
+    vl_candidate_invalid_line_total: "품목 금액 계산 확인",
+    vl_candidate_invalid_tax_greater_than_supply: "품목 세액 확인",
+    vl_candidate_invalid_tax_greater_than_total: "품목 세액 확인",
+    vl_candidate_invalid_supply_greater_than_total: "품목 공급가액 확인",
     vl_candidate_hallucinated_blank_quantity: "빈 수량 추정 위험",
     vl_candidate_exchange_rate_as_amount: "환율/금액 혼동 위험",
     vl_candidate_missing_expected_pdf_value: "원본 핵심 값 누락",
@@ -792,6 +797,7 @@ export function reviewIssueSummary(issue: NormalizedReviewIssue) {
     line_items_total_mismatch: "문서 총액과 품목 합계 불일치",
     amount_direction_requires_review: "반품/차감 금액 방향 확인",
     statement_balance_summary_requires_review: "정산 요약 확인",
+    option_quote_total_requires_selection: "옵션 견적 최종 합계 확인",
     related_document_missing: "관련 원문서 번호 확인",
     ambiguous_item_match: "품목 매칭 모호",
     internal_item_ambiguous: "품목 매칭 모호",
@@ -862,6 +868,7 @@ export function reviewIssueDescription(issue: NormalizedReviewIssue) {
     line_items_total_mismatch: "품목별 금액 합계와 문서 총액이 맞지 않습니다.",
     amount_direction_requires_review: "반품/차감 금액을 원문서에 더할지 차감할지 확인해야 합니다.",
     statement_balance_summary_requires_review: "전월이월, 입금액, 미수잔액 등 정산 요약은 품목 합계와 구분해서 확인해야 합니다.",
+    option_quote_total_requires_selection: "옵션별 공급가액은 확인되었으나 문서 전체 합계는 옵션 선택 후 확정해야 합니다.",
     related_document_missing: "반품/차감 처리에 연결할 원문서 번호를 확인해야 합니다.",
     ambiguous_item_match: "사내 품목 master와 정확히 일치하지 않습니다.",
     internal_item_ambiguous: "사내 품목 master와 정확히 일치하지 않습니다.",
@@ -903,6 +910,7 @@ export function isBlockingReviewIssue(issue: NormalizedReviewIssue) {
     "amount_mismatch",
     "amount_direction_requires_review",
     "invalid_line_amount",
+    "option_quote_total_requires_selection",
     "item_code_name_conflict",
     "internal_item_unmatched",
     "internal_item_ambiguous",
@@ -950,6 +958,7 @@ export function reviewReasonLabel(value: string) {
     missing_issue_date: "날짜 미확인",
     missing_due_date: "납기일 미확인",
     missing_payment_due_date: "지급기한 미확인",
+    option_quote_total_requires_selection: "옵션 견적서: 최종 합계는 옵션 선택 후 확정 필요",
     item_matching_skipped: "내부 품목마스터가 없어 품목코드 매칭을 건너뛰었습니다.",
   };
   return labels[code] || value;

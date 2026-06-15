@@ -407,7 +407,11 @@ class DocumentProcessor:
                 setattr(parsed, attr, value)
         issue_date = self._vl_date(candidate_doc.get("issue_date"))
         due_date = self._vl_date(candidate_doc.get("due_date"))
-        if issue_date:
+        if self._should_apply_vl_issue_date(
+            getattr(parsed, "issue_date", None) or getattr(parsed, "extracted_date", None),
+            issue_date,
+            due_date or getattr(parsed, "due_date", None),
+        ):
             parsed.issue_date = issue_date
             parsed.extracted_date = issue_date
         if due_date:
@@ -574,7 +578,7 @@ class DocumentProcessor:
                 setattr(document, attr, sanitize_for_postgres(value))
         issue_date = self._vl_date(candidate_doc.get("issue_date"))
         due_date = self._vl_date(candidate_doc.get("due_date"))
-        if issue_date:
+        if self._should_apply_vl_issue_date(document.issue_date or document.extracted_date, issue_date, due_date or document.due_date):
             document.issue_date = issue_date
             document.extracted_date = issue_date
         if due_date:
@@ -593,6 +597,23 @@ class DocumentProcessor:
         for field in ("document_number", "vendor_name", "customer_name", "issue_date", "due_date", "currency", "subtotal", "tax", "extracted_amount", "line_items"):
             field_sources[field] = "paddleocr_vl_1_6_gguf"
         document.field_sources = sanitize_for_postgres(field_sources)
+
+    def _should_apply_vl_issue_date(
+        self,
+        current_issue_date: date | None,
+        candidate_issue_date: date | None,
+        candidate_due_date: date | None,
+    ) -> bool:
+        if not candidate_issue_date:
+            return False
+        if (
+            current_issue_date
+            and candidate_due_date
+            and candidate_issue_date == candidate_due_date
+            and current_issue_date != candidate_issue_date
+        ):
+            return False
+        return True
 
     def _vl_date(self, value: Any) -> date | None:
         if value in (None, "", []):

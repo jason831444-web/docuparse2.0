@@ -100,6 +100,120 @@ def test_tax_invoice_classification_customer_and_workflow_labels_are_invoice_spe
     assert "tax_document" in workflow.workflow_metadata["document_profiles"]
 
 
+def test_tax_invoice_keeps_issue_date_separate_from_payment_due_date():
+    text = "\n".join([
+        "전자세금계산서",
+        "계산서번호 INV-VIS-2026-003-ROUND",
+        "작성일자 2026-11-03",
+        "지급기한 2026-12-03",
+        "공급자 성진전자부품",
+        "공급받는자 네오팩토리",
+        "No 품목명 문서품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "1 PCB Connector 12P CON-PCB-12P 12P 333 EA 301 100233 10023 110256",
+        "2 Cable Harness 500 CBL-HAR-500 500mm 77 EA 2201 169477 16948 186425",
+        "3 조정금액 ROUND-ADJ - 1 EA -1 -1 0 -1",
+        "공급가액 269709",
+        "세액 26971",
+        "합계금액 296680",
+    ])
+
+    parsed = DocumentParser().parse(text, "003_tax_invoice_rounding_full_visible.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.issue_date == date(2026, 11, 3)
+    assert parsed.due_date == date(2026, 12, 3)
+    assert parsed.business_fields["payment_due_date"] == "2026-12-03"
+
+
+def test_workflow_suppresses_option_quote_debug_amount_warnings_for_users():
+    document = Document(
+        original_filename="002_quote_options_full_visible.pdf",
+        stored_file_path="/tmp/002_quote_options_full_visible.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.quotation,
+        document_number="QT-VIS-2026-002-ALT",
+        issue_date=date(2026, 11, 2),
+        due_date=date(2026, 11, 30),
+        vendor_name="한성산업",
+        customer_name="미래정밀",
+        extracted_amount=None,
+        currency="KRW",
+        workflow_metadata={
+            "taxonomy": {
+                "document_profile": "priced_document",
+                "document_profiles": ["priced_document", "option_quote_document"],
+            }
+        },
+        line_items=[
+            {
+                "item_name": "옵션 A 스텐판",
+                "quantity": 10,
+                "unit": "EA",
+                "unit_price": 24500,
+                "supply_amount": 245000,
+                "validation_warnings": ["invalid_tax_greater_than_supply", "invalid_line_total"],
+            },
+            {
+                "item_name": "옵션 B 스텐판",
+                "quantity": 10,
+                "unit": "EA",
+                "unit_price": 31000,
+                "supply_amount": 310000,
+                "validation_warnings": ["missing_price_or_total"],
+            },
+        ],
+    )
+    text = "견적서\n옵션 중 하나 선택 후 최종 합계 확정 필요\n모두 합산하면 안됨\n유효기간 2026-11-30"
+
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    issues = workflow.workflow_metadata["normalized_review_issues"]
+    codes = {issue["code"] for issue in issues}
+    messages = [issue["message_ko"] for issue in issues]
+
+    assert "option_quote_total_requires_selection" in codes
+    assert "invalid_line_amount" not in codes
+    assert "missing_price_or_total" not in codes
+    assert any("옵션 견적서" in message for message in messages)
+    assert not any("세액이 공급가액" in message or "합계금액 계산" in message for message in messages)
+
+
+def test_workflow_suppresses_no_price_delivery_amount_warnings_for_users():
+    document = Document(
+        original_filename="004_delivery_no_price_full_visible.pdf",
+        stored_file_path="/tmp/004_delivery_no_price_full_visible.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.delivery_note,
+        document_number="DN-VIS-2026-004",
+        issue_date=date(2026, 11, 4),
+        due_date=date(2026, 11, 4),
+        vendor_name="대영부품",
+        customer_name="오성테크",
+        extracted_amount=None,
+        currency=None,
+        line_items=[
+            {
+                "item_name": "베어링 하우징",
+                "item_code": "BRG-H-100",
+                "quantity": 50,
+                "delivered_quantity": 50,
+                "unit": "EA",
+                "validation_warnings": ["invalid_tax_greater_than_total", "invalid_supply_greater_than_total"],
+            }
+        ],
+    )
+    text = "납품서\n금액 정보 없는 수량 확인용 납품서\n품목명 발주수량 납품수량 잔량"
+
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+    issues = workflow.workflow_metadata["normalized_review_issues"]
+    codes = {issue["code"] for issue in issues}
+    messages = [issue["message_ko"] for issue in issues]
+
+    assert workflow.workflow_metadata["document_profile"] == "no_price_document"
+    assert "invalid_line_amount" not in codes
+    assert "missing_price_or_total" not in codes
+    assert not any("세액" in message or "공급가액" in message or "합계금액" in message for message in messages)
+
+
 def test_tax_invoice_taxonomy_uses_raw_text_when_cleaned_text_loses_header_signals():
     raw_text = "\n".join([
         "전자세금계산서",

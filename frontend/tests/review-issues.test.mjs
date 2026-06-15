@@ -70,6 +70,13 @@ assert.equal(reviewIssueSummary({
   severity: "warning",
 }), "정산 요약 확인");
 
+assert.equal(reviewIssueSummary({
+  code: "option_quote_total_requires_selection",
+  message_ko: "옵션 견적서: 최종 합계는 옵션 선택 후 확정 필요",
+  field: "total_amount",
+  severity: "warning",
+}), "옵션 견적 최종 합계 확인");
+
 assert.equal(isBlockingReviewIssue({
   code: "amount_direction_requires_review",
   message_ko: "반품/차감 문서는 금액의 차감 방향과 원문서 반영 방식을 확인해야 합니다.",
@@ -150,9 +157,13 @@ assert.equal(vlMetadata?.vl_candidates?.[0]?.parser_integrated, false);
 assert.equal(vlMetadata?.vl_candidates?.[0]?.recommended_handling, "review_candidate_only");
 assert.equal(vlMetadata?.vl_candidates?.[0]?.issue_details?.[0]?.expected_value, "418,000");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_document_total"), "문서 합계 누락");
+assert.equal(vlCandidateIssueLabel("vl_candidate_missing_line_amount"), "품목 금액 확인");
+assert.equal(vlCandidateIssueLabel("no_price_candidate_amount_conflict"), "금액 없는 문서의 금액 후보 확인");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_anchor"), "품목 행 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_fragment"), "품목 행 텍스트 불완전");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_row_cell"), "품목 행 값 누락");
+assert.equal(vlCandidateIssueLabel("vl_candidate_invalid_tax_greater_than_supply"), "품목 세액 확인");
+assert.equal(vlCandidateIssueLabel("vl_candidate_invalid_line_total"), "품목 금액 계산 확인");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_expected_pdf_value"), "원본 핵심 값 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_known_input_limitation"), "VL 입력 한계");
 assert.equal(vlCandidateIssueLabel("manual_visual_check_not_performed"), "원본 육안 확인 필요");

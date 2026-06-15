@@ -265,6 +265,7 @@ class DocumentWorkflowEnrichmentService:
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
         taxonomy = taxonomy or self.taxonomy.classify(document, "")
         no_price_quantity_doc = self._is_no_price_quantity_document(document) or taxonomy.amount_required is False
+        option_quote_doc = self._is_option_quote_document(document, business_fields, taxonomy)
         party_optional_doc = no_price_quantity_doc or taxonomy.party_required is False
         if "return_document" in set(taxonomy.document_profiles or []):
             reasons.append(self._review_reason(
@@ -297,6 +298,12 @@ class DocumentWorkflowEnrichmentService:
                 "거래명세서에 전월이월/입금액/미수잔액 등 정산 요약이 포함되어 있어 품목 합계와 잔액 구분을 확인해야 합니다.",
                 "statement_summary",
             ))
+        if option_quote_doc and document.extracted_amount is None:
+            reasons.append(self._review_reason(
+                "option_quote_total_requires_selection",
+                "옵션 견적서: 최종 합계는 옵션 선택 후 확정 필요",
+                "total_amount",
+            ))
         if not document.line_items:
             reasons.append(self._review_reason("missing_line_items", "품목 정보가 추출되지 않았습니다.", "line_items"))
         for index, item in enumerate(document.line_items or [], start=1):
@@ -314,9 +321,11 @@ class DocumentWorkflowEnrichmentService:
                     "line_items.received_quantity",
                     index - 1,
                 ))
-            if not no_price_quantity_doc and doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
+            if not no_price_quantity_doc and not option_quote_doc and doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 reasons.append(self._review_reason("missing_price_or_total", f"{index}번째 품목의 단가 또는 합계금액을 확인해야 합니다.", "line_items.unit_price", index - 1))
             for warning in item.get("validation_warnings") or []:
+                if self._suppress_user_facing_amount_warning(warning, no_price_quantity_doc=no_price_quantity_doc, option_quote_doc=option_quote_doc):
+                    continue
                 if warning == "invalid_tax_greater_than_total":
                     reasons.append(self._review_reason("invalid_line_amount", f"{index}번째 품목의 세액이 합계금액보다 큽니다.", "line_items.tax_amount", index - 1))
                 elif warning == "invalid_tax_greater_than_supply":
@@ -360,6 +369,63 @@ class DocumentWorkflowEnrichmentService:
                 },
             ))
         return self._dedupe_review_reasons(reasons)
+
+    def _is_option_quote_document(
+        self,
+        document: Document,
+        business_fields: dict[str, str | list[str]],
+        taxonomy: DocumentTaxonomy,
+    ) -> bool:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        metadata = document.workflow_metadata or {}
+        profile_values = {
+            str(value)
+            for value in [
+                taxonomy.document_profile,
+                metadata.get("document_profile"),
+                (metadata.get("taxonomy") or {}).get("document_profile") if isinstance(metadata.get("taxonomy"), dict) else None,
+                *list(taxonomy.document_profiles or []),
+                *list(metadata.get("document_profiles") or []),
+                *((metadata.get("taxonomy") or {}).get("document_profiles") or [] if isinstance(metadata.get("taxonomy"), dict) else []),
+            ]
+            if value
+        }
+        text = " ".join(
+            str(value or "")
+            for value in [
+                document.document_number,
+                document.original_filename,
+                document.category,
+                " ".join(document.tags or []),
+                " ".join(str(value or "") for value in business_fields.values()),
+            ]
+        )
+        return (
+            doc_type == "quotation"
+            and (
+                "option_quote_document" in profile_values
+                or bool(re.search(r"(옵션|option).*?(선택|확정|합산하면\s*안)|선택\s*후\s*확정", text, flags=re.IGNORECASE | re.DOTALL))
+            )
+        )
+
+    def _suppress_user_facing_amount_warning(
+        self,
+        warning: object,
+        *,
+        no_price_quantity_doc: bool,
+        option_quote_doc: bool,
+    ) -> bool:
+        if not (no_price_quantity_doc or option_quote_doc):
+            return False
+        return str(warning) in {
+            "invalid_tax_greater_than_total",
+            "invalid_tax_greater_than_supply",
+            "invalid_supply_greater_than_total",
+            "invalid_line_total",
+            "missing_price_or_total",
+            "missing_line_amount",
+            "amount_mismatch",
+        }
 
     def _is_internal_transfer_document(self, document: Document) -> bool:
         values = [
@@ -534,6 +600,7 @@ class DocumentWorkflowEnrichmentService:
             "missing_price_or_total",
             "amount_mismatch",
             "invalid_line_amount",
+            "option_quote_total_requires_selection",
             "item_code_name_conflict",
             "amount_direction_requires_review",
             "statement_balance_summary_requires_review",
