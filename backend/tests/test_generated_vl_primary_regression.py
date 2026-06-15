@@ -258,6 +258,143 @@ def test_compare_warns_when_required_document_number_is_missing():
     assert "document_number_missing" in {issue["code"] for issue in result["warnings"]}
 
 
+def test_compare_warns_when_required_header_field_is_missing():
+    expected = {
+        "document_type": "invoice",
+        "document_number": "INV-GEN-VIS-2026-011",
+        "vendor": "성진전자부품",
+        "customer": "네오팩토리",
+        "issue_date": "2026-11-11",
+        "due_date": "2026-12-11",
+    }
+    actual = {
+        "document_type": "invoice",
+        "document_number": "INV-GEN-VIS-2026-011",
+        "vendor_name": "성진전자부품",
+        "customer_name": "네오팩토리",
+        "extracted_date": "2026-11-11",
+        "line_items": [],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert result["status"] == "WARN"
+    assert "due_date_missing" in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_accepts_header_field_aliases():
+    expected = {
+        "document_type": "purchase_order",
+        "document_number": "FAX-VIS-PO-2026-012",
+        "vendor": "동진부품",
+        "customer": "오성테크",
+        "issue_date": "2026-11-12",
+        "due_date": "2026-11-26",
+    }
+    actual = {
+        "document_type": "purchase_order",
+        "document_number": "FAX-VIS-PO-2026-012",
+        "vendor_name": "동진부품",
+        "customer_name": "오성테크",
+        "extracted_date": "2026-11-12",
+        "due_date": "2026-11-26",
+        "line_items": [],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    warning_codes = {issue["code"] for issue in result["warnings"]}
+    assert "vendor_missing" not in warning_codes
+    assert "customer_missing" not in warning_codes
+    assert "issue_date_missing" not in warning_codes
+    assert "due_date_missing" not in warning_codes
+
+
+def test_compare_accepts_business_field_header_aliases_and_related_doc_prefix():
+    expected = {
+        "document_type": "transaction_statement",
+        "document_subtype": "return_credit",
+        "document_number": "RTN-VIS-2026-008",
+        "related_document_number": "DN-VIS-2026-004",
+        "subtotal": 11000,
+        "tax_amount": 1100,
+    }
+    actual = {
+        "document_type": "general_document",
+        "category": "credit_note",
+        "document_number": "RTN-VIS-2026-008",
+        "workflow_metadata": {
+            "business_fields": {"related_document_number": "DN-VIS-2026-004 통화 KRW"},
+            "taxonomy": {
+                "document_subtype": "credit_note",
+                "document_profile": "return_document",
+                "document_profiles": ["return_document", "priced_document"],
+            },
+        },
+        "line_items": [
+            {"supply_amount": 8000, "tax_amount": 800},
+            {"supply_amount": 3000, "tax_amount": 300},
+        ],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    warning_codes = {issue["code"] for issue in result["warnings"]}
+    assert "related_document_number_missing" not in warning_codes
+    assert "related_document_number_mismatch" not in warning_codes
+    assert "document_subtotal_missing" not in warning_codes
+    assert "document_tax_amount_missing" not in warning_codes
+
+
+def test_compare_accepts_valid_until_in_business_fields():
+    expected = {
+        "document_type": "quotation",
+        "document_number": "QT-VIS-2026-002-ALT",
+        "valid_until": "2026-11-30",
+    }
+    actual = {
+        "document_type": "quotation",
+        "document_number": "QT-VIS-2026-002-ALT",
+        "workflow_metadata": {
+            "business_fields": {"valid_until": "2026-11-30"},
+        },
+        "line_items": [],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert "valid_until_missing" not in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_accepts_zero_tax_when_tax_fields_are_absent():
+    expected = {
+        "document_type": "invoice",
+        "currency": "USD",
+        "subtotal": 650,
+        "tax_amount": 0,
+        "total_amount": 650,
+        "line_items": [
+            {"item_name": "Linear Guide Rail HGW20", "supply_amount": 450},
+            {"item_name": "Cable Harness 500", "supply_amount": 110},
+            {"item_name": "PCB Connector 12P", "supply_amount": 90},
+        ],
+    }
+    actual = {
+        "document_type": "invoice",
+        "currency": "USD",
+        "extracted_amount": 650,
+        "line_items": [
+            {"item_name": "Linear Guide Rail HGW20", "supply_amount": 450},
+            {"item_name": "Cable Harness 500", "supply_amount": 110},
+            {"item_name": "PCB Connector 12P", "supply_amount": 90},
+        ],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert "document_tax_amount_missing" not in {issue["code"] for issue in result["warnings"]}
+
+
 def test_compare_accepts_return_credit_policy_type_via_category_metadata():
     expected = {"document_type": "credit_note", "document_number": "RTN-VIS-2026-008"}
     actual = {

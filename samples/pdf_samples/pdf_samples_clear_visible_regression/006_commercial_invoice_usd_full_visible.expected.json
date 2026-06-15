@@ -1,0 +1,50 @@
+{
+  "filename": "006_commercial_invoice_usd_full_visible.pdf",
+  "document_type": "invoice",
+  "document_subtype": "commercial_invoice",
+  "document_number": "INV-US-VIS-2026-006-EX",
+  "vendor": "Global Motion Parts LLC",
+  "customer": "NeoFactory Korea",
+  "issue_date": "2026-11-06",
+  "due_date": "2026-12-06",
+  "currency": "USD",
+  "subtotal": 650,
+  "tax_amount": 0,
+  "total_amount": 650,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "Linear Guide Rail HGW20",
+      "vendor_sku": "HGW20-1000",
+      "spec": "1000mm",
+      "quantity": 10,
+      "unit": "EA",
+      "unit_price": 45.0,
+      "line_total": 450.0
+    },
+    {
+      "item_name": "Cable Harness 500",
+      "vendor_sku": "CBL-HAR-500",
+      "spec": "500mm",
+      "quantity": 50,
+      "unit": "EA",
+      "unit_price": 2.2,
+      "line_total": 110.0
+    },
+    {
+      "item_name": "PCB Connector 12P",
+      "vendor_sku": "CON-PCB-12P",
+      "spec": "12P",
+      "quantity": 300,
+      "unit": "EA",
+      "unit_price": 0.3,
+      "line_total": 90.0
+    }
+  ],
+  "expected_review_flags": [
+    "exchange_rate_not_total"
+  ]
+}

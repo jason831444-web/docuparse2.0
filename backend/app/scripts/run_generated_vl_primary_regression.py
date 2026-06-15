@@ -252,6 +252,7 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
                     "actual_value": actual_value,
                 }
             )
+    _compare_header_fields(expected, actual, warnings)
     expected_total = _decimal(expected.get("total_amount"))
     actual_total = _decimal(actual.get("extracted_amount"))
     if expected_total is not None and actual_total is not None and expected_total != actual_total:
@@ -262,6 +263,95 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
                 "actual_value": str(actual_total),
             }
         )
+    for expected_key, actual_keys in (
+        ("subtotal", ("subtotal", "supply_amount")),
+        ("tax_amount", ("tax_amount", "tax")),
+    ):
+        expected_amount = _decimal(expected.get(expected_key))
+        if expected_amount is None:
+            continue
+        actual_amount = _actual_document_amount(actual, actual_keys, expected_key)
+        if actual_amount is None:
+            if expected_key == "tax_amount" and expected_amount == Decimal("0"):
+                continue
+            warnings.append({"code": f"document_{expected_key}_missing", "expected_value": str(expected_amount)})
+        elif actual_amount != expected_amount:
+            warnings.append(
+                {
+                    "code": f"document_{expected_key}_mismatch",
+                    "expected_value": str(expected_amount),
+                    "actual_value": str(actual_amount),
+                }
+            )
+
+
+def _compare_header_fields(expected: dict[str, Any], actual: dict[str, Any], warnings: list[dict[str, Any]]) -> None:
+    checks = {
+        "vendor": ("vendor", "vendor_name", "supplier", "supplier_name"),
+        "customer": ("customer", "customer_name", "buyer", "buyer_name"),
+        "issue_date": ("issue_date", "document_date", "extracted_date"),
+        "due_date": ("due_date", "payment_due_date", "requested_delivery_date", "delivery_due_date"),
+        "delivery_date": ("delivery_date", "requested_delivery_date", "delivery_due_date", "due_date", "issue_date", "extracted_date"),
+        "valid_until": ("valid_until", "valid_through", "quote_valid_until"),
+        "inspection_date": ("inspection_date", "issue_date", "document_date", "extracted_date"),
+        "related_document_number": ("related_document_number", "related_document", "related_doc_no", "related_doc_number"),
+    }
+    for expected_key, aliases in checks.items():
+        expected_value = expected.get(expected_key)
+        if expected_value in (None, ""):
+            continue
+        actual_key, actual_value = _first_present(actual, aliases)
+        if actual_value in (None, ""):
+            warnings.append(
+                {
+                    "code": f"{expected_key}_missing",
+                    "expected_value": expected_value,
+                    "actual_field_candidates": list(aliases),
+                }
+            )
+            continue
+        if not _header_values_match(expected_key, expected_value, actual_value):
+            warnings.append(
+                {
+                    "code": f"{expected_key}_mismatch",
+                    "expected_value": expected_value,
+                    "actual_value": actual_value,
+                    "actual_field": actual_key,
+                }
+            )
+
+
+def _first_present(source: dict[str, Any], keys: tuple[str, ...]) -> tuple[str | None, Any]:
+    metadata = source.get("workflow_metadata") if isinstance(source.get("workflow_metadata"), dict) else {}
+    business_fields = metadata.get("business_fields") if isinstance(metadata.get("business_fields"), dict) else {}
+    for key in keys:
+        for container_name, container in (("", source), ("workflow_metadata.business_fields.", business_fields)):
+            value = container.get(key)
+            if value not in (None, "", []):
+                return f"{container_name}{key}", value
+    return None, None
+
+
+def _actual_document_amount(actual: dict[str, Any], direct_keys: tuple[str, ...], expected_key: str) -> Decimal | None:
+    for key in direct_keys:
+        value = _decimal(actual.get(key))
+        if value is not None:
+            return value
+    line_items = actual.get("line_items") if isinstance(actual.get("line_items"), list) else []
+    line_field = "supply_amount" if expected_key == "subtotal" else "tax_amount"
+    values = [_decimal(item.get(line_field)) for item in line_items if isinstance(item, dict)]
+    values = [value for value in values if value is not None]
+    if values and len(values) == len(line_items):
+        return sum(values, Decimal("0"))
+    return None
+
+
+def _header_values_match(field: str, expected: Any, actual: Any) -> bool:
+    if _values_match(expected, actual):
+        return True
+    if field == "related_document_number":
+        return _normalize_text(expected) in _normalize_text(actual)
+    return False
 
 
 def _return_credit_type_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:

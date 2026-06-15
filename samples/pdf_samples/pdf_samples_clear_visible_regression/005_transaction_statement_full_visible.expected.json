@@ -1,0 +1,62 @@
+{
+  "filename": "005_transaction_statement_full_visible.pdf",
+  "document_type": "transaction_statement",
+  "document_subtype": "monthly_balance",
+  "document_number": "TS-VIS-2026-005-MON",
+  "vendor": "태성금속",
+  "customer": "세진기계",
+  "issue_date": "2026-11-05",
+  "currency": "KRW",
+  "subtotal": 641000,
+  "tax_amount": 64100,
+  "total_amount": 705100,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "date": "11-03",
+      "item_name": "SUS304 3T PLATE",
+      "spec": "1000x2000",
+      "quantity": 3,
+      "unit": "EA",
+      "supply_amount": 105000,
+      "tax_amount": 10500,
+      "line_total": 115500
+    },
+    {
+      "date": "11-05",
+      "item_name": "AL6061 환봉 10파이",
+      "spec": "3000mm",
+      "quantity": 12,
+      "unit": "EA",
+      "supply_amount": 216000,
+      "tax_amount": 21600,
+      "line_total": 237600
+    },
+    {
+      "date": "11-08",
+      "item_name": "M8 육각볼트",
+      "spec": "M8x20",
+      "quantity": 2000,
+      "unit": "EA",
+      "supply_amount": 240000,
+      "tax_amount": 24000,
+      "line_total": 264000
+    },
+    {
+      "date": "11-12",
+      "item_name": "SUS WASHER M8",
+      "spec": "M8",
+      "quantity": 2000,
+      "unit": "EA",
+      "supply_amount": 80000,
+      "tax_amount": 8000,
+      "line_total": 88000
+    }
+  ],
+  "expected_review_flags": [
+    "previous_balance_not_item_total"
+  ]
+}

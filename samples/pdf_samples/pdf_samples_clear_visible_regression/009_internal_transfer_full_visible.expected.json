@@ -1,0 +1,45 @@
+{
+  "filename": "009_internal_transfer_full_visible.pdf",
+  "document_type": "general_document",
+  "document_subtype": "internal_transfer",
+  "document_number": "TRF-VIS-2026-009",
+  "issue_date": "2026-11-09",
+  "delivery_date": "2026-11-09",
+  "currency": null,
+  "subtotal": null,
+  "tax_amount": null,
+  "total_amount": null,
+  "no_price_document": true,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "SUS304 2T PLATE",
+      "internal_item_code": "M-PLT-SUS304-2T-1000X2000",
+      "spec": "1000x2000",
+      "quantity": 2,
+      "requested_quantity": 2,
+      "unit": "EA"
+    },
+    {
+      "item_name": "M8 육각 볼트",
+      "internal_item_code": "P-BOLT-M8-20-ZN",
+      "spec": "M8x20",
+      "quantity": 500,
+      "requested_quantity": 500,
+      "unit": "EA"
+    },
+    {
+      "item_name": "SUS304 평와셔 M8",
+      "internal_item_code": "P-WASH-SUS304-M8",
+      "spec": "M8",
+      "quantity": 500,
+      "requested_quantity": 500,
+      "unit": "EA"
+    }
+  ],
+  "expected_review_flags": [
+    "internal_transfer_no_price"
+  ]
+}

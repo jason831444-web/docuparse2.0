@@ -1,0 +1,66 @@
+{
+  "filename": "001_po_full_visible.pdf",
+  "document_type": "purchase_order",
+  "document_subtype": "standard_po",
+  "document_number": "PO-VIS-2026-001",
+  "vendor": "대한정밀부품",
+  "customer": "한빛제조",
+  "issue_date": "2026-11-01",
+  "due_date": "2026-11-20",
+  "delivery_date": "2026-11-20",
+  "currency": "KRW",
+  "subtotal": 590000,
+  "tax_amount": 59000,
+  "total_amount": 649000,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "SUS304 2T PLATE",
+      "item_code": "STS304-2T",
+      "spec": "1000x2000",
+      "quantity": 6,
+      "unit": "EA",
+      "unit_price": 25000,
+      "supply_amount": 150000,
+      "tax_amount": 15000,
+      "line_total": 165000
+    },
+    {
+      "item_name": "M8 육각볼트",
+      "item_code": "BOLT-M8-20",
+      "spec": "M8x20",
+      "quantity": 1500,
+      "unit": "EA",
+      "unit_price": 120,
+      "supply_amount": 180000,
+      "tax_amount": 18000,
+      "line_total": 198000
+    },
+    {
+      "item_name": "SUS WASHER M8",
+      "item_code": "WASH-M8",
+      "spec": "M8",
+      "quantity": 1500,
+      "unit": "EA",
+      "unit_price": 40,
+      "supply_amount": 60000,
+      "tax_amount": 6000,
+      "line_total": 66000
+    },
+    {
+      "item_name": "고정 플레이트",
+      "item_code": "FIX-PLT-120",
+      "spec": "120x60x5T",
+      "quantity": 40,
+      "unit": "EA",
+      "unit_price": 5000,
+      "supply_amount": 200000,
+      "tax_amount": 20000,
+      "line_total": 220000
+    }
+  ],
+  "expected_review_flags": []
+}

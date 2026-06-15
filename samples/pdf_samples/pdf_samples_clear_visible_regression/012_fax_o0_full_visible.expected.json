@@ -1,0 +1,56 @@
+{
+  "filename": "012_fax_o0_full_visible.pdf",
+  "document_type": "purchase_order",
+  "document_subtype": "fax_like_po",
+  "document_number": "FAX-VIS-PO-2026-012",
+  "vendor": "동진부품",
+  "customer": "오성테크",
+  "issue_date": "2026-11-12",
+  "due_date": "2026-11-26",
+  "currency": "KRW",
+  "subtotal": 380000,
+  "tax_amount": 38000,
+  "total_amount": 418000,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "item_code": "BRG-H-100",
+      "spec": "100mm",
+      "quantity": 20,
+      "unit": "EA",
+      "unit_price": 8000,
+      "supply_amount": 160000,
+      "tax_amount": 16000,
+      "line_total": 176000
+    },
+    {
+      "item_name": "S45C PIN 8X60",
+      "item_code": "PIN-8X60",
+      "spec": "8x60",
+      "quantity": 100,
+      "unit": "EA",
+      "unit_price": 600,
+      "supply_amount": 60000,
+      "tax_amount": 6000,
+      "line_total": 66000
+    },
+    {
+      "item_name": "M8 볼트 / 와셔 SET",
+      "item_code": "SE-M8",
+      "spec": "M8",
+      "quantity": 1000,
+      "unit": "SET",
+      "unit_price": 160,
+      "supply_amount": 160000,
+      "tax_amount": 16000,
+      "line_total": 176000
+    }
+  ],
+  "expected_review_flags": [
+    "o0_normalization"
+  ]
+}

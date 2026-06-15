@@ -1,0 +1,45 @@
+{
+  "filename": "008_return_credit_full_visible.pdf",
+  "document_type": "transaction_statement",
+  "document_subtype": "return_credit",
+  "document_number": "RTN-VIS-2026-008",
+  "vendor": "오성테크",
+  "customer": "대영부품",
+  "issue_date": "2026-11-08",
+  "related_document_number": "DN-VIS-2026-004",
+  "currency": "KRW",
+  "subtotal": 11000,
+  "tax_amount": 1100,
+  "total_amount": 12100,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "item_code": "BRG-H-100",
+      "spec": "100mm",
+      "quantity": 1,
+      "unit": "EA",
+      "unit_price": 8000,
+      "supply_amount": 8000,
+      "tax_amount": 800,
+      "line_total": 8800
+    },
+    {
+      "item_name": "S45C PIN 8X60",
+      "item_code": "PIN-8X60",
+      "spec": "8x60",
+      "quantity": 5,
+      "unit": "EA",
+      "unit_price": 600,
+      "supply_amount": 3000,
+      "tax_amount": 300,
+      "line_total": 3300
+    }
+  ],
+  "expected_review_flags": [
+    "return_credit_subtype"
+  ]
+}

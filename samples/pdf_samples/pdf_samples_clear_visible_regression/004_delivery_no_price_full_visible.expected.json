@@ -1,0 +1,61 @@
+{
+  "filename": "004_delivery_no_price_full_visible.pdf",
+  "document_type": "delivery_note",
+  "document_subtype": "partial_receipt",
+  "document_number": "DN-VIS-2026-004",
+  "vendor": "대영부품",
+  "customer": "오성테크",
+  "issue_date": "2026-11-04",
+  "delivery_date": "2026-11-04",
+  "currency": null,
+  "subtotal": null,
+  "tax_amount": null,
+  "total_amount": null,
+  "no_price_document": true,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "item_code": "BRG-H-100",
+      "spec": "100mm",
+      "quantity": 50,
+      "ordered_quantity": 80,
+      "delivered_quantity": 50,
+      "remaining_quantity": 30,
+      "unit": "EA"
+    },
+    {
+      "item_name": "S45C PIN 8X60",
+      "item_code": "PIN-8X60",
+      "spec": "8x60",
+      "quantity": 300,
+      "ordered_quantity": 300,
+      "delivered_quantity": 300,
+      "remaining_quantity": 0,
+      "unit": "EA"
+    },
+    {
+      "item_name": "M8 육각볼트",
+      "item_code": "BOLT-M8-20",
+      "spec": "M8x20",
+      "quantity": 1200,
+      "ordered_quantity": 2000,
+      "delivered_quantity": 1200,
+      "remaining_quantity": 800,
+      "unit": "EA"
+    },
+    {
+      "item_name": "SUS 평와셔 M8",
+      "item_code": "WASH-M8",
+      "spec": "M8",
+      "quantity": 1200,
+      "ordered_quantity": 2000,
+      "delivered_quantity": 1200,
+      "remaining_quantity": 800,
+      "unit": "EA"
+    }
+  ],
+  "expected_review_flags": []
+}

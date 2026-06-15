@@ -1,0 +1,53 @@
+{
+  "filename": "002_quote_options_full_visible.pdf",
+  "document_type": "quotation",
+  "document_subtype": "option_quote",
+  "document_number": "QT-VIS-2026-002-ALT",
+  "vendor": "한성산업",
+  "customer": "미래정밀",
+  "issue_date": "2026-11-02",
+  "valid_until": "2026-11-30",
+  "currency": "KRW",
+  "subtotal": null,
+  "tax_amount": null,
+  "total_amount": null,
+  "no_price_document": false,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "option": "A1",
+      "item_name": "스텐판 옵션 A",
+      "item_code": "PLT-SUS304-2T",
+      "spec": "SUS304 2T",
+      "quantity": 10,
+      "unit": "EA",
+      "unit_price": 24500,
+      "supply_amount": 245000
+    },
+    {
+      "option": "A2",
+      "item_name": "스텐판 옵션 B",
+      "item_code": "PLT-SUS316-2T",
+      "spec": "SUS316 2T",
+      "quantity": 10,
+      "unit": "EA",
+      "unit_price": 31000,
+      "supply_amount": 310000
+    },
+    {
+      "option": "B1",
+      "item_name": "고정 브라켓",
+      "item_code": "BRK-SUS-01",
+      "spec": "50x80x3T",
+      "quantity": 60,
+      "unit": "EA",
+      "unit_price": 2800,
+      "supply_amount": 168000
+    }
+  ],
+  "expected_review_flags": [
+    "option_quote_no_final_total"
+  ]
+}

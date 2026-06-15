@@ -1,0 +1,45 @@
+{
+  "filename": "007_incoming_inspection_full_visible.pdf",
+  "document_type": "inspection_report",
+  "document_subtype": "incoming_inspection",
+  "document_number": "IQC-VIS-2026-007",
+  "vendor": "대영부품",
+  "customer": "오성테크",
+  "issue_date": "2026-11-07",
+  "inspection_date": "2026-11-07",
+  "currency": null,
+  "subtotal": null,
+  "tax_amount": null,
+  "total_amount": null,
+  "no_price_document": true,
+  "visual_crop": false,
+  "visible_columns": "all columns visible; no cropped table columns",
+  "hidden_or_cropped_columns": [],
+  "line_items": [
+    {
+      "item_name": "베어링 하우징",
+      "lot_no": "LOT-BRG-VIS-A",
+      "spec": "100mm",
+      "quantity": 50,
+      "unit": "EA",
+      "received_quantity": 50,
+      "accepted_quantity": 49,
+      "rejected_quantity": 1,
+      "decision": "조건부 합격"
+    },
+    {
+      "item_name": "S45C PIN 8X60",
+      "lot_no": "LOT-PIN-VIS-B",
+      "spec": "8x60",
+      "quantity": 300,
+      "unit": "EA",
+      "received_quantity": 300,
+      "accepted_quantity": 300,
+      "rejected_quantity": 0,
+      "decision": "합격"
+    }
+  ],
+  "expected_review_flags": [
+    "inspection_not_return_credit"
+  ]
+}
