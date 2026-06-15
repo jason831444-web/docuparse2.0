@@ -2,7 +2,7 @@ import { Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems, vlCandidateHandlingLabel, vlCandidateIssueLabel, vlCandidateMetadata } from "@/lib/utils";
+import { bboxReviewFlagLabel, blockingReviewIssues, businessFieldDate, businessIssueDate, displayWarningsWithoutReviewDuplicates, documentFieldLabels, documentTaxonomy, formatDate, formatMoney, informationalReviewIssues, layoutDebugMetadata, primaryCategoryLabel, reviewIssueSummaryItems, vlCandidateHandlingLabel, vlCandidateIssueLabel, vlCandidateMetadata } from "@/lib/utils";
 import type { BBoxTableCandidate, DocumentRecord, LayoutDebugMetadata, VLCandidateMetadata } from "@/types/document";
 
 function ListBlock({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
@@ -119,13 +119,37 @@ function LayoutDebugBlock({ layoutDebug }: { layoutDebug: LayoutDebugMetadata | 
   );
 }
 
-function VLCandidateBlock({ metadata }: { metadata: VLCandidateMetadata | null }) {
+const USER_HIDDEN_VL_AMOUNT_ISSUES = new Set([
+  "vl_candidate_missing_line_amount",
+  "vl_candidate_invalid_line_total",
+  "vl_candidate_invalid_tax_greater_than_supply",
+  "vl_candidate_invalid_tax_greater_than_total",
+  "vl_candidate_invalid_supply_greater_than_total",
+  "no_price_candidate_amount_conflict",
+]);
+
+function shouldShowVLCandidateIssue(code: string | null | undefined, document: DocumentRecord) {
+  if (!code) return false;
+  const taxonomy = documentTaxonomy(document);
+  const profiles = new Set(taxonomy.document_profiles || []);
+  const suppressAmountIssues =
+    profiles.has("no_price_document")
+    || profiles.has("option_quote_document")
+    || taxonomy.amount_required === false;
+  return !(suppressAmountIssues && USER_HIDDEN_VL_AMOUNT_ISSUES.has(code));
+}
+
+function VLCandidateBlock({ metadata, document }: { metadata: VLCandidateMetadata | null; document: DocumentRecord }) {
   if (!metadata) return null;
   const candidates = metadata.vl_candidates || [];
   const summary = metadata.vl_candidate_summary;
   const candidateCount = summary?.candidate_count ?? candidates.length;
-  const issueCodes = Array.from(new Set([...(summary?.issue_codes || []), ...candidates.flatMap((candidate) => candidate.issue_codes || [])]));
-  const issueDetails = candidates.flatMap((candidate) => candidate.issue_details || []).slice(0, 4);
+  const issueCodes = Array.from(new Set([...(summary?.issue_codes || []), ...candidates.flatMap((candidate) => candidate.issue_codes || [])]))
+    .filter((code) => shouldShowVLCandidateIssue(code, document));
+  const issueDetails = candidates
+    .flatMap((candidate) => candidate.issue_details || [])
+    .filter((detail) => shouldShowVLCandidateIssue(detail.code, document))
+    .slice(0, 4);
   const handlingLabel = vlCandidateHandlingLabel(summary?.recommended_handling || candidates[0]?.recommended_handling);
   if (!candidateCount && !issueCodes.length) return null;
   return (
@@ -206,7 +230,7 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
         <ListBlock title="검토 필요 항목" items={reviewItems} warning />
         <ListBlock title="처리 경고" items={warningItems} warning />
         <LayoutDebugBlock layoutDebug={layoutDebug} />
-        <VLCandidateBlock metadata={vlMetadata} />
+        <VLCandidateBlock metadata={vlMetadata} document={document} />
         <InfoDetails items={infoItems} />
         <ListBlock title="주요 날짜" items={document.key_dates} />
       </CardContent>
