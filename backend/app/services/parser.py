@@ -793,6 +793,8 @@ class DocumentParser:
         text = re.sub(r"\s+", " ", str(row or "")).strip(" |")
         if not text or re.search(r"^(?:total|subtotal|vat|tax|공급가액|부가세|총액|합계)", text, flags=re.IGNORECASE):
             return None
+        if self._looks_like_line_item_header_text(text):
+            return None
         text = self._strip_duplicate_trailing_amount(text)
         if self._vl_inline_no_price_context(doc_type) and not self._looks_like_priced_vl_inline_row(text):
             no_price_item = self._vl_inline_no_price_item_from_row(text, doc_type)
@@ -995,12 +997,13 @@ class DocumentParser:
         if doc_type == DocumentType.inspection_report or re.search(r"\bLOT[-\w]+\b|합격수량|불량수량", text, flags=re.IGNORECASE):
             match = re.match(
                 r"^\d+\s+(?P<body>.+?)\s+(?P<lot>LOT[-\w]+)\s+(?P<spec>\S+)\s+"
-                r"(?P<received>[-+]?\d[\d,]*)\s+(?P<accepted>[-+]?\d[\d,]*)\s+(?P<rejected>[-+]?\d[\d,]*)\s*$",
+                r"(?P<received>[-+]?\d[\d,]*)\s+(?P<accepted>[-+]?\d[\d,]*)\s+(?P<rejected>[-+]?\d[\d,]*)"
+                r"(?:\s+(?P<result>[A-Za-z가-힣][A-Za-z가-힣\s/-]*))?\s*$",
                 text,
                 flags=re.IGNORECASE,
             )
             if match:
-                return {
+                item = {
                     "item_name": self._clean_value(match.group("body")),
                     "document_item_code": match.group("lot"),
                     "specification": match.group("spec"),
@@ -1009,6 +1012,9 @@ class DocumentParser:
                     "accepted_quantity": match.group("accepted"),
                     "rejected_quantity": match.group("rejected"),
                 }
+                if match.group("result"):
+                    item["inspection_result"] = match.group("result")
+                return item
         if doc_type in {DocumentType.delivery_note, DocumentType.general_document, DocumentType.memo, DocumentType.other}:
             transfer_match = re.match(
                 r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]*-[A-Z0-9-]+(?:\S*)?)\s+"
@@ -2449,7 +2455,7 @@ class DocumentParser:
             item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
         )
         normalized = {
-            "item_name": self._clean_value(item.get("item_name")),
+            "item_name": self._normalize_item_name_value(item.get("item_name")),
             "item_code": item_code,
             "document_item_code": item_code,
             "source_item_code": item_code,
@@ -2512,6 +2518,21 @@ class DocumentParser:
         if warnings:
             normalized["validation_warnings"] = warnings
         return {key: value for key, value in normalized.items() if value not in (None, "") and not str(key).startswith("_")}
+
+    def _normalize_item_name_value(self, value: Any) -> str | None:
+        name = self._clean_value(value)
+        if not name:
+            return None
+        return self._strip_leading_row_number_from_item_name(name)
+
+    def _strip_leading_row_number_from_item_name(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return text
+        # Strip only a standalone table row number. Model numbers such as
+        # 2PIN, 8X60, 100R, and 10mm are kept because the digit is fused to
+        # the product token rather than separated as its own cell.
+        return re.sub(r"^\s*\d{1,3}\s+(?=[A-Za-z가-힣])", "", text, count=1).strip()
 
     def _split_trailing_material_grade_from_item_name(self, item: dict) -> dict:
         name = self._clean_value(item.get("item_name"))
@@ -2961,6 +2982,8 @@ class DocumentParser:
         seen: set[tuple] = set()
         preserve_sparse_review_duplicates = len(items) >= 8
         for item in items:
+            if self._looks_like_line_item_header_text(str(item.get("item_name") or "")):
+                continue
             has_numeric_evidence = any(
                 item.get(field) is not None
                 for field in ["quantity", "unit_price", "supply_amount", "tax_amount", "line_total"]
@@ -2985,6 +3008,54 @@ class DocumentParser:
             seen.add(key)
             deduped.append({key: value for key, value in item.items() if not str(key).startswith("_")})
         return deduped
+
+    def _looks_like_line_item_header_text(self, value: str) -> bool:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if not text:
+            return False
+        compact = re.sub(r"[\s_./|:-]+", "", text).lower()
+        header_terms = [
+            "no",
+            "번호",
+            "순번",
+            "품목명",
+            "품명",
+            "item",
+            "itemname",
+            "itemdescription",
+            "description",
+            "vendorsku",
+            "품목코드",
+            "문서품목코드",
+            "내부품목코드",
+            "lotno",
+            "규격",
+            "spec",
+            "material",
+            "수량",
+            "qty",
+            "quantity",
+            "입고수량",
+            "합격수량",
+            "불량수량",
+            "단위",
+            "unit",
+            "단가",
+            "unitprice",
+            "공급가액",
+            "subtotal",
+            "세액",
+            "tax",
+            "vat",
+            "합계",
+            "total",
+            "판정",
+            "result",
+            "remark",
+        ]
+        hits = sum(1 for term in header_terms if term in compact)
+        has_real_item_signal = bool(re.search(r"\bLOT[-A-Z0-9]+|[A-Z]{2,}[-A-Z0-9]*\d|[가-힣A-Za-z]+\d+[A-Za-z]*", text, flags=re.IGNORECASE))
+        return hits >= 3 and not has_real_item_signal
 
     def _collapse_duplicate_line_item_sets(self, items: list[dict], document_total: Decimal | None) -> list[dict]:
         if not items:

@@ -272,7 +272,7 @@ def test_vl_candidate_parser_preserves_negative_adjustment_amount_when_positive_
     assert second["supply_amount"] == -1
 
 
-def test_vl_candidate_parser_flags_header_row_promoted_as_item():
+def test_vl_candidate_parser_blocks_inspection_header_row_from_items():
     candidate = VLCandidateParser().parse_text(
         "\n".join(
             [
@@ -287,7 +287,8 @@ def test_vl_candidate_parser_flags_header_row_promoted_as_item():
     )
 
     assert candidate is not None
-    assert "vl_candidate_header_row_as_item" in candidate["issue_codes"]
+    assert "vl_candidate_header_row_as_item" not in candidate["issue_codes"]
+    assert not any("품목명 Lot No" in item.get("item_name", "") for item in candidate["line_items"])
 
 
 def test_vl_candidate_parser_flags_return_credit_type_uncertainty():
@@ -361,6 +362,66 @@ def test_vl_candidate_parser_does_not_warn_for_safe_internal_transfer_broad_type
 
     assert candidate is not None
     assert "vl_candidate_internal_transfer_type_uncertain" not in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_parses_inspection_rows_with_decision_column_without_header_item():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "입고검사성적서",
+                "공급업체 대영부품 고객사 오성테크",
+                "검사번호 IQC-VIS-2026-007 입고일 2026-11-07",
+                "No 품목명 Lot No 규격 입고수량 합격수량 불량수량 판정",
+                "1 베어링 하우징 LOT-BRG-VIS-A 100mm 50 49 1 조건부 합격",
+                "2 S45C PIN 8X60 LOT-PIN-VIS-B 8x60 300 300 0 합격",
+                "비고: 불량 1EA는 반품 예정",
+            ]
+        ),
+        filename="inspection-full-visible.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    names = [item["item_name"] for item in candidate["line_items"]]
+    assert names == ["베어링 하우징", "S45C PIN 8X60"]
+    assert not any("품목명 Lot No" in name for name in names)
+    first, second = candidate["line_items"]
+    assert first["received_quantity"] == 50
+    assert first["accepted_quantity"] == 49
+    assert first["rejected_quantity"] == 1
+    assert first["inspection_result"] == "조건부 합격"
+    assert second["received_quantity"] == 300
+    assert second["accepted_quantity"] == 300
+    assert second["rejected_quantity"] == 0
+    assert second["inspection_result"] == "합격"
+    assert "vl_candidate_header_row_as_item" not in candidate["issue_codes"]
+    assert "vl_candidate_return_credit_type_uncertain" not in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_strips_standalone_row_number_prefix_but_keeps_model_numbers():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "세금계산서 / INVOICE",
+                "계산서번호 INV-GEN-VIS-2026-011",
+                "No Item Description Vendor SKU Specification Qty Unit Unit Price Subtotal Tax Total",
+                "1 PCB Connector 12P CON-PCB-12P 12P 1,500 EA 300 450,000 45,000 495,000",
+                "2 Cable Harness 500 CBL-HAR-500 500mm 350 EA 2,200 770,000 77,000 847,000",
+                "3 AL6061 환봉 10파이 AL6061-ROD-10 10mm x 3000 30 EA 8,000 240,000 24,000 264,000",
+                "4 2PIN Connector CON-2PIN 2PIN 10 EA 100 1,000 100 1,100",
+                "Vendor SKU 컬럼을 별도 item row로 만들지 말 것.",
+            ]
+        ),
+        filename="vendor-sku-invoice.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    names = [item["item_name"] for item in candidate["line_items"]]
+    assert names[:3] == ["PCB Connector 12P", "Cable Harness 500", "AL6061 환봉 10파이"]
+    assert "2PIN Connector" in names
+    assert not any(name.startswith(("1 ", "2 ", "3 ", "4 ")) for name in names)
+    assert not any(name.lower() == "vendor sku" for name in names)
 
 
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
