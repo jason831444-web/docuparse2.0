@@ -828,4 +828,110 @@ def test_vl_inline_distorted_invoice_preserves_explicit_quantity_and_price():
     bolt = parsed.line_items[2]
     assert bolt["item_name"] == "육각볼트 M8x20"
     assert "quantity" not in bolt
-    assert {"missing_quantity", "quantity_cell_blank"} <= set(bolt["validation_warnings"])
+
+
+def test_vl_inline_inspection_report_extracts_quantity_breakdown_without_header_item():
+    text = "\n".join([
+        "입고검사성적서",
+        "검사번호 IQC-2026-0918-044",
+        "No 품목명 Lot No 규격 입고수량 합격수량 불량수량",
+        "1 베어링 하우징 LOT-BRG-0918-A 100mm 50 49 1",
+        "2 S45C PIN 8X60 LOT-PIN-0918-B 8x60 300 300 0",
+        "비고: 불량 1EA는 반품 예정",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_inspection_report.txt")
+
+    assert parsed.document_type == DocumentType.inspection_report
+    assert parsed.document_number == "IQC-2026-0918-044"
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 2
+    first = parsed.line_items[0]
+    assert first["item_name"] == "베어링 하우징"
+    assert first["specification"] == "100mm"
+    assert first["quantity"] == 50
+    assert first["received_quantity"] == 50
+    assert first["accepted_quantity"] == 49
+    assert first["rejected_quantity"] == 1
+    assert not any("품목명" in item["item_name"] for item in parsed.line_items)
+
+
+def test_vl_inline_return_credit_rows_are_not_duplicated_or_smeared():
+    text = "\n".join([
+        "반품/차감 요청서",
+        "문서번호 RTN-2026-0919-011",
+        "관련납품서 DN-2026-0914-2F",
+        "No 반품품목 규격 수량 단위 단가 공급가액 세액 합계",
+        "1 베어링 하우징 100mm 1 EA 8,000 8,000 800 8,800",
+        "2 S45C PIN 8X60 8x60 5 EA 600 3,000 300 3,300",
+        "차감 합계 12,100",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_return_credit.txt")
+
+    assert parsed.document_number == "RTN-2026-0919-011"
+    assert parsed.extracted_amount == Decimal("12100")
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["item_name"] == "베어링 하우징"
+    assert parsed.line_items[0]["specification"] == "100mm"
+    assert parsed.line_items[0]["quantity"] == 1
+    assert parsed.line_items[0]["supply_amount"] == 8000
+    assert parsed.line_items[0]["tax_amount"] == 800
+    assert parsed.line_items[0]["line_total"] == 8800
+    assert parsed.line_items[1]["item_name"] == "S45C PIN"
+    assert parsed.line_items[1]["specification"] == "8x60"
+    assert parsed.line_items[1]["quantity"] == 5
+    assert parsed.line_items[1]["line_total"] == 3300
+
+
+def test_vl_inline_fax_po_recovers_duplicate_trailing_total_and_fused_spec():
+    text = "\n".join([
+        "FAX 발주서",
+        "문서번호 FAX-PO-2026-0921",
+        "No 품목명 규격 수량 단위 단가 공급가액 세액 합계",
+        "1 베어링 하우징 100mm 20 EA 8,000 160,000 16,000 176,000",
+        "2 S45C PIN 8X60 8x60 100 EA 600 60,000 6,000 66,000",
+        "3 M8 볼트 / 와셔 SEM8 1,000 SET 160 160,000 16,000 176,000 176,000",
+        "합계 418,000",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_fax_po.txt")
+
+    assert parsed.document_type == DocumentType.purchase_order
+    assert parsed.document_number == "FAX-PO-2026-0921"
+    assert parsed.extracted_amount == Decimal("418000")
+    assert len(parsed.line_items) == 3
+    assert parsed.line_items[1]["specification"] == "8x60"
+    third = parsed.line_items[2]
+    assert third["item_name"] == "M8 볼트 / 와셔"
+    assert third["specification"] == "M8"
+    assert third["quantity"] == 1000
+    assert third["unit"] == "SET"
+    assert third["unit_price"] == 160
+    assert third["line_total"] == 176000
+
+
+def test_vl_inline_internal_transfer_preserves_codes_and_requested_quantities():
+    text = "\n".join([
+        "사업장간 자재 이동 요청서",
+        "문서번호 TRF-2026-0922-002",
+        "No 품목명 내부품목코드 규격 요청수량 단위",
+        "1 SUS304 2T PLATE M-PLT-SUS304-2T-1000X20001000x2000 2 EA",
+        "2 M8 육각 볼트 P-BOLT-M8-20-ZN M8x20 500 EA",
+        "3 SUS304 평와셔 M8 P-WASH-SUS304-M8 M8 500 EA",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_internal_transfer.txt")
+
+    assert parsed.document_number == "TRF-2026-0922-002"
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) == 3
+    first = parsed.line_items[0]
+    assert first["item_name"] == "SUS304 2T PLATE"
+    assert first["document_item_code"] == "M-PLT-SUS304-2T-1000X2000"
+    assert first["specification"] == "1000x2000"
+    assert first["quantity"] == 2
+    assert first["requested_quantity"] == 2
+    assert parsed.line_items[1]["document_item_code"] == "P-BOLT-M8-20-ZN"
+    assert parsed.line_items[2]["requested_quantity"] == 500

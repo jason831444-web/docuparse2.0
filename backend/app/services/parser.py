@@ -759,10 +759,7 @@ class DocumentParser:
         """
         header_index = next((
             index for index, line in enumerate(lines)
-            if re.search(r"(품목명|품목\s*코드|item\s+name|item\s+code|description|vendor\s+sku)", line, flags=re.IGNORECASE)
-            and re.search(r"(수량|qty|quantity)", line, flags=re.IGNORECASE)
-            and re.search(r"(단가|unit\s*price)", line, flags=re.IGNORECASE)
-            and re.search(r"(공급가액|subtotal|supply|amount|total)", line, flags=re.IGNORECASE)
+            if self._looks_like_vl_inline_table_header(line, doc_type)
         ), None)
         if header_index is None:
             return []
@@ -777,11 +774,27 @@ class DocumentParser:
             return []
         return items
 
+    def _looks_like_vl_inline_table_header(self, line: str, doc_type: DocumentType | None = None) -> bool:
+        text = str(line or "")
+        if not re.search(r"(품목명|반품품목|품목\s*코드|item\s+name|item\s+code|description|vendor\s+sku)", text, flags=re.IGNORECASE):
+            return False
+        has_quantity = bool(re.search(r"(수량|qty|quantity)", text, flags=re.IGNORECASE))
+        has_amount = bool(re.search(r"(단가|unit\s*price|공급가액|subtotal|supply|amount|total|세액|합계)", text, flags=re.IGNORECASE))
+        has_no_price_quantity_columns = bool(
+            re.search(r"(발주수량|납품수량|잔량|요청수량|입고수량|합격수량|불량수량)", text, flags=re.IGNORECASE)
+        )
+        if has_quantity and has_amount:
+            return True
+        if doc_type in {DocumentType.delivery_note, DocumentType.inspection_report, DocumentType.general_document, DocumentType.memo}:
+            return has_no_price_quantity_columns or (has_quantity and not has_amount)
+        return has_quantity and has_no_price_quantity_columns
+
     def _vl_inline_table_item_from_row(self, row: str, doc_type: DocumentType | None = None) -> dict | None:
         text = re.sub(r"\s+", " ", str(row or "")).strip(" |")
         if not text or re.search(r"^(?:total|subtotal|vat|tax|공급가액|부가세|총액|합계)", text, flags=re.IGNORECASE):
             return None
-        if self._vl_inline_no_price_context(doc_type):
+        text = self._strip_duplicate_trailing_amount(text)
+        if self._vl_inline_no_price_context(doc_type) and not self._looks_like_priced_vl_inline_row(text):
             no_price_item = self._vl_inline_no_price_item_from_row(text, doc_type)
             if no_price_item:
                 return no_price_item
@@ -843,6 +856,8 @@ class DocumentParser:
             )
         row_match = match or missing_supply_match or supply_only_match or supply_without_unit_price_match or missing_quantity_match
         if not row_match:
+            if self._vl_inline_no_price_context(doc_type):
+                return self._vl_inline_no_price_item_from_row(text, doc_type)
             return None
         body = re.sub(r"^\d+\s+", "", row_match.group("body")).strip(" -|")
         if not re.search(r"[A-Za-z가-힣]", body):
@@ -926,14 +941,26 @@ class DocumentParser:
         return {key: value for key, value in item.items() if value not in (None, "", [])}
 
     def _vl_inline_no_price_context(self, doc_type: DocumentType | None) -> bool:
-        return doc_type in {DocumentType.delivery_note, DocumentType.inspection_report, DocumentType.general_document, DocumentType.memo}
+        return doc_type in {
+            DocumentType.delivery_note,
+            DocumentType.inspection_report,
+            DocumentType.general_document,
+            DocumentType.memo,
+            DocumentType.other,
+        }
+
+    def _looks_like_priced_vl_inline_row(self, text: str) -> bool:
+        tokens = str(text or "").split()
+        numeric_count = sum(1 for token in tokens if self._to_decimal(token) is not None)
+        has_unit = any(re.fullmatch(r"[A-Za-z가-힣]{1,8}", token or "") for token in tokens)
+        return numeric_count >= 4 and has_unit
 
     def _vl_inline_no_price_item_from_row(self, text: str, doc_type: DocumentType | None) -> dict | None:
         if not re.match(r"^\d+\s+", text):
             return None
         if doc_type == DocumentType.inspection_report or re.search(r"\bLOT[-\w]+\b|합격수량|불량수량", text, flags=re.IGNORECASE):
             match = re.match(
-                r"^\d+\s+(?P<body>.+?)\s+(?P<lot>LOT[-\w]+)\s+(?P<spec>\\S+)\s+"
+                r"^\d+\s+(?P<body>.+?)\s+(?P<lot>LOT[-\w]+)\s+(?P<spec>\S+)\s+"
                 r"(?P<received>[-+]?\d[\d,]*)\s+(?P<accepted>[-+]?\d[\d,]*)\s+(?P<rejected>[-+]?\d[\d,]*)\s*$",
                 text,
                 flags=re.IGNORECASE,
@@ -948,9 +975,30 @@ class DocumentParser:
                     "accepted_quantity": match.group("accepted"),
                     "rejected_quantity": match.group("rejected"),
                 }
-        if doc_type in {DocumentType.delivery_note, DocumentType.general_document, DocumentType.memo}:
+        if doc_type in {DocumentType.delivery_note, DocumentType.general_document, DocumentType.memo, DocumentType.other}:
+            transfer_match = re.match(
+                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]*-[A-Z0-9-]+(?:\S*)?)\s+"
+                r"(?P<spec>\S+)\s+(?P<quantity>[-+]?\d[\d,]*)\s+(?P<unit>[A-Za-z가-힣]{1,8})\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if transfer_match:
+                code = transfer_match.group("code")
+                spec = transfer_match.group("spec")
+                split_code, split_spec = self._split_compacted_code_spec(code)
+                if split_spec:
+                    code = split_code
+                    spec = split_spec
+                return {
+                    "item_name": self._clean_value(transfer_match.group("body")),
+                    "document_item_code": self._clean_code_value(code),
+                    "specification": self._normalize_vl_inline_specification(spec),
+                    "quantity": transfer_match.group("quantity"),
+                    "requested_quantity": transfer_match.group("quantity"),
+                    "unit": transfer_match.group("unit"),
+                }
             match = re.match(
-                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]+)\s+(?P<spec>\\S+)\s+"
+                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]+)\s+(?P<spec>\S+)\s+"
                 r"(?P<first>[-+]?\d[\d,]*)\s+(?P<second>[-+]?\d[\d,]*)(?:\s+(?P<third>[-+]?\d[\d,]*))?\s*(?P<unit>[A-Za-z가-힣]{1,8})?\s*$",
                 text,
                 flags=re.IGNORECASE,
@@ -970,7 +1018,7 @@ class DocumentParser:
                     item["unit"] = match.group("unit")
                 return item
             transfer_match = re.match(
-                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]+(?:x\\d+)?)(?P<spec>\\d+x\\d+(?:x\\d+)?)?\s+"
+                r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]*-[A-Z0-9-]+(?:x\d+)?)(?P<spec>\d+x\d+(?:x\d+)?)?\s+"
                 r"(?P<quantity>[-+]?\d[\d,]*)\s+(?P<unit>[A-Za-z가-힣]{1,8})\s*$",
                 text,
                 flags=re.IGNORECASE,
@@ -990,14 +1038,48 @@ class DocumentParser:
                 }
         return None
 
+    def _strip_duplicate_trailing_amount(self, text: str) -> str:
+        tokens = str(text or "").split()
+        if len(tokens) < 2:
+            return str(text or "")
+        last = self._to_decimal(tokens[-1])
+        previous = self._to_decimal(tokens[-2])
+        if last is not None and previous is not None and last == previous:
+            return " ".join(tokens[:-1])
+        return str(text or "")
+
     def _split_compacted_code_spec(self, code: str) -> tuple[str, str | None]:
         text = str(code or "")
+        repeated = self._split_repeated_trailing_dimension(text)
+        if repeated:
+            return repeated
+        dimension_matches = list(re.finditer(r"\d+[xX]\d+(?:[xX]\d+)?", text))
+        if len(dimension_matches) >= 2:
+            last = dimension_matches[-1]
+            previous = dimension_matches[-2]
+            if previous.end() == last.start() and previous.group(0).lower() == last.group(0).lower():
+                return text[: last.start()], last.group(0)
         match = re.search(r"(\d+x\d+(?:x\d+)?)$", text, flags=re.IGNORECASE)
         if not match:
             return text, None
         spec = match.group(1)
         prefix = text[: match.start()].rstrip("-_ ")
         return prefix or text, spec
+
+    def _split_repeated_trailing_dimension(self, text: str) -> tuple[str, str] | None:
+        value = str(text or "")
+        for start in range(len(value)):
+            suffix = value[start:]
+            if len(suffix) < 4 or len(suffix) % 2:
+                continue
+            midpoint = len(suffix) // 2
+            first = suffix[:midpoint]
+            second = suffix[midpoint:]
+            if first.lower() != second.lower():
+                continue
+            if re.fullmatch(r"\d+[xX]\d+(?:[xX]\d+)?", first):
+                return value[: start + midpoint], second
+        return None
 
     def _split_vl_inline_item_identity(self, body: str) -> tuple[str | None, str | None, str | None]:
         tokens = body.split()
@@ -1037,6 +1119,8 @@ class DocumentParser:
                 continue
             if re.fullmatch(r"M\d+(?:x\d+)?", token, flags=re.IGNORECASE):
                 return index
+            if re.fullmatch(r"[A-Z]{1,4}M\d+(?:x\d+)?", token, flags=re.IGNORECASE):
+                return index
             if re.fullmatch(r"\d+(?:\.\d+)?(?:mm|T|P)", token, flags=re.IGNORECASE):
                 return index
         return None
@@ -1045,6 +1129,15 @@ class DocumentParser:
         if not value:
             return None
         text = re.sub(r"\s*[xX]\s*", "x", value.strip())
+        text = re.sub(r"^[A-Z]{1,4}(M\d+(?:x\d+)?)$", r"\1", text, flags=re.IGNORECASE)
+        repeated = self._split_repeated_trailing_dimension(text)
+        if repeated and repeated[0].lower() == repeated[1].lower():
+            text = repeated[1]
+        elif re.search(r"\d+\s*x\s*\d+", text, flags=re.IGNORECASE):
+            compact_text = re.sub(r"\s+", "", text)
+            repeated = self._split_repeated_trailing_dimension(compact_text)
+            if repeated and repeated[0].lower() == repeated[1].lower():
+                text = repeated[1]
         text = re.sub(r"\s+", "", text) if re.search(r"\d+\s*x\s*\d+", text, flags=re.IGNORECASE) else re.sub(r"\s+", " ", text)
         return self._clean_value(text)
 
@@ -2283,7 +2376,9 @@ class DocumentParser:
         return bool(item.get("item_name") or item.get("item_code"))
 
     def _normalize_line_item(self, item: dict) -> dict:
-        item_code = self._clean_code_value(item.get("item_code"))
+        item_code = self._clean_code_value(
+            item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
+        )
         normalized = {
             "item_name": self._clean_value(item.get("item_name")),
             "item_code": item_code,
