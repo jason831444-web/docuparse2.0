@@ -228,10 +228,48 @@ class VLCandidateParser:
                     "message": "VL candidate row amounts are implausibly larger than the document total.",
                 }
             )
+        max_text_row_number = self._max_table_row_number(text)
+        if total is not None and total > 0 and max_text_row_number is not None and max_text_row_number > total * Decimal("1.5"):
+            issues.append(
+                {
+                    "code": "vl_candidate_total_row_amount_conflict",
+                    "severity": "warn",
+                    "actual_value": str(total),
+                    "source_value": str(max_text_row_number),
+                    "message": "VL output text contains table-row numeric values that conflict with the parsed document total.",
+                }
+            )
         return issues
 
     def _text_has_total_label(self, text: str) -> bool:
         return bool(re.search(r"(총액|합계\\s*금액|합계금액|total\\s*(?:usd|amount)?|subtotal)", text or "", flags=re.IGNORECASE))
+
+    def _max_table_row_number(self, text: str) -> Decimal | None:
+        values: list[Decimal] = []
+        in_table = False
+        for line in str(text or "").splitlines():
+            normalized = " ".join(line.split())
+            if not normalized:
+                continue
+            if re.search(r"(품목명|반품품목|description|vendor\\s+sku|수량|qty)", normalized, flags=re.IGNORECASE):
+                in_table = True
+                continue
+            if not in_table:
+                continue
+            if re.search(r"^(?:total|subtotal|tax|vat|총액|합계|공급가액|세액)", normalized, flags=re.IGNORECASE):
+                break
+            if not re.match(r"^(?:\d+\s+)?[A-Za-z가-힣0-9/()._-]+", normalized):
+                continue
+            if not re.search(r"[A-Za-z가-힣]", normalized):
+                continue
+            for token in re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?", normalized):
+                try:
+                    value = Decimal(token.replace(",", ""))
+                except Exception:
+                    continue
+                if value > 0:
+                    values.append(value)
+        return max(values) if values else None
 
     def _looks_like_table_header(self, value: str) -> bool:
         normalized = " ".join((value or "").split()).casefold()

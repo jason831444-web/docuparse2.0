@@ -921,7 +921,20 @@ class DocumentParser:
             item["supply_amount"] = supply_only_match.group("supply_amount")
         elif supply_without_unit_price_match:
             item["quantity"] = supply_without_unit_price_match.group("quantity")
-            item["supply_amount"] = supply_without_unit_price_match.group("supply_amount")
+            lone_amount = self._to_decimal(supply_without_unit_price_match.group("supply_amount"))
+            quantity_value = self._to_decimal(supply_without_unit_price_match.group("quantity"))
+            if (
+                doc_type == DocumentType.invoice
+                and lone_amount is not None
+                and quantity_value is not None
+                and quantity_value > 1
+                and lone_amount < Decimal("1000")
+                and "." in supply_without_unit_price_match.group("supply_amount")
+            ):
+                item["unit_price"] = supply_without_unit_price_match.group("supply_amount")
+                warnings.append("missing_line_amount")
+            else:
+                item["supply_amount"] = supply_without_unit_price_match.group("supply_amount")
 
         quantity = self._to_decimal(str(item.get("quantity"))) if item.get("quantity") is not None else None
         unit_price = self._to_decimal(str(item.get("unit_price"))) if item.get("unit_price") is not None else None

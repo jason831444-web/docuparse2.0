@@ -935,3 +935,32 @@ def test_vl_inline_internal_transfer_preserves_codes_and_requested_quantities():
     assert first["requested_quantity"] == 2
     assert parsed.line_items[1]["document_item_code"] == "P-BOLT-M8-20-ZN"
     assert parsed.line_items[2]["requested_quantity"] == 500
+
+
+def test_vl_inline_commercial_invoice_cropped_amount_column_keeps_unit_price_unconfirmed_amount():
+    text = "\n".join([
+        "COMMERCIAL INVOICE",
+        "Invoice No INV-US-2026-0916-EX",
+        "Currency USD",
+        "No Description Vendor SKU Spec Qty Unit Unit Price",
+        "1 Linear Guide Rail HGW20 HGW20-1000 1000mm 10 EA 45.00",
+        "2 Cable Harness 500 CBL-HAR-500 500mm 50 EA 2.20",
+        "3 PCB Connector 12P CON-PCB-12P 12P 300 EA 0.30",
+        "Subtotal USD 650.00",
+        "Tax 0.00",
+        "Total USD 650.00",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_commercial_invoice_cropped_amount.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-US-2026-0916-EX"
+    assert parsed.currency == "USD"
+    assert parsed.extracted_amount == Decimal("650.00")
+    assert len(parsed.line_items) == 3
+    first = parsed.line_items[0]
+    assert first["quantity"] == 10
+    assert first["unit_price"] == 45
+    assert "supply_amount" not in first
+    assert "line_total" not in first
+    assert "missing_line_amount" in first["validation_warnings"]

@@ -43,8 +43,6 @@ class VLCandidateValidationGate:
 
     non_promotable_issue_codes = {
         "vl_candidate_header_row_as_item",
-        "vl_candidate_missing_line_amount",
-        "vl_candidate_missing_document_total",
         "vl_candidate_total_mismatch",
         "vl_candidate_row_count_mismatch",
         "vl_candidate_return_credit_type_uncertain",
