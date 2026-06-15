@@ -12,9 +12,9 @@ class DocumentBase(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     raw_text: str | None = None
     extracted_date: date | None = None
-    extracted_amount: Decimal | None = Field(default=None, ge=0)
-    subtotal: Decimal | None = Field(default=None, ge=0)
-    tax: Decimal | None = Field(default=None, ge=0)
+    extracted_amount: Decimal | None = None
+    subtotal: Decimal | None = None
+    tax: Decimal | None = None
     currency: str | None = Field(default=None, max_length=8)
     merchant_name: str | None = Field(default=None, max_length=255)
     vendor_name: str | None = Field(default=None, max_length=255)
