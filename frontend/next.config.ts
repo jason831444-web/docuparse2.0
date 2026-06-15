@@ -14,6 +14,10 @@ const nextConfig: NextConfig = {
         destination: `${backendInternalUrl}/health`,
       },
       {
+        source: "/api/uploads/:path*",
+        destination: `${backendInternalUrl}/uploads/:path*`,
+      },
+      {
         source: "/api/:path*",
         destination: `${backendInternalUrl}/api/:path*`,
       },
