@@ -911,6 +911,48 @@ def test_vl_inline_fax_po_recovers_duplicate_trailing_total_and_fused_spec():
     assert third["line_total"] == 176000
 
 
+def test_vl_inline_fax_po_normalizes_semi8_spec_token():
+    text = "\n".join([
+        "FAX 발주서",
+        "문서번호 FAX-PO-2026-0921",
+        "No 품목명 규격 수량 단위 단가 공급가액 세액 합계",
+        "1 베어링 하우징 100mm 20 EA 8,000 160,000 16,000 176,000",
+        "3 M8 볼트 / 와셔 SEMI8 1,000 SET 160 160,000 16,000 176,000",
+        "합계 418,000",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_fax_po_semi8.txt")
+
+    assert len(parsed.line_items) == 2
+    item = parsed.line_items[1]
+    assert item["item_name"] == "M8 볼트 / 와셔"
+    assert item["specification"] == "M8"
+    assert item["quantity"] == 1000
+    assert item["line_total"] == 176000
+
+
+def test_vl_inline_statement_rows_strip_transaction_date_prefix():
+    text = "\n".join([
+        "거래명세서",
+        "문서번호 TS-2026-0913-MON",
+        "No 품목명 규격 수량 단위 단가 공급가액",
+        "09-08 M8육각볼트M8x20 2000 EA 120 240000",
+        "09-12 SUS WASHER M8 2000 EA 40 80000",
+        "금월합계 641000",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_transaction_statement_rows.txt")
+
+    assert parsed.document_type == DocumentType.transaction_statement
+    assert len(parsed.line_items) == 2
+    assert parsed.line_items[0]["item_name"] == "M8 육각볼트"
+    assert parsed.line_items[0]["specification"] == "M8x20"
+    assert parsed.line_items[0]["quantity"] == 2000
+    assert parsed.line_items[0]["supply_amount"] == 240000
+    assert parsed.line_items[1]["item_name"] == "SUS WASHER"
+    assert parsed.line_items[1]["specification"] == "M8"
+
+
 def test_vl_inline_internal_transfer_preserves_codes_and_requested_quantities():
     text = "\n".join([
         "사업장간 자재 이동 요청서",
@@ -935,6 +977,22 @@ def test_vl_inline_internal_transfer_preserves_codes_and_requested_quantities():
     assert first["requested_quantity"] == 2
     assert parsed.line_items[1]["document_item_code"] == "P-BOLT-M8-20-ZN"
     assert parsed.line_items[2]["requested_quantity"] == 500
+
+
+def test_inspection_report_note_about_return_does_not_pollute_category():
+    text = "\n".join([
+        "입고검사성적서",
+        "검사번호 IQC-2026-0918-044",
+        "No 품목명 Lot No 규격 입고수량 합격수량 불량수량",
+        "1 베어링 하우징 LOT-BRG-0918-A 100mm 50 49 1",
+        "비고: 불량 1EA는 반품 예정",
+    ])
+
+    parsed = DocumentParser().parse(text, "inspection_return_note.txt")
+
+    assert parsed.document_type == DocumentType.inspection_report
+    assert parsed.category == "inspection_report"
+    assert parsed.extracted_amount is None
 
 
 def test_vl_inline_commercial_invoice_cropped_amount_column_keeps_unit_price_unconfirmed_amount():

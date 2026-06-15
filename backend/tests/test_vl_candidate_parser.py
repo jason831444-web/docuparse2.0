@@ -141,6 +141,43 @@ def test_vl_candidate_parser_flags_return_credit_type_uncertainty():
     assert "vl_candidate_return_credit_type_uncertain" in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_does_not_flag_inspection_note_as_return_credit():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "입고검사성적서",
+                "검사번호 IQC-2026-0918-044",
+                "No 품목명 Lot No 규격 입고수량 합격수량 불량수량",
+                "1 베어링 하우징 LOT-BRG-0918-A 100mm 50 49 1",
+                "비고: 불량 1EA는 반품 예정",
+            ]
+        ),
+        filename="inspection.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_return_credit_type_uncertain" not in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_does_not_warn_for_safe_internal_transfer_broad_type():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "사업장간 자재 이동 요청서",
+                "문서번호 TRF-2026-0922-002",
+                "No 품목명 내부품목코드 규격 요청수량 단위",
+                "1 SUS304 2T PLATE M-PLT-SUS304-2T-1000X20001000x2000 2 EA",
+            ]
+        ),
+        filename="internal-transfer.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_internal_transfer_type_uncertain" not in candidate["issue_codes"]
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

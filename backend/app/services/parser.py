@@ -1096,6 +1096,9 @@ class DocumentParser:
 
     def _split_vl_inline_item_identity(self, body: str) -> tuple[str | None, str | None, str | None]:
         tokens = body.split()
+        tokens = self._strip_vl_inline_row_prefix_tokens(tokens)
+        if not tokens:
+            return None, None, None
         code_index = next((
             index for index, token in enumerate(tokens)
             if self._looks_like_item_code_token(token)
@@ -1106,12 +1109,34 @@ class DocumentParser:
             specification = self._clean_value(" ".join(tokens[code_index + 1:])) if code_index + 1 < len(tokens) else None
             return item_name, item_code, self._normalize_vl_inline_specification(specification)
 
+        fused = self._split_fused_vl_inline_name_spec(" ".join(tokens))
+        if fused:
+            return fused
+
         spec_start = self._vl_inline_spec_start(tokens)
         if spec_start is not None and spec_start > 0:
             item_name = self._clean_value(" ".join(tokens[:spec_start]))
             specification = self._clean_value(" ".join(tokens[spec_start:]))
             return item_name, None, self._normalize_vl_inline_specification(specification)
         return self._clean_value(body), None, None
+
+    def _strip_vl_inline_row_prefix_tokens(self, tokens: list[str]) -> list[str]:
+        if len(tokens) >= 2 and re.fullmatch(r"\d{1,2}[-./]\d{1,2}", tokens[0]):
+            return tokens[1:]
+        return tokens
+
+    def _split_fused_vl_inline_name_spec(self, value: str) -> tuple[str | None, str | None, str | None] | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        match = re.match(r"^(?P<name>.+?[A-Za-z가-힣])(?P<spec>M\d+x\d+|\d+x\d+(?:x\d+)?(?:T)?)$", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        name = self._clean_value(match.group("name"))
+        if name:
+            name = re.sub(r"^(M\d+)([가-힣])", r"\1 \2", name, flags=re.IGNORECASE)
+        spec = self._normalize_vl_inline_specification(match.group("spec"))
+        return name, None, spec
 
     def _looks_like_item_code_token(self, token: str) -> bool:
         cleaned = str(token or "").strip(" ,|")
@@ -1134,6 +1159,8 @@ class DocumentParser:
                 return index
             if re.fullmatch(r"[A-Z]{1,4}M\d+(?:x\d+)?", token, flags=re.IGNORECASE):
                 return index
+            if re.fullmatch(r"SEMI?\d+|SEM\d+", token, flags=re.IGNORECASE):
+                return index
             if re.fullmatch(r"\d+(?:\.\d+)?(?:mm|T|P)", token, flags=re.IGNORECASE):
                 return index
         return None
@@ -1142,6 +1169,8 @@ class DocumentParser:
         if not value:
             return None
         text = re.sub(r"\s*[xX]\s*", "x", value.strip())
+        text = re.sub(r"^SEMI?(\d+)$", r"M\1", text, flags=re.IGNORECASE)
+        text = re.sub(r"^SEM(\d+)$", r"M\1", text, flags=re.IGNORECASE)
         text = re.sub(r"^[A-Z]{1,4}(M\d+(?:x\d+)?)$", r"\1", text, flags=re.IGNORECASE)
         repeated = self._split_repeated_trailing_dimension(text)
         if repeated and repeated[0].lower() == repeated[1].lower():
@@ -3668,7 +3697,7 @@ class DocumentParser:
 
     def _guess_category(self, text: str) -> str | None:
         lowered = text.lower()
-        if re.search(r"\bRTN[-_ ]?\d{4}|반품\s*/?\s*차감|반품|차감|return\s+note|credit\s+(?:note|memo)", text, flags=re.IGNORECASE):
+        if self._has_return_or_credit_signal(text):
             return "credit_note" if re.search(r"차감|credit\s+(?:note|memo)", text, flags=re.IGNORECASE) else "return_note"
         if self._has_internal_transfer_signal(text):
             return "internal_transfer"
