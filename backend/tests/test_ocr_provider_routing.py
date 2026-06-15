@@ -384,17 +384,17 @@ def test_provider_health_reports_gguf_primary_reader_before_confirmed_integratio
 
     payload = ocr_module.provider_health()
 
-    assert payload["ocr_engine"] == "PP-OCRv4"
-    assert payload["ocr_model"] == "PP-OCRv4"
+    assert payload["ocr_engine"] == "PaddleOCR-VL GGUF"
+    assert payload["ocr_model"] == "PaddleOCR-VL-1.6-GGUF.gguf"
     assert payload["primary_provider"] == "paddleocr_vl_1_6_gguf"
-    assert payload["primary_provider_available"] is False
+    assert payload["primary_provider_available"] is True
     assert payload["primary_provider_candidate_available"] is True
     assert payload["primary_reader_available"] is True
     assert payload["primary_reader_mode"] == "candidate_only_validated_by_parser"
-    assert payload["primary_provider_status"] == "primary_reader_candidate"
+    assert payload["primary_provider_status"] == "primary_reader"
     assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_primary_reader_with_ppocrv4_validation_fallback"
-    assert payload["fallback_reason"] == "paddleocr_vl_gguf_confirmed_extraction_not_enabled"
-    assert payload["paddleocr_vl_runtime_mode"] == "primary_reader_candidate"
+    assert payload["fallback_reason"] is None
+    assert payload["paddleocr_vl_runtime_mode"] == "primary_provider"
     assert payload["paddleocr_vl_gguf"]["status"] == "primary_reader_candidate"
     assert payload["paddleocr_vl_gguf"]["primary_reader_available"] is True
 
@@ -435,7 +435,8 @@ def test_provider_health_reports_gguf_primary_only_when_in_process_enabled(monke
     assert payload["primary_provider_available"] is True
     assert payload["primary_provider_candidate_available"] is True
     assert payload["primary_reader_available"] is True
-    assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
+    assert payload["runtime_strategy"] == "paddleocr_vl_1_6_gguf_primary_reader_with_ppocrv4_validation_fallback"
+    assert payload["primary_provider_status"] == "primary_reader"
     assert payload["paddleocr_vl_gguf"]["status"] == "active_candidate"
 
 

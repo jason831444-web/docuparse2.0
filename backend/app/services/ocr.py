@@ -404,17 +404,19 @@ def provider_health() -> dict[str, Any]:
     worker_health, worker_error = _ocr_worker_health(settings.ocr_worker_url, settings.ocr_worker_timeout_seconds)
     worker_model = (worker_health or {}).get("ocr_version") or "PP-OCRv4"
     primary_provider = settings.ai_primary_provider or "paddleocr_vl_1_6_gguf"
-    primary_provider_available = bool(primary_provider == "paddleocr_vl_1_6_gguf" and gguf_available)
+    primary_provider_available = bool(
+        primary_provider == "paddleocr_vl_1_6_gguf" and (gguf_available or gguf_primary_reader_available)
+    )
     if primary_provider == "paddleocr_vl":
         # The full runtime is intentionally retained only as a documented fallback
         # candidate because it exceeded the current 8GB CPU server budget.
         primary_provider_available = False
     active_ocr_engine = "PaddleOCR-VL GGUF" if primary_provider_available else str(worker_model)
     runtime_strategy = (
-        "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
-        if primary_provider_available
-        else "paddleocr_vl_1_6_gguf_primary_reader_with_ppocrv4_validation_fallback"
+        "paddleocr_vl_1_6_gguf_primary_reader_with_ppocrv4_validation_fallback"
         if primary_provider == "paddleocr_vl_1_6_gguf" and gguf_primary_reader_available
+        else "paddleocr_vl_1_6_gguf_candidate_with_ppocrv4_fallback"
+        if primary_provider_available
         else "ppocrv4_fallback"
     )
     fallback_reason = None
@@ -442,7 +444,13 @@ def provider_health() -> dict[str, Any]:
             if primary_provider == "paddleocr_vl_1_6_gguf" and gguf_primary_reader_available
             else None
         ),
-        "primary_provider_status": "active_candidate" if primary_provider_available else gguf_status_name,
+        "primary_provider_status": (
+            "primary_reader"
+            if primary_provider == "paddleocr_vl_1_6_gguf" and gguf_primary_reader_available
+            else "active_candidate"
+            if primary_provider_available
+            else gguf_status_name
+        ),
         "fallback_provider": settings.ocr_fallback_provider,
         "fallback_provider_available": worker_health is not None or paddle_usable,
         "fallback_reason": fallback_reason,

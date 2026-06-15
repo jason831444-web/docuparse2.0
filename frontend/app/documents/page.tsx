@@ -15,6 +15,7 @@ import { primaryCategoryLabel, requiresReviewExportConfirmation, titleCaseLabel 
 import type { DocumentListResponse, FolderSummary, ProcessingStatus } from "@/types/document";
 
 const statuses: Array<"" | ProcessingStatus> = ["", "uploaded", "queued", "processing", "ready", "needs_review", "confirmed", "failed"];
+const MAX_GLOBAL_SELECTION = 500;
 const statusLabels: Record<"" | ProcessingStatus, string> = {
   "": "전체 상태",
   uploaded: "업로드됨",
@@ -140,16 +141,21 @@ function DocumentsContent() {
     () => selectionScopeById.filter((document) => selectedDocuments.has(document.id)),
     [selectedDocuments, selectionScopeById]
   );
-  const allDocumentsSelected = totalDocumentCount > 0 && selectedDocuments.size >= totalDocumentCount;
+  const globalSelectionLimit = Math.min(totalDocumentCount, MAX_GLOBAL_SELECTION);
+  const allDocumentsSelected = globalSelectionLimit > 0 && selectedDocuments.size >= globalSelectionLimit;
 
   async function selectAllDocuments() {
     setSelectingAllDocuments(true);
     try {
-      const documents = await loadAllDocumentPages();
+      const documents = await loadAllDocumentPages(MAX_GLOBAL_SELECTION);
       setSelectionScopeDocuments(documents);
       setSelectedDocuments(new Set(documents.map((document) => document.id)));
-      setAllDocumentCount(documents.length);
-      toast.success(`전체 문서 ${documents.length}건을 선택했습니다`);
+      setAllDocumentCount((current) => Math.max(current ?? 0, documents.length));
+      if (documents.length < totalDocumentCount) {
+        toast.info(`문서가 많아 최근 ${documents.length}건만 선택했습니다. 전체 선택은 최대 ${MAX_GLOBAL_SELECTION}건까지 지원합니다.`);
+      } else {
+        toast.success(`전체 문서 ${documents.length}건을 선택했습니다`);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "전체 문서 선택에 실패했습니다");
     } finally {
@@ -285,9 +291,12 @@ function DocumentsContent() {
             <p className="text-xs text-muted-foreground">필터/그룹과 관계없이 저장된 모든 문서를 한 번에 선택합니다.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-muted-foreground">선택됨: {selectedDocuments.size} / 전체 문서 {totalDocumentCount}개</span>
+            <span className="text-sm text-muted-foreground">
+              선택됨: {selectedDocuments.size} / 전체 문서 {totalDocumentCount}개
+              {totalDocumentCount > MAX_GLOBAL_SELECTION ? ` · 전체 선택 최대 ${MAX_GLOBAL_SELECTION}건` : ""}
+            </span>
             <Button type="button" variant="outline" size="sm" disabled={!totalDocumentCount || allDocumentsSelected || selectingAllDocuments} onClick={selectAllDocuments}>
-              {selectingAllDocuments ? "전체 문서 선택 중..." : "전체 문서 선택"}
+              {selectingAllDocuments ? "전체 문서 선택 중..." : totalDocumentCount > MAX_GLOBAL_SELECTION ? `최근 ${MAX_GLOBAL_SELECTION}건 선택` : "전체 문서 선택"}
             </Button>
             <Button type="button" variant="ghost" size="sm" disabled={!selectedDocuments.size} onClick={clearSelectedDocuments}>
               전체 선택 해제
@@ -355,16 +364,18 @@ function DocumentsContent() {
   );
 }
 
-async function loadAllDocumentPages() {
+async function loadAllDocumentPages(limit = MAX_GLOBAL_SELECTION) {
   const pageSize = 100;
   const documents: DocumentListResponse["items"] = [];
   let page = 1;
   let total = 0;
 
   do {
+    const remaining = Math.max(limit - documents.length, 0);
+    if (!remaining) break;
     const params = new URLSearchParams({
       page: String(page),
-      page_size: String(pageSize),
+      page_size: String(Math.min(pageSize, remaining)),
       sort_by: "updated_at",
       order: "desc",
     });
@@ -372,7 +383,7 @@ async function loadAllDocumentPages() {
     documents.push(...response.items);
     total = response.total;
     page += 1;
-  } while (documents.length < total);
+  } while (documents.length < total && documents.length < limit);
 
   return documents;
 }

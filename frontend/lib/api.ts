@@ -20,7 +20,7 @@ import type {
 } from "@/types/document";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001/api";
-const BULK_DOCUMENT_CHUNK_SIZE = 100;
+const BULK_DOCUMENT_CHUNK_SIZE = 500;
 const HEALTH_URL = API_BASE.startsWith("/")
   ? `${API_BASE}/health`
   : API_BASE.endsWith("/api")

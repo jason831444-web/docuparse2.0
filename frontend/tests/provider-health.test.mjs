@@ -13,9 +13,10 @@ const active = providerHealthLabel({
   },
 });
 
-assert.equal(active.label, "OCR 정상 · PaddleOCR-VL-1.6-GGUF.gguf · CPU");
+assert.equal(active.label, "VL Reader 정상 · GGUF · CPU");
 assert.equal(active.tone, "primary");
-assert.match(active.detail, /Primary provider: paddleocr_vl_1_6_gguf/);
+assert.match(active.detail, /Primary reader: paddleocr_vl_1_6_gguf/);
+assert.match(active.detail, /Fallback OCR: paddleocr_ppocrv4/);
 
 const degraded = providerHealthLabel({
   providers: {
@@ -37,7 +38,7 @@ const degraded = providerHealthLabel({
   },
 });
 
-assert.equal(degraded.label, "OCR 정상 · PP-OCRv4");
+assert.equal(degraded.label, "VL 대기 · PP-OCRv4 fallback");
 assert.equal(degraded.tone, "fallback");
 assert.match(degraded.detail, /AI 문서 파싱 비활성/);
 assert.match(degraded.detail, /VL 후보: GGUF/);
@@ -62,7 +63,7 @@ const smokePending = providerHealthLabel({
   },
 });
 
-assert.equal(smokePending.label, "OCR 정상 · PP-OCRv4");
+assert.equal(smokePending.label, "VL 대기 · PP-OCRv4 fallback");
 assert.equal(smokePending.tone, "fallback");
 assert.match(smokePending.detail, /서버 smoke 검증 전/);
 assert.match(smokePending.detail, /paddleocr_vl_gguf_smoke_not_run/);
@@ -91,11 +92,10 @@ const candidateNotIntegrated = providerHealthLabel({
   },
 });
 
-assert.equal(candidateNotIntegrated.label, "OCR 정상 · PP-OCRv4");
-assert.equal(candidateNotIntegrated.tone, "fallback");
-assert.match(candidateNotIntegrated.detail, /VL primary reader 사용/);
-assert.match(candidateNotIntegrated.detail, /확정값은 parser\/검증 통과 필요/);
-assert.match(candidateNotIntegrated.detail, /확정 추출은 parser 검증 대기/);
+assert.equal(candidateNotIntegrated.label, "VL Reader 정상 · GGUF");
+assert.equal(candidateNotIntegrated.tone, "primary");
+assert.match(candidateNotIntegrated.detail, /Confirmed ERP values still pass parser\/validation/);
+assert.match(candidateNotIntegrated.detail, /Fallback OCR: paddleocr_ppocrv4/);
 
 const loading = providerHealthLabel(null);
 assert.equal(loading.label, "OCR 상태 확인 중");

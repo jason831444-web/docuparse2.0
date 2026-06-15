@@ -11,6 +11,19 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
   }
 
   const device = providers.device ? ` · ${providers.device.toUpperCase()}` : "";
+  const isGgufPrimary = providers.primary_provider === "paddleocr_vl_1_6_gguf";
+  const candidateReady = providers.primary_provider_candidate_available || providers.paddleocr_vl_gguf?.candidate_available;
+  const primaryReaderReady = providers.primary_reader_available || providers.paddleocr_vl_gguf?.primary_reader_available;
+  const vlModel = providers.paddleocr_vl_gguf?.model_file || providers.ocr_model || "PaddleOCR-VL-1.6-GGUF";
+
+  if (isGgufPrimary && (providers.primary_provider_available || primaryReaderReady)) {
+    return {
+      label: `VL Reader 정상 · GGUF${device}`,
+      detail: `Primary reader: ${providers.primary_provider}. Model: ${vlModel}. Confirmed ERP values still pass parser/validation. Fallback OCR: ${providers.fallback_provider || "PP-OCRv4"}.`,
+      tone: "primary",
+    };
+  }
+
   if (providers.primary_provider_available) {
     const model = providers.ocr_model || providers.paddleocr_vl_model || "PaddleOCR-VL";
     return {
@@ -27,17 +40,13 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
     providers.paddleocr_vl_gguf?.status ||
     providers.paddleocr_vl_init_error ||
     "paddleocr_vl_unavailable";
-  const candidate = providers.primary_provider === "paddleocr_vl_1_6_gguf" ? " · VL 후보: GGUF" : "";
+  const candidate = isGgufPrimary ? " · VL 후보: GGUF" : "";
   const reasonLabel = providerFallbackReasonLabel(String(reason));
-  const candidateReady = providers.primary_provider_candidate_available || providers.paddleocr_vl_gguf?.candidate_available;
-  const primaryReaderReady = providers.primary_reader_available || providers.paddleocr_vl_gguf?.primary_reader_available;
-  const statusPrefix = primaryReaderReady
-    ? "VL primary reader 사용 · 확정값은 parser/검증 통과 필요"
-    : candidateReady
+  const statusPrefix = candidateReady
       ? "AI 문서 파싱 후보 검증됨 · 운영 연동 대기"
       : "AI 문서 파싱 비활성";
   return {
-    label: `OCR 정상 · ${workerModel}`,
+    label: isGgufPrimary ? `VL 대기 · ${workerModel} fallback` : `OCR 정상 · ${workerModel}`,
     detail: `${statusPrefix}${candidate}: ${reasonLabel} (${reason}). Fallback provider: ${providers.fallback_provider || "PP-OCRv4"}.`,
     tone: "fallback",
   };

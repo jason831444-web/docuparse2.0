@@ -117,7 +117,7 @@ class CategoryFolderCreate(BaseModel):
 
 
 class BulkDocumentRequest(BaseModel):
-    ids: list[UUID] = Field(min_length=1, max_length=100)
+    ids: list[UUID] = Field(min_length=1, max_length=500)
 
 
 class ReviewApprovalRequest(BaseModel):
