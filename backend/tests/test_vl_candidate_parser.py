@@ -1,8 +1,10 @@
-from app.services.vl_candidate_parser import VLCandidateParser
-from app.scripts.smoke_paddleocr_vl_gguf import build_docuparse_vl_candidate_metadata
-from app.models.document import DocumentType
-from app.services.parser import ParsedDocument
 from decimal import Decimal
+from datetime import date
+
+from app.models.document import DocumentType
+from app.scripts.smoke_paddleocr_vl_gguf import build_docuparse_vl_candidate_metadata
+from app.services.parser import DocumentParser, ParsedDocument
+from app.services.vl_candidate_parser import VLCandidateParser
 
 
 VL_08_TEXT = """견적번호 QT-2026-0808-009 견적일 2026-08-08
@@ -422,6 +424,115 @@ def test_vl_candidate_parser_strips_standalone_row_number_prefix_but_keeps_model
     assert "2PIN Connector" in names
     assert not any(name.startswith(("1 ", "2 ", "3 ", "4 ")) for name in names)
     assert not any(name.lower() == "vendor sku" for name in names)
+
+
+def test_vl_candidate_parser_extracts_generated_document_number_patterns():
+    parser = VLCandidateParser().parser
+
+    assert parser._extract_document_number("거래명세서번호 TS-VIS-2026-005-MON") == "TS-VIS-2026-005-MON"
+    assert parser._extract_document_number("Invoice No INV-US-VIS-2026-006-EX") == "INV-US-VIS-2026-006-EX"
+    assert parser._extract_document_number("팩스 발주번호 FAX-VIS-PO-2026-012") == "FAX-VIS-PO-2026-012"
+
+
+def test_vl_candidate_parser_maps_statement_supply_tax_total_without_unit_price():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "거래명세서",
+                "거래명세서번호 TS-VIS-2026-005-MON",
+                "통화 KRW",
+                "No 거래일 품목명 규격 수량 단위 공급가액 세액 합계",
+                "1 11-05 SUS304 3T PLATE 1000x2000 3 EA 105000 10500 115500",
+                "2 11-05 AL6061 환봉 10파이 3000mm 12 EA 216000 21600 237600",
+                "공급가액 641,000 세액 64,100 총액 705,100",
+            ]
+        ),
+        filename="transaction-statement-full-visible.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_number"] == "TS-VIS-2026-005-MON"
+    first = candidate["line_items"][0]
+    assert "unit_price" not in first
+    assert first["supply_amount"] == 105000
+    assert first["tax_amount"] == 10500
+    assert first["line_total"] == 115500
+
+
+def test_vl_candidate_parser_preserves_visible_commercial_invoice_amount_as_line_total():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "COMMERCIAL INVOICE",
+                "Invoice No INV-US-VIS-2026-006-EX",
+                "Currency USD",
+                "No Description Vendor SKU Spec Qty Unit Unit Price Amount",
+                "1 Linear Guide Rail HGW20 HGW20-1000 1000mm 10 EA 45.00 450.00",
+                "2 Cable Harness 500 CBL-HAR-500 500mm 50 EA 2.20 110.00",
+                "Subtotal USD 650.00",
+                "Tax 0.00",
+                "Total USD 650.00",
+            ]
+        ),
+        filename="commercial-invoice-full-visible.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_number"] == "INV-US-VIS-2026-006-EX"
+    first = candidate["line_items"][0]
+    assert first["unit_price"] == 45
+    assert first["supply_amount"] == 450
+    assert first["line_total"] == 450
+    assert "row_amount_hidden_do_not_infer" not in first.get("validation_warnings", [])
+
+
+def test_text_layer_parser_can_supply_fax_header_fields_for_vl_reconciliation():
+    parsed = DocumentParser().parse(
+        "\n".join(
+            [
+                "팩스 발주서",
+                "공급업체",
+                "동진부품",
+                "고객사",
+                "오성테크",
+                "발주번호",
+                "FAX-VIS-PO-2026-012",
+                "발행일",
+                "2026-11-12",
+                "납기일",
+                "2026-11-26",
+                "No 품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계",
+                "3 M8 볼트 / 와셔 SET SE-M8 M8 1000 SET 160 160000 16000 176000",
+            ]
+        ),
+        "fax.pdf",
+    )
+
+    assert parsed.document_number == "FAX-VIS-PO-2026-012"
+    assert parsed.vendor_name == "동진부품"
+    assert parsed.customer_name == "오성테크"
+    assert parsed.issue_date == date(2026, 11, 12)
+    assert parsed.due_date == date(2026, 11, 26)
+
+
+def test_text_layer_parser_can_supply_invoice_payment_due_date_for_vl_reconciliation():
+    text = "\n".join(
+        [
+            "세금계산서 / INVOICE",
+            "계산서번호",
+            "INV-GEN-VIS-2026-011",
+            "발행일",
+            "2026-11-11",
+            "지급기한",
+            "2026-12-11",
+        ]
+    )
+
+    parsed = DocumentParser().parse(text, "invoice.pdf")
+
+    assert parsed.due_date == date(2026, 12, 11)
 
 
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():

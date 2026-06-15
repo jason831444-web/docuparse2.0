@@ -246,3 +246,59 @@ def test_compare_matches_rows_by_internal_item_code_when_document_code_is_ocr_tr
     result = compare_expected_actual(expected, actual, {})
 
     assert "visible_row_missing" not in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_warns_when_required_document_number_is_missing():
+    expected = {"document_type": "purchase_order", "document_number": "FAX-VIS-PO-2026-012"}
+    actual = {"document_type": "purchase_order", "document_number": None, "line_items": []}
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert result["status"] == "WARN"
+    assert "document_number_missing" in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_accepts_return_credit_policy_type_via_category_metadata():
+    expected = {"document_type": "credit_note", "document_number": "RTN-VIS-2026-008"}
+    actual = {
+        "document_type": "general_document",
+        "category": "credit_note",
+        "document_number": "RTN-VIS-2026-008",
+        "workflow_metadata": {
+            "taxonomy": {
+                "document_subtype": "credit_note",
+                "document_profile": "return_document",
+                "document_profiles": ["return_document", "priced_document"],
+            }
+        },
+        "line_items": [],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert "document_type_mismatch" not in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_accepts_return_credit_policy_type_via_expected_subtype():
+    expected = {
+        "document_type": "transaction_statement",
+        "document_subtype": "return_credit",
+        "document_number": "RTN-VIS-2026-008",
+    }
+    actual = {
+        "document_type": "general_document",
+        "category": "credit_note",
+        "document_number": "RTN-VIS-2026-008",
+        "workflow_metadata": {
+            "taxonomy": {
+                "document_subtype": "credit_note",
+                "document_profile": "return_document",
+                "document_profiles": ["return_document", "priced_document"],
+            }
+        },
+        "line_items": [],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert "document_type_mismatch" not in {issue["code"] for issue in result["warnings"]}

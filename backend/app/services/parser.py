@@ -535,14 +535,16 @@ class DocumentParser:
 
     def _best_document_number_from_text(self, text: str) -> str | None:
         patterns = [
-            r"\b(?:FAXx?-)?PO0?[-_ ]?\d{4}[-_ ]?[0O]?\d{3,4}(?:[-_ ][A-Z0-9]{2,8}){0,2}\b",
-            r"\bQT[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{2,8}){0,2}\b",
+            r"\bFAX(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]PO[-_]\d{4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)+(?:[-_][A-Z]{1,10}){0,2}\b",
+            r"\b(?:FAXx?-)?PO0?[-_ ]?\d{4}[-_]?[0O]?\d{3,4}(?:[-_][A-Z0-9]{2,8}){0,2}\b",
+            r"\bQT[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{2,8}){0,2}\b",
             r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}[-_ ]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
-            r"\bDN[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
-            r"\bTS[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
-            r"\b(?:I?QC|QC)[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
-            r"\bRTN[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
-            r"\bTRF[-_ ]?\d{4}[-_ ]?\d{3,4}(?:[-_ ][A-Z0-9]{1,8}){0,2}\b",
+            r"\bDN[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\bTS[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\b(?:I?QC|QC)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\bRTN[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\bTRF[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\b(?:PO|QT|INV|DN|TS|IQC|QC|RTN|TRF)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)+(?:[-_][A-Z]{1,10}){0,2}\b",
         ]
         candidates: list[str] = []
         compact_text = re.sub(r"(?<=\bINV-\d{4})-\s*-\s*(?=\d)", "-", text, flags=re.IGNORECASE)
@@ -599,6 +601,8 @@ class DocumentParser:
             return -100
         score = 0
         if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|QC|RTN|TRF|FAX-PO)-", text, flags=re.IGNORECASE):
+            score += 40
+        if re.match(r"^FAX(?:-[A-Z0-9]{2,10})*-PO-", text, flags=re.IGNORECASE):
             score += 40
         if re.search(r"\d{4}", text):
             score += 10
@@ -902,6 +906,24 @@ class DocumentParser:
             item["quantity"] = missing_supply_match.group("quantity")
             first_amount = self._to_decimal(missing_supply_match.group("tax_amount"))
             second_amount = self._to_decimal(missing_supply_match.group("line_total"))
+            apparent_supply = self._to_decimal(missing_supply_match.group("unit_price"))
+            if (
+                doc_type == DocumentType.transaction_statement
+                and apparent_supply is not None
+                and first_amount is not None
+                and second_amount is not None
+                and apparent_supply > 0
+                and first_amount >= 0
+                and abs((apparent_supply + first_amount) - second_amount)
+                <= max(Decimal("1"), abs(second_amount) * Decimal("0.02"))
+            ):
+                item.pop("unit_price", None)
+                item["supply_amount"] = self._number_value(apparent_supply)
+                item["tax_amount"] = self._number_value(first_amount)
+                item["line_total"] = self._number_value(second_amount)
+                warnings.append("unit_price_not_visible")
+                item["validation_warnings"] = sorted(set(warnings))
+                return {key: value for key, value in item.items() if value not in (None, "", [])}
             quantity = self._to_decimal(missing_supply_match.group("quantity"))
             unit_price = self._to_decimal(missing_supply_match.group("unit_price"))
             expected_supply = quantity * unit_price if quantity is not None and unit_price is not None else None
@@ -937,8 +959,13 @@ class DocumentParser:
             warnings.extend(["missing_quantity", "quantity_cell_blank"])
         elif supply_only_match:
             item["quantity"] = supply_only_match.group("quantity")
-            item["supply_amount"] = supply_only_match.group("supply_amount")
-            warnings.append("row_amount_hidden_do_not_infer")
+            amount_value = supply_only_match.group("supply_amount")
+            if doc_type == DocumentType.invoice and "." in str(amount_value):
+                item["supply_amount"] = amount_value
+                item["line_total"] = amount_value
+            else:
+                item["supply_amount"] = amount_value
+                warnings.append("row_amount_hidden_do_not_infer")
         elif missing_quantity_supply_only_match:
             item["supply_amount"] = missing_quantity_supply_only_match.group("supply_amount")
             warnings.extend(["missing_quantity", "quantity_cell_blank", "row_amount_hidden_do_not_infer"])
@@ -2581,6 +2608,7 @@ class DocumentParser:
                 "missing_quantity",
                 "quantity_cell_blank",
                 "ocr_quantity_price_unverified",
+                "unit_price_not_visible",
             }
         )
 

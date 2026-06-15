@@ -231,7 +231,20 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
     for expected_key, actual_key in checks:
         expected_value = expected.get(expected_key)
         actual_value = actual.get(actual_key)
-        if expected_value not in (None, "") and actual_value not in (None, "") and str(expected_value) != str(actual_value):
+        if expected_value in (None, ""):
+            continue
+        if actual_value in (None, ""):
+            warnings.append(
+                {
+                    "code": f"{actual_key}_missing",
+                    "expected_value": expected_value,
+                    "actual_value": actual_value,
+                }
+            )
+            continue
+        if actual_key == "document_type" and _return_credit_type_matches(expected, actual):
+            continue
+        if str(expected_value) != str(actual_value):
             warnings.append(
                 {
                     "code": f"{actual_key}_mismatch",
@@ -249,6 +262,33 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
                 "actual_value": str(actual_total),
             }
         )
+
+
+def _return_credit_type_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    expected_type = str(expected.get("document_type") or "").casefold()
+    expected_subtype = str(expected.get("document_subtype") or "").casefold()
+    expected_profile = str(expected.get("document_profile") or "").casefold()
+    expected_profiles = {
+        str(value or "").casefold()
+        for value in expected.get("document_profiles", [])
+        if value not in (None, "")
+    }
+    expected_policy_values = {expected_type, expected_subtype, expected_profile, *expected_profiles}
+    if not expected_policy_values.intersection(
+        {"return_credit", "return_credit_note", "return_note", "credit_note", "return_document"}
+    ):
+        return False
+    actual_type = str(actual.get("document_type") or "").casefold()
+    actual_category = str(actual.get("category") or "").casefold()
+    workflow_metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+    taxonomy = workflow_metadata.get("taxonomy") if isinstance(workflow_metadata.get("taxonomy"), dict) else {}
+    profile_values = {
+        str(actual_category),
+        str(taxonomy.get("document_subtype") or "").casefold(),
+        str(taxonomy.get("document_profile") or "").casefold(),
+        *(str(value or "").casefold() for value in (taxonomy.get("document_profiles") or [])),
+    }
+    return actual_type == "general_document" and bool(profile_values.intersection({"return_note", "credit_note", "return_document"}))
 
 
 def _detect_no_price_amounts(expected: dict[str, Any], actual: dict[str, Any], line_items: list[dict[str, Any]], failures: list[dict[str, Any]]) -> None:

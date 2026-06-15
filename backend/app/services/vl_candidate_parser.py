@@ -217,12 +217,43 @@ class VLCandidateParser:
         doc_type: Any | None,
         fallback_items: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        if not self._has_hidden_or_truncated_amount_signal(text):
-            return fallback_items
         inline_items = self.parser._extract_vl_inline_table_items(text.splitlines(), doc_type)
+        if not self._has_hidden_or_truncated_amount_signal(text):
+            if self._should_prefer_inline_items(inline_items, fallback_items):
+                return inline_items
+            return fallback_items
         if not inline_items:
             return fallback_items
         return [self._suppress_hidden_positive_line_amount(item) for item in inline_items]
+
+    def _should_prefer_inline_items(
+        self,
+        inline_items: list[dict[str, Any]],
+        fallback_items: list[dict[str, Any]],
+    ) -> bool:
+        if not inline_items:
+            return False
+        if not fallback_items:
+            return True
+        if len(inline_items) < len(fallback_items):
+            return False
+        fallback_warning_count = sum(1 for item in fallback_items if item.get("validation_warnings"))
+        inline_warning_count = sum(1 for item in inline_items if item.get("validation_warnings"))
+        if fallback_warning_count and inline_warning_count <= fallback_warning_count:
+            return True
+        inline_amount_fields = sum(
+            1
+            for item in inline_items
+            for field in ("supply_amount", "tax_amount", "line_total")
+            if item.get(field) not in (None, "", [])
+        )
+        fallback_amount_fields = sum(
+            1
+            for item in fallback_items
+            for field in ("supply_amount", "tax_amount", "line_total")
+            if item.get(field) not in (None, "", [])
+        )
+        return inline_amount_fields > fallback_amount_fields
 
     def _has_hidden_or_truncated_amount_signal(self, text: str) -> bool:
         return bool(

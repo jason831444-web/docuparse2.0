@@ -82,6 +82,7 @@ class DocumentProcessor:
             vl_promoted_structured = self._vl_promoted_structured_candidate(vl_primary_attempt)
             if vl_promoted_structured:
                 self._apply_vl_structured_candidate_to_parsed(parsed, vl_promoted_structured)
+                self._reconcile_vl_parsed_with_pdf_text_layer(parsed, stored_path, normalized)
             extraction_quality = self.quality.evaluate_extraction(normalized, parsed)
             route = self.router.route(normalized, parsed, extraction_quality)
             analysis_path = normalized.primary_image_path or stored_path
@@ -425,6 +426,131 @@ class DocumentProcessor:
         line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
         if line_items:
             parsed.line_items = self._safe_vl_promoted_line_items(line_items)
+
+    def _reconcile_vl_parsed_with_pdf_text_layer(
+        self,
+        parsed: Any,
+        stored_path: Path,
+        normalized: NormalizedDocument,
+    ) -> None:
+        if stored_path.suffix.casefold() != ".pdf":
+            return
+        text = self._extract_pdf_text_layer_text(stored_path)
+        if not text or len(text.strip()) < 40:
+            return
+        text_layer = self.parser.parse(text, stored_path.name)
+        reconciled_fields: list[str] = []
+        for attr in ("document_number", "vendor_name", "customer_name", "currency"):
+            current = getattr(parsed, attr, None)
+            candidate = getattr(text_layer, attr, None)
+            if current in (None, "", []) and candidate not in (None, "", []):
+                setattr(parsed, attr, candidate)
+                reconciled_fields.append(attr)
+        for attr in ("issue_date", "due_date"):
+            current = getattr(parsed, attr, None)
+            candidate = getattr(text_layer, attr, None)
+            if current is None and candidate is not None:
+                setattr(parsed, attr, candidate)
+                reconciled_fields.append(attr)
+        if getattr(parsed, "extracted_date", None) is None and getattr(text_layer, "extracted_date", None) is not None:
+            parsed.extracted_date = text_layer.extracted_date
+            reconciled_fields.append("extracted_date")
+        self._reconcile_vl_item_names_with_text_layer(parsed, text_layer)
+        if reconciled_fields:
+            metadata = dict(normalized.file_metadata or {})
+            reconciliation = dict(metadata.get("text_layer_reconciliation") or {})
+            reconciliation["source"] = "pdf_text_layer"
+            reconciliation["fields"] = sorted(set([*reconciliation.get("fields", []), *reconciled_fields]))
+            metadata["text_layer_reconciliation"] = reconciliation
+            normalized.file_metadata = metadata
+            normalized.raw_extracted_blocks.append({
+                "type": "pdf_text_layer_reconciliation",
+                "content": text[:20000],
+                "fields": sorted(set(reconciled_fields)),
+            })
+
+    def _extract_pdf_text_layer_text(self, path: Path) -> str:
+        try:
+            from pypdf import PdfReader
+        except Exception:
+            return ""
+        try:
+            reader = PdfReader(str(path))
+            page_texts = []
+            for index, page in enumerate(reader.pages, start=1):
+                text = page.extract_text() or ""
+                if text.strip():
+                    page_texts.append(f"Page {index}\n{text.strip()}")
+            return "\n\n".join(page_texts)
+        except Exception:
+            return ""
+
+    def _reconcile_vl_item_names_with_text_layer(self, parsed: Any, text_layer: Any) -> None:
+        vl_items = getattr(parsed, "line_items", None) or []
+        text_items = getattr(text_layer, "line_items", None) or []
+        if not vl_items or not text_items:
+            return
+        for item in vl_items:
+            if not isinstance(item, dict):
+                continue
+            match = self._matching_text_layer_item(item, text_items)
+            if not match:
+                continue
+            current_name = str(item.get("item_name") or "").strip()
+            text_name = str(match.get("item_name") or "").strip()
+            if not current_name or not text_name or current_name == text_name:
+                continue
+            if not self._should_reconcile_item_name(current_name, text_name):
+                continue
+            item["vl_item_name"] = current_name
+            item["item_name"] = text_name
+            warnings = list(item.get("validation_warnings") or [])
+            if "text_layer_item_name_reconciled" not in warnings:
+                warnings.append("text_layer_item_name_reconciled")
+            item["validation_warnings"] = warnings
+            review_flags = list(item.get("review_flags") or [])
+            if "text_layer_item_name_reconciled" not in review_flags:
+                review_flags.append("text_layer_item_name_reconciled")
+            item["review_flags"] = review_flags
+
+    def _matching_text_layer_item(self, item: dict, text_items: list[dict]) -> dict | None:
+        item_codes = self._item_match_codes(item)
+        for candidate in text_items:
+            if not isinstance(candidate, dict):
+                continue
+            if item_codes and item_codes.intersection(self._item_match_codes(candidate)):
+                return candidate
+        quantity = self._vl_decimal(item.get("quantity"))
+        line_total = self._vl_decimal(item.get("line_total"))
+        for candidate in text_items:
+            if not isinstance(candidate, dict):
+                continue
+            if quantity is not None and quantity == self._vl_decimal(candidate.get("quantity")):
+                candidate_total = self._vl_decimal(candidate.get("line_total"))
+                if line_total is None or candidate_total is None or line_total == candidate_total:
+                    return candidate
+        return None
+
+    def _item_match_codes(self, item: dict) -> set[str]:
+        codes = set()
+        for key in ("document_item_code", "item_code", "internal_item_code", "source_item_code"):
+            value = item.get(key)
+            if value not in (None, "", []):
+                codes.add(re.sub(r"[\s_-]+", "", str(value)).casefold())
+        return codes
+
+    def _should_reconcile_item_name(self, current: str, candidate: str) -> bool:
+        current_key = re.sub(r"[\s_/.-]+", "", current).casefold()
+        candidate_key = re.sub(r"[\s_/.-]+", "", candidate).casefold()
+        if current_key == candidate_key:
+            return False
+        if abs(len(current_key) - len(candidate_key)) > 4:
+            return False
+        try:
+            from difflib import SequenceMatcher
+            return SequenceMatcher(None, current_key, candidate_key).ratio() >= 0.72
+        except Exception:
+            return False
 
     def _vl_primary_reader_metadata_from_result(
         self,
