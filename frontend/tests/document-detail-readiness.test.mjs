@@ -6,6 +6,7 @@ import {
   getErpReadinessSummary,
   getPrimaryCompanyName,
 } from "../lib/utils.ts";
+import { documentFileUrl } from "../lib/api.ts";
 
 const baseDocument = {
   id: "doc-1",
@@ -123,5 +124,7 @@ const bboxCandidate = {
 
 assert.equal(getErpReadinessStatus(bboxCandidate).title, "내보내기 주의");
 assert.match(getErpReadinessSummary(bboxCandidate), /OCR 위치 기반 후보 1건/);
+assert.equal(documentFileUrl("http://localhost:8001/uploads/source.pdf"), "http://localhost:8001/uploads/source.pdf");
+assert.equal(documentFileUrl("/uploads/source.pdf"), "http://localhost:8001/uploads/source.pdf");
 
 console.log("document detail readiness helper tests passed");

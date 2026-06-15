@@ -9,7 +9,7 @@ import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, requiresReviewExportConfirmation, reviewIssueDescription, reviewIssuesForLineItem, reviewIssueSummary } from "@/lib/utils";
+import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, requiresReviewExportConfirmation, reviewIssueDescription, reviewIssueSummary, reviewIssueSummaryItems } from "@/lib/utils";
 import type { DocumentListResponse, DocumentRecord, ManufacturingLineItem } from "@/types/document";
 
 export default function ReviewPage() {
@@ -25,10 +25,9 @@ export default function ReviewPage() {
   }, [load]);
 
   const rows = useMemo(() => {
-    return (data?.items || []).flatMap((document) => {
+    return (data?.items || []).map((document) => {
       const issues = blockingReviewIssues(document);
-      const items = document.line_items?.length ? document.line_items : [{} as ManufacturingLineItem];
-      return items.map((item, index) => ({ document, item, index, issues: reviewIssuesForLineItem(issues, index) }));
+      return { document, issues };
     });
   }, [data]);
 
@@ -127,7 +126,7 @@ function ReviewTable({
   selected,
   onToggle,
 }: {
-  rows: Array<{ document: DocumentRecord; item: ManufacturingLineItem; index: number; issues: ReturnType<typeof blockingReviewIssues> }>;
+  rows: Array<{ document: DocumentRecord; issues: ReturnType<typeof blockingReviewIssues> }>;
   selected: Set<string>;
   onToggle: (id: string, checked: boolean) => void;
 }) {
@@ -144,12 +143,13 @@ function ReviewTable({
             </tr>
           </thead>
           <tbody className="divide-y">
-            {rows.map(({ document, item, index, issues }) => {
-              const confidence = Number(item.item_master_match_confidence ?? 0);
+            {rows.map(({ document, issues }) => {
+              const items = document.line_items || [];
+              const confidence = maxItemMasterConfidence(items);
               const hasAmountIssue = issues.some((issue) => issue.code.includes("amount") || issue.code.includes("invalid_line"));
               const hasConflict = issues.some((issue) => issue.code === "item_code_name_conflict");
               return (
-                <tr key={`${document.id}-${index}`} className={hasConflict ? "bg-red-50/60" : hasAmountIssue ? "bg-amber-50/60" : ""}>
+                <tr key={document.id} className={hasConflict ? "bg-red-50/60" : hasAmountIssue ? "bg-amber-50/60" : ""}>
                   <td className="px-3 py-3 align-top">
                     <input aria-label={`${documentDisplayTitle(document)} 선택`} type="checkbox" className="size-4" checked={selected.has(document.id)} onChange={(event) => onToggle(document.id, event.target.checked)} />
                   </td>
@@ -166,19 +166,32 @@ function ReviewTable({
                   </td>
                   <td className="px-3 py-3 align-top">{document.vendor_name || "공급업체 미확인"}<br /><span className="text-muted-foreground">{document.customer_name || "고객사 미확인"}</span></td>
                   <td className="px-3 py-3 align-top">{businessIssueDate(document) || "-"}<br /><span className="text-muted-foreground">{businessFieldDate(document) || ""}</span></td>
-                  <td className="max-w-56 px-3 py-3 align-top">{item.item_name || "-"}</td>
-                  <td className="px-3 py-3 align-top">{item.document_item_code || item.item_code || item.source_item_code || "-"}</td>
-                  <td className="px-3 py-3 align-top">{item.internal_item_code || "-"}</td>
-                  <td className={`px-3 py-3 align-top ${confidence && confidence < 0.7 ? "text-amber-700" : ""}`}>{item.item_master_match_status || "-"}{confidence ? ` · ${Math.round(confidence * 100)}%` : ""}</td>
-                  <td className="px-3 py-3 align-top">{item.quantity ?? "-"}</td>
-                  <td className="px-3 py-3 align-top">{item.unit_price ?? "-"}</td>
-                  <td className="px-3 py-3 align-top">{item.supply_amount ?? "-"}</td>
-                  <td className="px-3 py-3 align-top">{item.tax_amount ?? "-"}</td>
-                  <td className="px-3 py-3 align-top">{item.line_total ?? "-"}</td>
+                  <td className="max-w-64 px-3 py-3 align-top">
+                    <p className="font-medium">{items.length ? `품목 ${items.length}개` : "품목 없음"}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{summarizeLineItems(items, "item_name")}</p>
+                  </td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "document_item_code", "item_code", "source_item_code")}</td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "internal_item_code")}</td>
+                  <td className={`px-3 py-3 align-top ${confidence && confidence < 0.7 ? "text-amber-700" : ""}`}>
+                    {summarizeLineItems(items, "item_master_match_status")}
+                    {confidence ? ` · 최고 ${Math.round(confidence * 100)}%` : ""}
+                  </td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "quantity")}</td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "unit_price")}</td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "supply_amount")}</td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "tax_amount")}</td>
+                  <td className="px-3 py-3 align-top">{summarizeLineItems(items, "line_total")}</td>
                   <td className="px-3 py-3 align-top">{formatMoney(document.extracted_amount, document.currency || "KRW")}</td>
                   <td className="max-w-72 px-3 py-3 align-top text-xs">
+                    {reviewIssueSummaryItems(issues).length ? (
+                      <div className="mb-2 flex flex-wrap gap-1">
+                        {reviewIssueSummaryItems(issues).map((item) => (
+                          <span key={item} className="rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-700">{item}</span>
+                        ))}
+                      </div>
+                    ) : null}
                     {issues.length ? issues.map((issue) => (
-                      <div key={`${issue.code}-${issue.field}-${issue.item_index}`} className={hasConflict || hasAmountIssue ? "text-red-700" : "text-amber-700"}>
+                      <div key={`${issue.code}-${issue.field}-${issue.item_index ?? "document"}`} className={hasConflict || hasAmountIssue ? "text-red-700" : "text-amber-700"}>
                         <p className="font-medium">{reviewIssueSummary(issue)}</p>
                         <p className="mt-0.5 text-[11px]">{reviewIssueDescription(issue)}</p>
                       </div>
@@ -192,4 +205,25 @@ function ReviewTable({
       </CardContent>
     </Card>
   );
+}
+
+function summarizeLineItems(items: ManufacturingLineItem[], ...fields: Array<keyof ManufacturingLineItem>): string {
+  const values: string[] = [];
+  for (const item of items) {
+    const value = fields.map((field) => item[field]).find((candidate) => candidate !== undefined && candidate !== null && String(candidate).trim() !== "");
+    if (value !== undefined && value !== null) {
+      const text = String(value).trim();
+      if (text && !values.includes(text)) values.push(text);
+    }
+  }
+  if (!values.length) return "-";
+  const shown = values.slice(0, 3).join(", ");
+  return values.length > 3 ? `${shown} 외 ${values.length - 3}개` : shown;
+}
+
+function maxItemMasterConfidence(items: ManufacturingLineItem[]): number {
+  return items.reduce((max, item) => {
+    const value = Number(item.item_master_match_confidence ?? 0);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
 }

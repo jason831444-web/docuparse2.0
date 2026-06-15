@@ -32,7 +32,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
-import { api } from "@/lib/api";
+import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
 import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
@@ -223,19 +223,20 @@ function ErpReadinessBanner({
 
 function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
   const isPdf = document.mime_type === "application/pdf";
-  const previewUrl = isPdf ? `${document.file_url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH` : document.file_url;
+  const fileUrl = documentFileUrl(document.file_url);
+  const previewUrl = isPdf ? `${fileUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH` : fileUrl;
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle>원본 문서</CardTitle>
         <Button asChild variant="outline" size="sm">
-          <a href={document.file_url} target="_blank" rel="noreferrer">원본 열기</a>
+          <a href={fileUrl} target="_blank" rel="noreferrer">원본 열기</a>
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         {isImage ? (
           <div className="relative h-[72rem] w-full rounded-lg border bg-white">
-            <Image src={document.file_url} alt={document.original_filename} fill unoptimized className="object-contain" />
+            <Image src={fileUrl} alt={document.original_filename} fill unoptimized className="object-contain" />
           </div>
         ) : isPdf ? (
           <iframe

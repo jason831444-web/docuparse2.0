@@ -140,12 +140,36 @@ export const api = {
   }
 };
 
+export function documentFileUrl(fileUrl: string | null | undefined): string {
+  if (!fileUrl) return "";
+  if (fileUrl.startsWith("/api/uploads/")) return fileUrl;
+  if (fileUrl.startsWith("/uploads/")) return API_BASE.startsWith("/") ? `${API_BASE}${fileUrl}` : `${backendOrigin()}${fileUrl}`;
+  try {
+    const parsed = new URL(fileUrl);
+    if (parsed.pathname.startsWith("/uploads/") && API_BASE.startsWith("/")) {
+      return `${API_BASE}${parsed.pathname}`;
+    }
+  } catch {
+    return fileUrl;
+  }
+  return fileUrl;
+}
+
 function chunkArray<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+function backendOrigin(): string {
+  try {
+    const parsed = new URL(API_BASE);
+    return parsed.origin;
+  } catch {
+    return "";
+  }
 }
 
 function downloadBlob(blob: Blob, filename: string) {
