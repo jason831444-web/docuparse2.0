@@ -38,6 +38,22 @@ class VLCandidateValidationGate:
         "vl_candidate_missing_required_value",
         "vl_candidate_total_mismatch",
         "vl_candidate_row_count_mismatch",
+        "vl_candidate_malformed_amount_columns_repaired",
+    }
+
+    non_promotable_issue_codes = {
+        "vl_candidate_header_row_as_item",
+        "vl_candidate_missing_line_amount",
+        "vl_candidate_missing_document_total",
+        "vl_candidate_total_mismatch",
+        "vl_candidate_row_count_mismatch",
+        "vl_candidate_return_credit_type_uncertain",
+        "vl_candidate_internal_transfer_type_uncertain",
+        "vl_candidate_total_row_amount_conflict",
+        "vl_candidate_invalid_line_total",
+        "vl_candidate_invalid_tax_greater_than_supply",
+        "vl_candidate_invalid_tax_greater_than_total",
+        "vl_candidate_invalid_supply_greater_than_total",
     }
 
     no_price_profiles = {
@@ -74,9 +90,13 @@ class VLCandidateValidationGate:
             reasons.append("structured_line_items_missing")
 
         if reasons:
+            has_non_promotable_issue = bool(set(issue_codes) & self.non_promotable_issue_codes) or any(
+                code.startswith("vl_candidate_invalid_") for code in issue_codes
+            )
             can_partial_promote = (
                 "provider_candidate_not_available" not in reasons
                 and "structured_line_items_missing" not in reasons
+                and not has_non_promotable_issue
                 and bool(structured.get("document") or structured.get("line_items"))
             )
             return self._result(

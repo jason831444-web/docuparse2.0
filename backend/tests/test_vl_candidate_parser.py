@@ -82,6 +82,65 @@ def test_vl_candidate_parser_flags_low_confidence_source_quality_for_review():
     assert "vl_candidate_untrusted_source_quality" in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_flags_priced_rows_missing_line_amounts():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "COMMERCIAL INVOICE",
+                "Invoice No INV-US-2026-0916-EX",
+                "Currency USD",
+                "No Description Vendor SKU Spec Qty Unit Unit Price Amount",
+                "1 Linear Guide Rail HGW20 HGW20-1000 1000mm 10 EA",
+                "2 Cable Harness 500 CBL-HAR-500 500mm 50 EA",
+                "3 PCB Connector 12P CON-PCB-12P 12P 300 EA",
+                "Total USD",
+            ]
+        ),
+        filename="commercial-invoice.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_missing_line_amount" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_flags_header_row_promoted_as_item():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "입고검사성적서",
+                "검사번호 IQC-2026-0918-044",
+                "No 품목명 Lot No 규격 입고수량 합격수량 불량수량",
+                "1 베어링 하우징 LOT-BRG-0918-A 100mm 50 49 1",
+            ]
+        ),
+        filename="inspection-report.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_header_row_as_item" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_flags_return_credit_type_uncertainty():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "반품 / 차감 요청서",
+                "문서번호 RTN-2026-0919-011",
+                "관련납품서 DN-2026-0914-2F",
+                "1 베어링 하우징 100mm 1 EA 8000 8000 800 8800",
+                "차감 합계 12100",
+            ]
+        ),
+        filename="return-credit.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_return_credit_type_uncertain" in candidate["issue_codes"]
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

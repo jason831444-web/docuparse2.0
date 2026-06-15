@@ -112,6 +112,7 @@ class VLCandidateParser:
     ) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         issues.extend(self._source_quality_issues(text))
+        issues.extend(self._structural_issues(parsed, text))
         issues.extend(self._line_item_warning_issues(parsed))
         expected = manual_visual_check.get("expected_from_pdf") if isinstance(manual_visual_check, dict) else {}
         if isinstance(expected, dict):
@@ -126,6 +127,128 @@ class VLCandidateParser:
                 }
             )
         return issues
+
+    def _structural_issues(self, parsed: ParsedDocument, text: str) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        doc_type = self._safe_value(parsed.document_type)
+        line_items = parsed.line_items or []
+        money_document = doc_type in {"purchase_order", "quotation", "transaction_statement", "invoice"}
+        no_price_document = doc_type in {"delivery_note", "inspection_report", "general_document", "memo"}
+
+        if money_document and self._text_has_total_label(text) and parsed.extracted_amount is None:
+            issues.append(
+                {
+                    "code": "vl_candidate_missing_document_total",
+                    "severity": "warn",
+                    "message": "VL output contains total labels but the structured candidate has no document total.",
+                }
+            )
+
+        if money_document:
+            for index, item in enumerate(line_items, start=1):
+                has_quantity = item.get("quantity") not in (None, "", [])
+                has_any_amount = any(
+                    item.get(field) not in (None, "", [])
+                    for field in ("unit_price", "supply_amount", "tax_amount", "line_total")
+                )
+                if has_quantity and not has_any_amount:
+                    issues.append(
+                        {
+                            "code": "vl_candidate_missing_line_amount",
+                            "severity": "warn",
+                            "line_index": index,
+                            "item_name": item.get("item_name"),
+                            "message": "A priced VL row has quantity but no unit price, supply amount, tax, or line total.",
+                        }
+                    )
+
+        for index, item in enumerate(line_items, start=1):
+            name = str(item.get("item_name") or "")
+            if self._looks_like_table_header(name):
+                issues.append(
+                    {
+                        "code": "vl_candidate_header_row_as_item",
+                        "severity": "warn",
+                        "line_index": index,
+                        "item_name": item.get("item_name"),
+                        "message": "VL parser promoted a table header-like line as an item row.",
+                    }
+                )
+            if no_price_document and self._looks_like_unparsed_no_price_row(name):
+                issues.append(
+                    {
+                        "code": "vl_candidate_missing_row_cell",
+                        "severity": "warn",
+                        "line_index": index,
+                        "item_name": item.get("item_name"),
+                        "message": "A no-price VL row appears unparsed; keep it as a review candidate.",
+                    }
+                )
+
+        lowered = text.casefold()
+        if re.search(r"(반품|차감|credit\\s*(?:note|memo)|return)", lowered, flags=re.IGNORECASE) and doc_type not in {
+            "transaction_statement",
+            "invoice",
+        }:
+            issues.append(
+                {
+                    "code": "vl_candidate_return_credit_type_uncertain",
+                    "severity": "warn",
+                    "actual_value": doc_type,
+                    "message": "Return/credit keywords are present but the VL structured document type is not review-safe.",
+                }
+            )
+        if re.search(r"(사업장간|자재\\s*이동|내부\\s*이동|요청수량)", text, flags=re.IGNORECASE) and doc_type not in {
+            "general_document",
+            "delivery_note",
+            "inspection_report",
+        }:
+            issues.append(
+                {
+                    "code": "vl_candidate_internal_transfer_type_uncertain",
+                    "severity": "warn",
+                    "actual_value": doc_type,
+                    "message": "Internal-transfer keywords are present but the VL structured document type is not safe to promote.",
+                }
+            )
+
+        total = self._decimal_value(parsed.extracted_amount)
+        row_amounts = [
+            value
+            for item in line_items
+            for value in (self._decimal_value(item.get("supply_amount")), self._decimal_value(item.get("line_total")))
+            if value is not None
+        ]
+        if total is not None and total > 0 and row_amounts and max(row_amounts) > total * Decimal("1.5"):
+            issues.append(
+                {
+                    "code": "vl_candidate_total_row_amount_conflict",
+                    "severity": "warn",
+                    "actual_value": str(total),
+                    "message": "VL candidate row amounts are implausibly larger than the document total.",
+                }
+            )
+        return issues
+
+    def _text_has_total_label(self, text: str) -> bool:
+        return bool(re.search(r"(총액|합계\\s*금액|합계금액|total\\s*(?:usd|amount)?|subtotal)", text or "", flags=re.IGNORECASE))
+
+    def _looks_like_table_header(self, value: str) -> bool:
+        normalized = " ".join((value or "").split()).casefold()
+        if not normalized:
+            return False
+        header_terms = ("품목명", "규격", "수량", "단가", "공급가액", "세액", "합계", "lot no")
+        return normalized.startswith("no ") and sum(1 for term in header_terms if term in normalized) >= 3
+
+    def _looks_like_unparsed_no_price_row(self, value: str) -> bool:
+        normalized = " ".join((value or "").split())
+        if not normalized:
+            return False
+        return bool(
+            re.match(r"^\\d+\\s+", normalized)
+            and re.search(r"(\\bLOT[-\\w]+\\b|\\b[A-Z]{2,}[-\\w]+\\b|\\d+mm|M\\d+|입고수량|합격수량|불량수량)", normalized)
+            and len(normalized.split()) >= 6
+        )
 
     def _source_quality_issues(self, text: str) -> list[dict[str, Any]]:
         if not re.search(
@@ -200,6 +323,14 @@ class VLCandidateParser:
             return None
         try:
             return str(Decimal(str(value).replace(",", "")))
+        except Exception:
+            return None
+
+    def _decimal_value(self, value: Any) -> Decimal | None:
+        if value in (None, "", []):
+            return None
+        try:
+            return Decimal(str(value).replace(",", ""))
         except Exception:
             return None
 

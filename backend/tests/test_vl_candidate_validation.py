@@ -74,7 +74,7 @@ def test_vl_candidate_gate_partially_promotes_blank_quantity_candidate_with_revi
     assert "vl_candidate_has_review_issues" in result["reasons"]
 
 
-def test_vl_candidate_gate_partially_promotes_invalid_row_warning_for_review():
+def test_vl_candidate_gate_keeps_raw_invalid_row_warning_as_review_candidate_only():
     candidate = {
         "provider_available_candidate": True,
         "structured_candidate": {
@@ -94,6 +94,41 @@ def test_vl_candidate_gate_partially_promotes_invalid_row_warning_for_review():
             ],
             "line_item_count": 1,
             "issue_codes": ["vl_candidate_invalid_line_total"],
+        },
+    }
+
+    document = _document()
+    document.document_number = "PO-2026-0807-777"
+    document.extracted_amount = Decimal("343200")
+
+    result = VLCandidateValidationGate().evaluate(document, candidate)
+
+    assert result["decision"] == "review_required"
+    assert result["auto_promote"] is False
+    assert result["promotion_mode"] == "none"
+    assert "vl_candidate_has_review_issues" in result["reasons"]
+
+
+def test_vl_candidate_gate_allows_repaired_malformed_amount_warning_for_partial_review():
+    candidate = {
+        "provider_available_candidate": True,
+        "structured_candidate": {
+            "candidate_only": True,
+            "parser_integrated": False,
+            "confirmed_promotion": False,
+            "document": {
+                "document_number": "PO-2026-0807-777",
+                "total": "343200",
+            },
+            "line_items": [
+                {
+                    "item_name": "SUS304 PLATE",
+                    "quantity": 1,
+                    "validation_warnings": ["malformed_amount_columns_repaired"],
+                }
+            ],
+            "line_item_count": 1,
+            "issue_codes": ["vl_candidate_malformed_amount_columns_repaired"],
         },
     }
 

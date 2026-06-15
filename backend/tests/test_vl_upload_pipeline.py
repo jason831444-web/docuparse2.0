@@ -14,6 +14,7 @@ sys.modules.setdefault(
 
 from app.models.document import Document, DocumentType, ProcessingStatus
 from app.services.document_processor import DocumentProcessor
+from app.services.file_ingestion import NormalizedDocument
 
 
 class FakeVLWorker:
@@ -314,3 +315,73 @@ def test_process_uses_partial_vl_primary_and_skips_ppocr_ingestion_for_review_ca
     assert summary["promotion_mode"] == "partial"
     assert summary["partial_promotion_applied"] is True
     assert summary["fallback_used"] is False
+
+
+def test_process_falls_back_to_ingestion_when_vl_candidate_has_unrepaired_invalid_amounts(tmp_path):
+    path = tmp_path / "po-text-layer.pdf"
+    path.write_bytes(b"%PDF-1.4\n% fake test file read by fallback ingestion\n")
+    vl_text = """
+    발주서
+    발주번호 PO-2026-0911-104
+    품목명 규격 수량 단위 단가 공급가액
+    SUS304 2T PLATE 1000x2000 6 EA 25000 150000 1
+    합계금액 4
+    """
+    fallback_text = """
+    발주서
+    발주번호 PO-2026-0911-104
+    발주일 2026-09-11
+    품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액
+    SUS304 2T PLATE STS304-2T 1000x2000 6 EA 25000 150000 15000 165000
+    M8 육각볼트 BOLT-M8-20 M8x20 1500 EA 120 180000 18000 198000
+    SUS WASHER M8 WASH-M8 M8 500 EA 60 30000 3000 33000
+    고정 플레이트 FIX-PLT-120 120x60x5T 40 EA 5000 200000 20000 220000
+    합계금액 616000
+    """
+    document = Document(
+        original_filename="po-text-layer.pdf",
+        stored_file_path=str(path),
+        mime_type="application/pdf",
+        processing_status=ProcessingStatus.uploaded,
+    )
+    processor = _processor(
+        FakeVLWorker(
+            {
+                "ok": True,
+                "provider": "paddleocr_vl_1_6_gguf",
+                "classification": "warn",
+                "text": vl_text,
+                "validation": {"status": "warn", "ok": False},
+            }
+        )
+    )
+
+    class FallbackIngestion:
+        called = False
+
+        def ingest(self, *args, **kwargs):
+            self.called = True
+            return NormalizedDocument(
+                source_file_type="pdf",
+                mime_type="application/pdf",
+                extraction_method="pdf_text_extract",
+                normalized_text=fallback_text,
+                raw_extracted_blocks=[{"type": "pdf_text", "content": fallback_text}],
+                extraction_warnings=[],
+                file_metadata={"text_layer_exists": True},
+            )
+
+    ingestion = FallbackIngestion()
+    processor.ingestion = ingestion
+
+    result = processor.process(FakeSession(document), document)
+
+    assert ingestion.called is True
+    assert result.extraction_method == "pdf_text_extract"
+    assert result.document_number == "PO-2026-0911-104"
+    assert len(result.line_items or []) == 4
+    summary = result.workflow_metadata["vl_candidate_summary"]
+    assert summary["promotion_applied"] is False
+    assert summary["promotion_mode"] == "none"
+    assert summary["fallback_used"] is True
+    assert "vl_candidate_missing_line_amount" in summary["issue_codes"]
