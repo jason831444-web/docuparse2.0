@@ -246,6 +246,34 @@ def test_internal_transfer_taxonomy_suppresses_party_and_price_blockers():
     assert "missing_price_or_total" not in codes
 
 
+def test_internal_transfer_memo_broad_type_still_gets_manufacturing_workflow_taxonomy():
+    document = Document(
+        original_filename="transfer.txt",
+        stored_file_path="/tmp/transfer.txt",
+        mime_type="text/plain",
+        document_type=DocumentType.memo,
+        document_number="TRF-2026-0922-002",
+        category="internal_transfer",
+        tags=["memo", "internal_transfer"],
+        line_items=[
+            {
+                "item_name": "SUS304 2T PLATE",
+                "document_item_code": "M-PLT-SUS304-2T-1000X2000",
+                "quantity": 2,
+                "requested_quantity": 2,
+                "unit": "EA",
+            }
+        ],
+    )
+    text = "사업장간 자재 이동 요청서\n문서번호 TRF-2026-0922-002\n내부품목코드 규격 요청수량 단위"
+
+    workflow = DocumentWorkflowEnrichmentService().enrich(document, text)
+
+    assert workflow.workflow_metadata["document_subtype"] == "internal_transfer"
+    assert workflow.workflow_metadata["document_profile"] == "inventory_movement_document"
+    assert "no_price_document" in workflow.workflow_metadata["document_profiles"]
+
+
 def test_internal_transfer_inline_quantity_rows_are_no_price_inventory_document():
     text = "\n".join([
         "내부 자재 이동 요청서",

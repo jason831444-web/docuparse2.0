@@ -133,7 +133,12 @@ class DocumentWorkflowEnrichmentService:
             "general_document",
         }
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
-        return doc_type in manufacturing_profiles or (profile or "") in manufacturing_profiles
+        category = str(getattr(document, "category", "") or "")
+        tags = " ".join(str(tag or "") for tag in (getattr(document, "tags", None) or []))
+        has_manufacturing_taxonomy_signal = bool(
+            re.search(r"\b(?:internal_transfer|return_note|credit_note)\b", f"{category} {tags}", flags=re.IGNORECASE)
+        )
+        return doc_type in manufacturing_profiles or (profile or "") in manufacturing_profiles or has_manufacturing_taxonomy_signal
 
     def _manufacturing_business_data(
         self,

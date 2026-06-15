@@ -1129,7 +1129,9 @@ class DocumentParser:
         text = str(value or "").strip()
         if not text:
             return None
-        match = re.match(r"^(?P<name>.+?[A-Za-z가-힣])(?P<spec>M\d+x\d+|\d+x\d+(?:x\d+)?(?:T)?)$", text, flags=re.IGNORECASE)
+        match = re.match(r"^(?P<name>.+?)(?P<spec>M\d+x\d+)$", text, flags=re.IGNORECASE)
+        if not match:
+            match = re.match(r"^(?P<name>.+?[A-Za-z가-힣])(?P<spec>\d+x\d+(?:x\d+)?(?:T)?)$", text, flags=re.IGNORECASE)
         if not match:
             return None
         name = self._clean_value(match.group("name"))
