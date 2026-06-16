@@ -1,4 +1,4 @@
-# DocuParse Quality Report (gemma-harder-refine1)
+# Docparse Quality Report (gemma-harder-refine1)
 
 - Mode: `gemma`
 - Generated at: `2026-04-28T19:46:55.546771`

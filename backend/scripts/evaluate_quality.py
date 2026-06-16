@@ -311,7 +311,7 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
 
 def render_markdown(summary: dict[str, Any], results: list[CaseResult]) -> str:
     lines = [
-        "# DocuParse Evaluation Report",
+        "# Docparse Evaluation Report",
         "",
         f"- Cases: {summary['case_count']}",
         f"- Failures: {summary['failure_count']}",

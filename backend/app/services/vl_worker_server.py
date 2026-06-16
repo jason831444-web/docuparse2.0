@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.scripts.smoke_paddleocr_vl_gguf import build_docuparse_vl_candidate_metadata, extract_text, validate_output_text
 
 
-app = FastAPI(title="DocuParse PaddleOCR-VL GGUF Worker")
+app = FastAPI(title="Docparse PaddleOCR-VL GGUF Worker")
 logger = logging.getLogger(__name__)
 
 _pipeline: Any | None = None

@@ -1,6 +1,6 @@
 # PaddleOCR-VL Runtime Plan
 
-DocuParse keeps PP-OCRv4 as the stable production OCR fallback and treats
+Docparse keeps PP-OCRv4 as the stable production OCR fallback and treats
 PaddleOCR-VL as a gated candidate path. The current candidate is the official
 PaddleOCR-VL-1.6 GGUF runtime served by `llama-server`; it is not enabled as a
 production primary provider by default.
@@ -97,7 +97,7 @@ Current strict validation issue codes:
 - `vl_candidate_exchange_rate_as_amount`: an exchange-rate note appears in a
   total/amount context. This is a FAIL condition.
 
-When VL candidate evidence is stored in DocuParse metadata, it must remain
+When VL candidate evidence is stored in Docparse metadata, it must remain
 separate from confirmed ERP fields:
 
 - `workflow_metadata.vl_candidates`

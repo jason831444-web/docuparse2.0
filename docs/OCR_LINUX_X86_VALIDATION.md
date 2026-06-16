@@ -66,7 +66,7 @@ linux_x86_ocr_worker_validation=PASS
 
 ## Expected Fallback
 
-If PaddleOCR fails but DocuParse remains stable, metadata should show a fallback:
+If PaddleOCR fails but Docparse remains stable, metadata should show a fallback:
 
 ```json
 {

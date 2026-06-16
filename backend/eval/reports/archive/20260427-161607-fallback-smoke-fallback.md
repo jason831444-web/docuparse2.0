@@ -1,4 +1,4 @@
-# DocuParse Quality Report (smoke-fallback)
+# Docparse Quality Report (smoke-fallback)
 
 - Mode: `fallback`
 - Generated at: `2026-04-27T16:16:07.819762`

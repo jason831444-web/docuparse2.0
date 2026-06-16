@@ -37,7 +37,7 @@ def download(repo_id: str, target_dir: Path, dry_run: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download optional DocuParse open-source model weights.")
+    parser = argparse.ArgumentParser(description="Download optional Docparse open-source model weights.")
     parser.add_argument("--model", choices=["paddleocr_vl", "all"], default="all")
     parser.add_argument("--target", type=Path, default=Path("models"))
     parser.add_argument("--dry-run", action="store_true")

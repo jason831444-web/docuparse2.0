@@ -12,7 +12,7 @@ export default function SignupPage() {
       <div className="mx-auto grid max-w-6xl gap-10 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="flex flex-col justify-center">
           <p className="text-sm font-medium text-primary">제조업 문서 자동화</p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-normal">DocuParse 작업공간을 만드세요.</h1>
+          <h1 className="mt-3 text-4xl font-semibold tracking-normal">Docparse 작업공간을 만드세요.</h1>
           <p className="mt-4 max-w-xl text-muted-foreground">
             구매/납품 문서를 업로드하고, AI 추출 결과를 검토한 뒤 업무데이터/엑셀 입력용 데이터로 확정하세요.
           </p>

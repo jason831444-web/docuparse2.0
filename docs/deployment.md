@@ -1,6 +1,6 @@
 # Production Docker Deployment
 
-This deployment keeps the current DocuParse architecture intact: PostgreSQL for metadata, FastAPI for API/uploads/processing, Next.js for the web UI, and nginx as the public reverse proxy.
+This deployment keeps the current Docparse architecture intact: PostgreSQL for metadata, FastAPI for API/uploads/processing, Next.js for the web UI, and nginx as the public reverse proxy.
 
 ## Services
 

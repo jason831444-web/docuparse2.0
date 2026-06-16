@@ -1,7 +1,7 @@
-# DocuParse Quality Evaluation Harness
+# Docparse Quality Evaluation Harness
 
 This evaluation harness generates a representative local corpus, runs each
-document through DocuParse, scores the output quality, and produces both JSON
+document through Docparse, scores the output quality, and produces both JSON
 and Markdown reports.
 
 Use it to:
@@ -13,7 +13,7 @@ Use it to:
 Typical flow:
 
 ```bash
-cd /Users/yoonjaeseong/Desktop/projects/DocuParse/backend
+cd /Users/yoonjaeseong/Desktop/projects/Docparse/backend
 ./.venv/bin/python scripts/run_quality_eval.py --mode fallback --label baseline
 # make a focused refinement
 ./.venv/bin/python scripts/run_quality_eval.py --mode fallback --label refined --compare-to eval/reports/latest-fallback.json
@@ -22,7 +22,7 @@ cd /Users/yoonjaeseong/Desktop/projects/DocuParse/backend
 Gemma-mode flow:
 
 ```bash
-cd /Users/yoonjaeseong/Desktop/projects/DocuParse/backend
+cd /Users/yoonjaeseong/Desktop/projects/Docparse/backend
 ./.venv/bin/python scripts/run_quality_eval.py \
   --mode gemma \
   --backend-url http://localhost:8001 \
@@ -101,7 +101,7 @@ Before running Gemma mode, make sure:
 Example:
 
 ```bash
-cd /Users/yoonjaeseong/Desktop/projects/DocuParse/backend
+cd /Users/yoonjaeseong/Desktop/projects/Docparse/backend
 source .venv/bin/activate
 export GEMMA_MODEL_DIR=/Users/yoonjaeseong/Desktop/models/gemma-2-2b-it
 export AI_INTERPRETATION_PROVIDER=gemma
@@ -112,7 +112,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 GGUF example:
 
 ```bash
-cd /Users/yoonjaeseong/Desktop/projects/DocuParse/backend
+cd /Users/yoonjaeseong/Desktop/projects/Docparse/backend
 source .venv/bin/activate
 export AI_INTERPRETATION_PROVIDER=llama_cpp
 export LLAMA_CPP_MODEL_PATH=../models/gguf/gemma-3-4b-it-q4_0.gguf
@@ -122,6 +122,6 @@ uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 Then, in another shell:
 
 ```bash
-cd /Users/yoonjaeseong/Desktop/projects/DocuParse/backend
+cd /Users/yoonjaeseong/Desktop/projects/Docparse/backend
 ./.venv/bin/python scripts/run_quality_eval.py --mode gemma --backend-url http://localhost:8001 --label gemma-local
 ```

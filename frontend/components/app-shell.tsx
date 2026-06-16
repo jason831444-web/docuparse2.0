@@ -89,7 +89,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
                 <FileSearch className="size-5" />
               </span>
-              DocuParse
+              Docparse
             </Link>
           </div>
         </div>
@@ -107,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <FileSearch className="size-5" />
             </span>
             <div>
-              <p className="leading-tight">DocuParse</p>
+              <p className="leading-tight">Docparse</p>
               <p className="text-xs font-normal text-muted-foreground">제조업 문서 자동화</p>
             </div>
           </Link>

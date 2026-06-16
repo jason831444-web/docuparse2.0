@@ -28,7 +28,7 @@ MODEL_PATH="${MODEL_DIR}/${MODEL_FILE}"
 MMPROJ_PATH="${MODEL_DIR}/${MMPROJ_FILE}"
 
 if [[ ! -d "$REPO_ROOT/.git" ]]; then
-  echo "REPO_ROOT must point to the DocuParse git checkout: $REPO_ROOT" >&2
+  echo "REPO_ROOT must point to the Docparse git checkout: $REPO_ROOT" >&2
   exit 2
 fi
 if [[ ! -x "$LLAMA_SERVER_BIN" ]]; then

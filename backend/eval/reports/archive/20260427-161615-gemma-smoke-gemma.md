@@ -1,4 +1,4 @@
-# DocuParse Quality Report (smoke-gemma)
+# Docparse Quality Report (smoke-gemma)
 
 - Mode: `gemma`
 - Generated at: `2026-04-27T16:16:15.572305`

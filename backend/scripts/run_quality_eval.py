@@ -51,7 +51,7 @@ class EvalIssue:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run DocuParse quality evaluation on a representative corpus.")
+    parser = argparse.ArgumentParser(description="Run Docparse quality evaluation on a representative corpus.")
     parser.add_argument("--mode", choices=["fallback", "gemma"], default="fallback")
     parser.add_argument("--spec", type=Path, default=DEFAULT_SPEC)
     parser.add_argument("--corpus-dir", type=Path, default=DEFAULT_CORPUS)
@@ -694,7 +694,7 @@ def compare_reports(previous_path: Path, current_report: dict[str, Any]) -> dict
 
 def render_markdown_report(report: dict[str, Any]) -> str:
     lines = [
-        f"# DocuParse Quality Report ({report['label']})",
+        f"# Docparse Quality Report ({report['label']})",
         "",
         f"- Mode: `{report['mode']}`",
         f"- Generated at: `{report['generated_at']}`",

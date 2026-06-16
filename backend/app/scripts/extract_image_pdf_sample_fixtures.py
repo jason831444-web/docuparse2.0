@@ -51,7 +51,7 @@ FAILURE_NOTES: dict[str, str] = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract real OCR fixtures for DocuParse image-based PDF samples.")
+    parser = argparse.ArgumentParser(description="Extract real OCR fixtures for Docparse image-based PDF samples.")
     parser.add_argument("--sample-dir", type=Path, default=DEFAULT_SAMPLE_DIR)
     parser.add_argument("--samples-dir", type=Path, dest="sample_dir")
     parser.add_argument("--fixture-dir", type=Path, default=DEFAULT_FIXTURE_DIR)

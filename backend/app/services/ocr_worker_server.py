@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.services.ocr import PaddleOCRProvider, configure_paddle_runtime_env
 
 
-app = FastAPI(title="DocuParse OCR Worker")
+app = FastAPI(title="Docparse OCR Worker")
 logger = logging.getLogger(__name__)
 configure_paddle_runtime_env()
 

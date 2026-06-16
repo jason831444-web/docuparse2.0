@@ -1,1 +1,1 @@
-Generated text-layer PDF fixtures for DocuParse PDF regression checks.
+Generated text-layer PDF fixtures for Docparse PDF regression checks.

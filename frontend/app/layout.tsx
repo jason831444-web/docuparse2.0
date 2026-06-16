@@ -5,7 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "DocuParse",
+  title: "Docparse",
   description: "한국 중소 제조업체를 위한 AI 문서 업무 자동화"
 };
 

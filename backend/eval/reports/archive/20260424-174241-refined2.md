@@ -1,4 +1,4 @@
-# DocuParse Quality Report (refined2)
+# Docparse Quality Report (refined2)
 
 - Generated at: `2026-04-24T17:42:41.363523`
 - Documents: `10`

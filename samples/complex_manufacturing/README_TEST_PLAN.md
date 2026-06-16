@@ -1,8 +1,8 @@
-# DocuParse Complex Manufacturing Test Set
+# Docparse Complex Manufacturing Test Set
 
 ## 사용 순서
 
-1. DocuParse 실행
+1. Docparse 실행
 2. 사이드바 `내부 장부` 페이지로 이동
 3. `samples/complex_manufacturing/item_master_complex.csv` 업로드
 4. 문서 업로드 페이지에서 `01~10` txt 문서 업로드

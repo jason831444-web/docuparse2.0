@@ -1456,7 +1456,7 @@ class DocumentParser:
             return True
         return bool(re.search(
             r"(공급가액\s*합계|차감\s*공급가액|차감\s*세액|차감\s*합계|합계금액|총액|VAT|부가세|"
-            r"선택시\s*합계|옵션라인|모두\s*합산|담당|검토|승인|DocuParse|synthetic data|"
+            r"선택시\s*합계|옵션라인|모두\s*합산|담당|검토|승인|Docu?Parse|synthetic data|"
             r"페이지\s*하단|전월이월|총\s*미수금)",
             text,
             flags=re.IGNORECASE,
@@ -1926,7 +1926,7 @@ class DocumentParser:
                 value = self._clean_value(raw) or ""
                 if not value:
                     continue
-                if re.search(r"(공급가액|세액|합계금액|총액|담당|검토|승인|DocuParse|synthetic)", value, flags=re.IGNORECASE):
+                if re.search(r"(공급가액|세액|합계금액|총액|담당|검토|승인|Docu?Parse|synthetic)", value, flags=re.IGNORECASE):
                     break
                 segment.append(value)
             item: dict = {
@@ -2310,7 +2310,7 @@ class DocumentParser:
                 continue
             if not table_body:
                 continue
-            if re.search(r"(VAT|부가세|선택시합계|옵션라인|모두합산|DocuParse|Synthetic)", line, flags=re.IGNORECASE):
+            if re.search(r"(VAT|부가세|선택시합계|옵션라인|모두합산|Docu?Parse|Synthetic)", line, flags=re.IGNORECASE):
                 break
             value = self._to_decimal(line) if re.fullmatch(r"\d[\d,]*(?:\.\d+)?", line.strip()) else None
             if value is not None and value > 0:
@@ -3277,7 +3277,7 @@ class DocumentParser:
         text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
         return bool(re.search(
             r"(문서\s*총액|주의|검토\s*필요|본문서는|ERP\s*입력용|담당|검토|승인|총액\s*:|"
-            r"DocuParse\s+realistic|synthetic\s+data|옵션.*선택|모두\s*합산하면\s*안|"
+            r"Docu?Parse\s+realistic|synthetic\s+data|옵션.*선택|모두\s*합산하면\s*안|"
             r"전월이월|품목\s*합계에\s*포함하지|통관/회계|거래처\s*문서가\s*아니라|"
             r"반품\s*문서|품질\s*담당|페이지\s*하단|금액\s*정보\s*없는\s*수량\s*확인용)",
             text,

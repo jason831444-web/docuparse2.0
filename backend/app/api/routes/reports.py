@@ -41,7 +41,7 @@ def monthly_report_export(
     start, end = _resolve_report_range(year=year, month=month, start_date=start_date, end_date=end_date)
     service = MonthlyReportService()
     report = service.build_for_range(_report_documents(db, start, end), start_date=start, end_date=end, period=period)
-    filename = f"docuparse-report-{report['start_date']}-{report['end_date']}.{format}"
+    filename = f"docparse-report-{report['start_date']}-{report['end_date']}.{format}"
     if format == "csv":
         return Response(
             service.to_csv(report),

@@ -63,7 +63,7 @@ def test_bbox_reconstructor_keeps_fifteen_photo_rows_without_footer_rows():
     candidates.extend([
         _candidate("합계금액", 650, 650, 730, 670),
         _candidate("431200", 760, 650, 830, 670),
-        _candidate("DocuParse realistic manufacturing sample", 100, 900, 350, 920),
+        _candidate("Docparse realistic manufacturing sample", 100, 900, 350, 920),
     ])
 
     rows = reconstructor.group_rows_by_y(candidates)
@@ -73,7 +73,7 @@ def test_bbox_reconstructor_keeps_fifteen_photo_rows_without_footer_rows():
 
     assert len(items) == 15
     assert all("합계금액" not in (item.get("item_name") or "") for item in items)
-    assert all("DocuParse" not in (item.get("item_name") or "") for item in items)
+    assert all("Docparse" not in (item.get("item_name") or "") for item in items)
 
 
 def test_bbox_reconstructor_does_not_hallucinate_missing_fax_item_name():

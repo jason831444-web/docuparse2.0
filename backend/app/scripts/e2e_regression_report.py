@@ -9,7 +9,7 @@ from typing import Any
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a compact PASS/WARN/FAIL report from DocuParse E2E regression logs.")
+    parser = argparse.ArgumentParser(description="Build a compact PASS/WARN/FAIL report from Docparse E2E regression logs.")
     parser.add_argument("--log", action="append", type=Path, required=True, help="E2E log produced by run_image_pdf_sample_regression. Can be repeated.")
     parser.add_argument("--ground-truth", action="append", type=Path, default=[], help="Optional ground_truth.json file. Can be repeated.")
     parser.add_argument("--output-json", type=Path, default=Path("/tmp/docuparse_e2e_logs/combined_regression_report.json"))
@@ -295,7 +295,7 @@ def _dedupe(values: list[str]) -> list[str]:
 def _markdown_report(rows: list[dict[str, Any]]) -> str:
     summary = _report_summary(rows)
     lines = [
-        "# DocuParse E2E Regression Report",
+        "# Docparse E2E Regression Report",
         "",
         "Review Reasons may include non-blocking informational codes; use Status and Review Required for pass/fail gating.",
         "",

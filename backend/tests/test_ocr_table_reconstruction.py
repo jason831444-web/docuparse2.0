@@ -1440,7 +1440,7 @@ def test_photographed_return_credit_summary_totals_do_not_replace_line_amounts()
         "차감합계",
         "12100",
         "*반품문서일반발주/매출로처리하지말것",
-        "DocuParse realistic",
+        "Docparse realistic",
         "-Synthetic dat",
     ])
 

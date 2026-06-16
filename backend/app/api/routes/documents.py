@@ -365,7 +365,7 @@ def export_csv(
     return Response(
         documents_to_csv(documents),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=docuparse-documents.csv"},
+        headers={"Content-Disposition": "attachment; filename=docparse-documents.csv"},
     )
 
 
@@ -381,7 +381,7 @@ def export_excel(
     return Response(
         documents_to_excel(documents, sheet_mode=sheet_mode),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=docuparse-manufacturing-documents.xlsx"},
+        headers={"Content-Disposition": "attachment; filename=docparse-manufacturing-documents.xlsx"},
     )
 
 
@@ -407,7 +407,7 @@ def bulk_download_originals(payload: BulkDocumentRequest, db: Session = Depends(
     return Response(
         buffer.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=docuparse-originals.zip"},
+        headers={"Content-Disposition": "attachment; filename=docparse-originals.zip"},
     )
 
 

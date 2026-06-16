@@ -1,14 +1,14 @@
-# DocuParse
+# Docparse
 
-DocuParse는 한국 중소 제조업체의 발주서, 견적서, 거래명세서, 납품서를 AI로 읽고 ERP/엑셀 입력용 구조화 데이터로 변환하는 문서 업무 자동화 플랫폼입니다.
+Docparse는 한국 중소 제조업체의 발주서, 견적서, 거래명세서, 납품서를 AI로 읽고 ERP/엑셀 입력용 구조화 데이터로 변환하는 문서 업무 자동화 플랫폼입니다.
 
-DocuParse is an AI-powered document automation platform that converts manufacturing purchase, quotation, delivery, and transaction documents into structured ERP/Excel-ready data with human review and confidence tracking.
+Docparse is an AI-powered document automation platform that converts manufacturing purchase, quotation, delivery, and transaction documents into structured ERP/Excel-ready data with human review and confidence tracking.
 
 ## 제품 개요
 
 한국 중소 제조업체의 구매/납품 업무에서는 PDF, 이미지, 엑셀, 워드 형태의 발주서, 견적서, 거래명세서, 납품서가 매일 들어옵니다. 담당자는 거래처명, 문서번호, 발행일, 납기일, 품목명, 품목 코드, 규격, 수량, 단가, 공급가액, 세액, 총액을 ERP나 엑셀에 다시 입력해야 합니다.
 
-DocuParse는 이 반복 입력 업무를 줄이기 위한 MVP입니다. 문서를 업로드하면 AI와 휴리스틱 파이프라인이 문서 유형을 분류하고 핵심 업무 데이터를 추출합니다. 신뢰도 낮은 필드는 검토 필요로 표시되며, 사용자는 원본 문서와 원문 텍스트를 보면서 구조화된 데이터를 수정하고 확정할 수 있습니다. 확정된 데이터는 CSV, Excel, JSON으로 내보내 ERP/엑셀 입력에 사용할 수 있습니다.
+Docparse는 이 반복 입력 업무를 줄이기 위한 MVP입니다. 문서를 업로드하면 AI와 휴리스틱 파이프라인이 문서 유형을 분류하고 핵심 업무 데이터를 추출합니다. 신뢰도 낮은 필드는 검토 필요로 표시되며, 사용자는 원본 문서와 원문 텍스트를 보면서 구조화된 데이터를 수정하고 확정할 수 있습니다. 확정된 데이터는 CSV, Excel, JSON으로 내보내 ERP/엑셀 입력에 사용할 수 있습니다.
 
 ## 우선 지원 문서
 
@@ -98,7 +98,7 @@ flowchart LR
     UI --> Export["CSV / Excel / JSON export"]
 ```
 
-기존 DocuParse의 핵심 구조는 유지됩니다.
+기존 Docparse의 핵심 구조는 유지됩니다.
 
 - `frontend/`: Next.js App Router UI
 - `backend/app/api/`: FastAPI document API

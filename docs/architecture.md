@@ -1,6 +1,6 @@
-# DocuParse Architecture
+# Docparse Architecture
 
-DocuParse는 한국 중소 제조업체의 구매/납품 문서를 ERP/엑셀 입력용 구조화 데이터로 변환하는 로컬 우선 문서 자동화 시스템입니다. 백엔드는 파일 ingestion, OCR/text extraction, 문서 라우팅, 제조업 필드 추출, AI fallback, 품질 게이트, 저장을 담당합니다. 프론트엔드는 업로드, 검토, 품목 테이블 수정, 확정 처리, 검색, 내보내기를 담당합니다.
+Docparse는 한국 중소 제조업체의 구매/납품 문서를 ERP/엑셀 입력용 구조화 데이터로 변환하는 로컬 우선 문서 자동화 시스템입니다. 백엔드는 파일 ingestion, OCR/text extraction, 문서 라우팅, 제조업 필드 추출, AI fallback, 품질 게이트, 저장을 담당합니다. 프론트엔드는 업로드, 검토, 품목 테이블 수정, 확정 처리, 검색, 내보내기를 담당합니다.
 
 ## System Diagram
 

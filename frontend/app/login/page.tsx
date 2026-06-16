@@ -11,7 +11,7 @@ export default function LoginPage() {
     <main className="min-h-screen bg-background px-6 py-12">
       <div className="mx-auto grid max-w-6xl gap-10 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="flex flex-col justify-center">
-          <p className="text-sm font-medium text-primary">DocuParse</p>
+          <p className="text-sm font-medium text-primary">Docparse</p>
           <h1 className="mt-3 text-4xl font-semibold tracking-normal">제조업 문서 업무를 이어서 처리하세요.</h1>
           <p className="mt-4 max-w-xl text-muted-foreground">
             발주서, 견적서, 거래명세서, 납품서의 검토 필요 항목을 확인하고 업무데이터/엑셀 입력용 데이터로 확정하세요.

@@ -97,7 +97,7 @@ export const api = {
       if (!response.ok) throw new Error("선택한 파일을 다운로드하지 못했습니다");
       const blob = await response.blob();
       const suffix = chunks.length > 1 ? `-${index + 1}-of-${chunks.length}` : "";
-      downloadBlob(blob, `docuparse-originals${suffix}.zip`);
+      downloadBlob(blob, `docparse-originals${suffix}.zip`);
     }
   },
   reprocess: (id: string) => request<DocumentRecord>(`/documents/${id}/reprocess`, { method: "POST" }),

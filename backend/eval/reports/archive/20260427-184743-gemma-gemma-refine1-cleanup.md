@@ -1,4 +1,4 @@
-# DocuParse Quality Report (gemma-refine1-cleanup)
+# Docparse Quality Report (gemma-refine1-cleanup)
 
 - Mode: `gemma`
 - Generated at: `2026-04-27T18:47:43.571065`

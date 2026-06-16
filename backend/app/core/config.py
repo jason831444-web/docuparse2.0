@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "DocuParse API"
+    app_name: str = "Docparse API"
     api_prefix: str = "/api"
     database_url: str = "postgresql+psycopg://docuparse:docuparse@localhost:5433/docuparse"
     upload_dir: Path = Path("uploads")

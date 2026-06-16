@@ -199,9 +199,9 @@ class ItemMasterMatcher:
         if not line_items:
             return []
         if not master_list:
-            logger.info("[DocuParse] item master matching skipped: no item master records")
+            logger.info("[Docparse] item master matching skipped: no item master records")
             return [self._mark_no_master(dict(item)) for item in line_items]
-        logger.info("[DocuParse] item master matching started: line_items=%s, item_master_count=%s", len(line_items), len(master_list))
+        logger.info("[Docparse] item master matching started: line_items=%s, item_master_count=%s", len(line_items), len(master_list))
         matched: list[dict[str, Any]] = []
         for index, source_item in enumerate(line_items):
             item = dict(source_item)
@@ -247,7 +247,7 @@ class ItemMasterMatcher:
                 self._suppress_conflicting_ocr_spec(item, best)
             if best:
                 logger.info(
-                    "[DocuParse] item master candidate selected: item_index=%s, best_code=%s, score=%s, status=%s",
+                    "[Docparse] item master candidate selected: item_index=%s, best_code=%s, score=%s, status=%s",
                     index + 1,
                     best["internal_item_code"],
                     best["score"],

@@ -74,7 +74,7 @@ def _summary(document: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Print OCR metadata for the latest or selected DocuParse document.")
+    parser = argparse.ArgumentParser(description="Print OCR metadata for the latest or selected Docparse document.")
     parser.add_argument("--api-base", default=os.getenv("DOCUPARSE_API_BASE", "http://localhost:8001/api"))
     parser.add_argument("--document-id", default=os.getenv("DOCUPARSE_DOCUMENT_ID"))
     parser.add_argument("--wait", action="store_true", help="Wait until the document leaves queued/processing status.")

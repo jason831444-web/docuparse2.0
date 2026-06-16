@@ -1,4 +1,4 @@
-# Clear visible PDF samples for DocuParse
+# Clear visible PDF samples for Docparse
 
 These 12 synthetic business PDFs are designed to be fully visible when opened/rendered. No table column is intentionally cropped. Each PDF has matching `.expected.json` and `.visual.md` ground truth files.
 

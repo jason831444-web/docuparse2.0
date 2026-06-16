@@ -1,4 +1,4 @@
-# DocuParse image-based scanned PDF sample pack
+# Docparse image-based scanned PDF sample pack
 
 이 묶음은 텍스트 레이어가 없는 이미지 기반 PDF입니다. 실제 현업 문서를 스캔한 것처럼 보이도록 PIL 이미지로 렌더링한 뒤 PDF로 저장했습니다. 따라서 일반 PDF text-layer 추출이 아니라 OCR 경로를 타는지 확인하기 좋습니다.
 

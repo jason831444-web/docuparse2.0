@@ -1,6 +1,6 @@
-# DocuParse 제조업 문서 자동화 데모 가이드
+# Docparse 제조업 문서 자동화 데모 가이드
 
-이 문서는 DocuParse를 한국 중소 제조업체의 구매/납품 문서 처리 MVP로 시연하기 위한 가이드입니다.
+이 문서는 Docparse를 한국 중소 제조업체의 구매/납품 문서 처리 MVP로 시연하기 위한 가이드입니다.
 
 ## Demo Setup
 
@@ -103,7 +103,7 @@ models/gguf/gemma-3-4b-it-q4_0.gguf
 
 짧은 설명:
 
-> DocuParse는 제조업 구매/납품 문서를 업로드하면 ingestion, OCR/text extraction, document routing, deterministic parser, optional local GGUF interpretation, quality gate를 거쳐 ERP/Excel-ready data로 변환합니다. AI 결과를 그대로 믿지 않고 provider_chain, field_sources, low_confidence_fields, needs_review 상태를 통해 사람이 검토할 수 있게 했습니다.
+> Docparse는 제조업 구매/납품 문서를 업로드하면 ingestion, OCR/text extraction, document routing, deterministic parser, optional local GGUF interpretation, quality gate를 거쳐 ERP/Excel-ready data로 변환합니다. AI 결과를 그대로 믿지 않고 provider_chain, field_sources, low_confidence_fields, needs_review 상태를 통해 사람이 검토할 수 있게 했습니다.
 
 좋은 후속 질문:
 

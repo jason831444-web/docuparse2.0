@@ -69,7 +69,7 @@ export default function SettingsPage() {
           <CardContent className="grid gap-4">
             <label className="grid gap-2 text-sm font-medium">
               표시 이름
-              <Input placeholder="DocuParse 사용자" />
+              <Input placeholder="Docparse 사용자" />
             </label>
             <label className="grid gap-2 text-sm font-medium">
               이메일

@@ -828,7 +828,7 @@ def _write_report(output_dir: Path, report: dict[str, Any]) -> None:
         json.dumps(report.get("manual_visual_check_validation") or {}, ensure_ascii=False, indent=2, default=str),
         "```",
         "",
-        "## DocuParse Candidate Metadata",
+        "## Docparse Candidate Metadata",
         "",
         "```json",
         json.dumps(report.get("docuparse_candidate_metadata") or {}, ensure_ascii=False, indent=2, default=str),

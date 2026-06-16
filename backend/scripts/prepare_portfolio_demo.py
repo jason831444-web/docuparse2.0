@@ -49,7 +49,7 @@ def wait_for_document(api_base: str, document_id: str, poll_timeout: int) -> dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Upload safe sample documents for DocuParse portfolio screenshots.")
+    parser = argparse.ArgumentParser(description="Upload safe sample documents for Docparse portfolio screenshots.")
     parser.add_argument("--api-base", default="http://localhost:8001/api", help="Backend API base URL.")
     parser.add_argument("--corpus-dir", default="backend/eval/corpus", help="Path to the sample document corpus.")
     parser.add_argument("--limit", type=int, default=0, help="Upload only the first N demo files.")
