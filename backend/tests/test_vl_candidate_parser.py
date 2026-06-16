@@ -669,6 +669,52 @@ def test_vl_candidate_parser_structures_handwritten_material_list_without_amount
     assert all("supply_amount" not in item for item in candidate["line_items"])
 
 
+def test_vl_candidate_parser_suppresses_currency_for_amountless_handwritten_delivery():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "납품서",
+                "업체: 동성산업",
+                "날짜 26.6.16",
+                "S45C 봉재 20파이 6본",
+                "육각너트 M8 1000",
+                "평와샤 M8 1000",
+                "비고: 금액 없는 수량 확인용 문서",
+                "Currency USD",
+            ]
+        ),
+        filename="handwritten-delivery-note.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "delivery_note"
+    assert candidate["document"]["currency"] is None
+    assert candidate["line_item_count"] >= 1
+    assert all("unit_price" not in item for item in candidate["line_items"])
+    assert all("supply_amount" not in item for item in candidate["line_items"])
+
+
+def test_parser_does_not_promote_quantity_only_value_as_vendor_name():
+    parsed = DocumentParser().parse(
+        "\n".join(
+            [
+                "발주 메모",
+                "업체:",
+                "6본",
+                "봉재",
+                "20파이",
+                "S45C",
+                "육각너트 M8 1000",
+                "담당: 이과장",
+            ]
+        ),
+        "handwritten-order-memo.txt",
+    )
+
+    assert parsed.vendor_name != "6본"
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

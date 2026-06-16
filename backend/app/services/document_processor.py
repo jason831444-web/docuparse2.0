@@ -403,6 +403,8 @@ class DocumentProcessor:
             ("customer_name", "customer_name"),
             ("currency", "currency"),
         ):
+            if attr == "currency" and self._vl_structured_candidate_is_amountless(structured):
+                continue
             value = candidate_doc.get(key)
             if value not in (None, "", []):
                 setattr(parsed, attr, value)
@@ -699,6 +701,8 @@ class DocumentProcessor:
             ("customer_name", "customer_name"),
             ("currency", "currency"),
         ):
+            if attr == "currency" and self._vl_structured_candidate_is_amountless(structured):
+                continue
             value = candidate_doc.get(key)
             if value not in (None, "", []):
                 setattr(document, attr, sanitize_for_postgres(value))
@@ -1375,7 +1379,7 @@ class DocumentProcessor:
                 low_confidence.append(f"missing_quantity{code_suffix}")
             if not no_price_quantity_doc and doc_type != "delivery_note" and item.get("unit_price") in (None, "", []) and item.get("line_total") in (None, "", []):
                 low_confidence.append(f"missing_price_or_total{code_suffix}")
-            if item.get("validation_warnings"):
+            if self._line_item_warnings_require_amount_review(item.get("validation_warnings") or []):
                 low_confidence.append(f"invalid_line_amount{code_suffix}")
             if item.get("item_code") in (None, "", []) and item.get("internal_item_code") in (None, "", []):
                 low_confidence.append(f"missing_item_code{code_suffix}")
@@ -1401,6 +1405,37 @@ class DocumentProcessor:
             low_confidence.append("missing_payment_due_date")
         document.low_confidence_fields = sorted(set(low_confidence))
         return bool(document.low_confidence_fields)
+
+    def _vl_structured_candidate_is_amountless(self, structured: dict) -> bool:
+        candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}
+        if any(candidate_doc.get(field) not in (None, "", []) for field in ("subtotal", "tax", "total")):
+            return False
+        line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            if any(item.get(field) not in (None, "", []) for field in ("unit_price", "supply_amount", "tax_amount", "line_total")):
+                return False
+        return bool(line_items) or str(candidate_doc.get("document_type") or "") in {
+            "delivery_note",
+            "inspection_report",
+            "general_document",
+            "other",
+            "packing_list",
+        }
+
+    def _line_item_warnings_require_amount_review(self, warnings: list | tuple | set) -> bool:
+        safe_non_amount_warnings = {
+            "handwritten_vl_candidate",
+            "handwritten_inspection_requires_review",
+            "hold_quantity_requires_review",
+            "line_total_not_visible_do_not_infer",
+            "row_amount_hidden_do_not_infer",
+            "missing_line_amount",
+            "trailing_number_requires_review",
+            "text_layer_item_name_reconciled",
+        }
+        return any(str(warning) not in safe_non_amount_warnings for warning in warnings or [])
 
     def _is_internal_transfer_document(self, document: Document) -> bool:
         values = [

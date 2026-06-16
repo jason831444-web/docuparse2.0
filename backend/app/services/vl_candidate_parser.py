@@ -528,6 +528,9 @@ class VLCandidateParser:
         return safe_item
 
     def _compact_document(self, parsed: ParsedDocument) -> dict[str, Any]:
+        currency = parsed.currency
+        if self._is_amountless_quantity_document(parsed):
+            currency = None
         return {
             "document_type": self._safe_value(parsed.document_type),
             "document_number": parsed.document_number,
@@ -535,11 +538,26 @@ class VLCandidateParser:
             "customer_name": parsed.customer_name,
             "issue_date": self._safe_value(parsed.issue_date or parsed.extracted_date),
             "due_date": self._safe_value(parsed.due_date),
-            "currency": parsed.currency,
+            "currency": currency,
             "subtotal": self._safe_nonnegative_amount(parsed.subtotal),
             "tax": self._safe_nonnegative_amount(parsed.tax),
             "total": self._safe_nonnegative_amount(parsed.extracted_amount),
             "business_fields": self._safe_value(parsed.business_fields),
+        }
+
+    def _is_amountless_quantity_document(self, parsed: ParsedDocument) -> bool:
+        if any(getattr(parsed, field, None) is not None for field in ("subtotal", "tax", "extracted_amount")):
+            return False
+        for item in parsed.line_items or []:
+            if any(item.get(field) not in (None, "", []) for field in ("unit_price", "supply_amount", "tax_amount", "line_total")):
+                return False
+        doc_type = parsed.document_type.value if isinstance(parsed.document_type, DocumentType) else str(parsed.document_type or "")
+        return doc_type in {
+            "delivery_note",
+            "inspection_report",
+            "general_document",
+            "packing_list",
+            "other",
         }
 
     def _compact_line_item(self, item: dict[str, Any]) -> dict[str, Any]:

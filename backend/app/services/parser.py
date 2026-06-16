@@ -431,6 +431,8 @@ class DocumentParser:
                     continue
                 if self._looks_like_instruction_or_note(value):
                     continue
+                if self._looks_like_quantity_only_label_value(value):
+                    continue
                 return value[:120] or None
 
         label_pattern = "|".join(re.escape(label) for label in labels)
@@ -440,9 +442,23 @@ class DocumentParser:
             return None
         value = re.sub(r"\s+", " ", match.group(1)).strip(" -:：")
         value = self._truncate_at_business_label_boundary(value)
-        if self._looks_like_instruction_or_note(value) or self._looks_like_business_label(value):
+        if (
+            self._looks_like_instruction_or_note(value)
+            or self._looks_like_business_label(value)
+            or self._looks_like_quantity_only_label_value(value)
+        ):
             return None
         return value[:120] or None
+
+    def _looks_like_quantity_only_label_value(self, value: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(value or ""))
+        if not normalized:
+            return False
+        return bool(re.fullmatch(
+            r"[-+]?\d[\d,]*(?:\.\d+)?(?:EA|ea|개|장|본|봉|박스|box|BOX|pcs?|PCS)",
+            normalized,
+            flags=re.IGNORECASE,
+        ))
 
     def _looks_like_business_label(self, value: str) -> bool:
         key = re.sub(r"[\s:：#/-]+", "", value.lower())
