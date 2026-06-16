@@ -166,6 +166,7 @@ assert.equal(vlCandidateIssueLabel("vl_candidate_invalid_tax_greater_than_supply
 assert.equal(vlCandidateIssueLabel("vl_candidate_invalid_line_total"), "품목 금액 계산 확인");
 assert.equal(vlCandidateIssueLabel("vl_candidate_missing_expected_pdf_value"), "원본 핵심 값 누락");
 assert.equal(vlCandidateIssueLabel("vl_candidate_known_input_limitation"), "VL 입력 한계");
+assert.equal(vlCandidateIssueLabel("fax_row_boundary_uncertain"), "팩스 행 경계 확인");
 assert.equal(vlCandidateIssueLabel("manual_visual_check_not_performed"), "원본 육안 확인 필요");
 assert.equal(vlCandidateHandlingLabel("candidate_evidence_only"), "참고 증거만");
 assert.equal(vlCandidateHandlingLabel("use_parser_primary_vl_auxiliary"), "기존 parser 우선");
