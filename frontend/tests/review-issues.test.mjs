@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   bboxReviewFlagLabel,
+  businessColumnLabel,
   documentDisplayTitle,
   displayWarningsWithoutReviewDuplicates,
   isBlockingReviewIssue,
@@ -18,6 +19,10 @@ import {
   vlCandidateIssueLabel,
   vlCandidateMetadata,
 } from "../lib/utils.ts";
+
+assert.equal(businessColumnLabel("Item Name"), "품목명");
+assert.equal(businessColumnLabel("line_total"), "합계금액");
+assert.equal(businessColumnLabel("rightEdgeMemo"), "Right Edge Memo");
 
 const amountIssue = {
   code: "amount_mismatch",

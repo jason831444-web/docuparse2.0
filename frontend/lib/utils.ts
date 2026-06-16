@@ -491,6 +491,50 @@ export function documentFieldLabels(documentType?: string | null) {
   }
 }
 
+export function businessColumnLabel(value?: string | null): string {
+  if (!value) return "미분류";
+  const normalized = value
+    .trim()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+  const labels: Record<string, string> = {
+    item: "품목",
+    item_name: "품목명",
+    description: "품목명",
+    document_item_code: "문서 품목코드",
+    item_code: "문서 품목코드",
+    vendor_sku: "거래처 품목코드",
+    internal_item_code: "내부 품목코드",
+    specification: "규격",
+    spec: "규격",
+    quantity: "수량",
+    requested_quantity: "요청수량",
+    ordered_quantity: "발주수량",
+    delivered_quantity: "납품수량",
+    remaining_quantity: "잔량",
+    accepted_quantity: "합격수량",
+    rejected_quantity: "불량수량",
+    unit: "단위",
+    unit_price: "단가",
+    price: "단가",
+    supply_amount: "공급가액",
+    amount: "금액",
+    tax_amount: "세액",
+    vat: "세액",
+    line_total: "합계금액",
+    total: "합계금액",
+    remarks: "비고",
+    remark: "비고",
+    result: "판정",
+    decision: "판정",
+    lot_no: "Lot 번호",
+    lot_number: "Lot 번호",
+  };
+  return labels[normalized] || titleCaseLabel(normalized);
+}
+
 export function businessFieldDate(document: { document_type?: string | null; due_date?: string | null; workflow_metadata?: Record<string, unknown> | null }) {
   const businessFields = (document.workflow_metadata?.business_fields ?? {}) as Record<string, unknown>;
   const valueForType =

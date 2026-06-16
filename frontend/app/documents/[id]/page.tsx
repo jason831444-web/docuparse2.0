@@ -34,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
-import { blockingReviewIssues, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
+import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["extracted", "ai"] as const;
@@ -225,7 +225,7 @@ function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
               <div className="rounded-lg border bg-white p-3">
                 <p className="mb-2 text-xs font-medium text-muted-foreground">보이는 컬럼 후보</p>
                 <div className="flex flex-wrap gap-1">
-                  {visibleColumns.map((column) => <Badge key={column} variant="outline">{titleCaseLabel(column)}</Badge>)}
+                  {visibleColumns.map((column) => <Badge key={column} variant="outline">{businessColumnLabel(column)}</Badge>)}
                 </div>
               </div>
             ) : null}
@@ -233,7 +233,7 @@ function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
               <div className="rounded-lg border border-amber-200 bg-white p-3">
                 <p className="mb-2 text-xs font-medium text-amber-700">가려졌거나 잘렸을 수 있는 컬럼</p>
                 <div className="flex flex-wrap gap-1">
-                  {hiddenColumns.map((column) => <Badge key={column} className="bg-amber-100 text-amber-900">{titleCaseLabel(column)}</Badge>)}
+                  {hiddenColumns.map((column) => <Badge key={column} className="bg-amber-100 text-amber-900">{businessColumnLabel(column)}</Badge>)}
                 </div>
               </div>
             ) : null}
@@ -934,12 +934,17 @@ export default function DocumentDetailPage() {
                   </div>
                 ) : null}
                 {readRecord(readRecord(document.workflow_metadata).field_provenance).summary ? (
-                  <div className="rounded-lg border bg-white p-4">
-                    <p className="mb-3 text-xs font-medium uppercase text-muted-foreground">필드 근거 / 보이는 값 정책</p>
-                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-slate-700">
+                  <details className="rounded-lg border bg-white p-4">
+                    <summary className="cursor-pointer text-xs font-medium uppercase text-muted-foreground">
+                      필드 근거 / 보이는 값 정책 상세
+                    </summary>
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      업무 화면에는 확정값만 사용하고, 이 영역에는 출처와 검토 필요 여부를 점검하기 위한 상세 근거를 보관합니다.
+                    </p>
+                    <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-xs text-slate-700">
                       {JSON.stringify(readRecord(document.workflow_metadata).field_provenance, null, 2)}
                     </pre>
-                  </div>
+                  </details>
                 ) : null}
                 <ProcessingMetadataDetails document={document} />
               </CardContent>
