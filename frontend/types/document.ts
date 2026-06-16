@@ -413,6 +413,8 @@ export interface MonthlyReportSummary {
   pending_documents: number;
   total_amount: number;
   documents_with_errors: number;
+  no_price_documents?: number;
+  review_required_documents?: number;
 }
 
 export interface MonthlyReportPartyRow {
@@ -426,6 +428,15 @@ export interface MonthlyReportItemRow {
   spec: string;
   quantity: number;
   total_amount: number;
+}
+
+export interface MonthlyReportDocumentTypeRow {
+  document_type: string;
+  document_count: number;
+  verified_documents: number;
+  pending_documents: number;
+  total_amount: number;
+  no_price_documents: number;
 }
 
 export interface MonthlyReportIssueRow {
@@ -448,6 +459,7 @@ export interface MonthlyReport {
   summary: MonthlyReportSummary;
   by_party: MonthlyReportPartyRow[];
   by_item: MonthlyReportItemRow[];
+  by_document_type?: MonthlyReportDocumentTypeRow[];
   top_parties: MonthlyReportPartyRow[];
   top_items: MonthlyReportItemRow[];
   issues: {

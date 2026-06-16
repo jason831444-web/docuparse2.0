@@ -38,6 +38,7 @@ class MonthlyReportService:
 
         by_party: dict[str, dict[str, Any]] = {}
         by_item: dict[tuple[str, str], dict[str, Any]] = {}
+        by_document_type: dict[str, dict[str, Any]] = {}
         missing_required_fields: list[dict[str, Any]] = []
         calculation_mismatches: list[dict[str, Any]] = []
         pending_issue_rows: list[dict[str, Any]] = []
@@ -49,6 +50,35 @@ class MonthlyReportService:
                 pending_issue_rows.append(self._issue_row(document, "미검수 문서", "검수 완료 전 문서입니다."))
 
         total_amount = Decimal("0")
+        no_price_documents = 0
+        review_required_documents = 0
+        for document in range_documents:
+            document_type = self._document_type_value(document)
+            type_row = by_document_type.setdefault(
+                document_type,
+                {
+                    "document_type": document_type,
+                    "document_count": 0,
+                    "verified_documents": 0,
+                    "pending_documents": 0,
+                    "total_amount": Decimal("0"),
+                    "no_price_documents": 0,
+                },
+            )
+            type_row["document_count"] += 1
+            if self._is_verified(document):
+                type_row["verified_documents"] += 1
+            else:
+                type_row["pending_documents"] += 1
+            if not self._amount_required(document):
+                no_price_documents += 1
+                type_row["no_price_documents"] += 1
+            if document.review_required:
+                review_required_documents += 1
+            amount = self._document_amount(document)
+            if amount is not None and self._is_verified(document):
+                type_row["total_amount"] += amount
+
         for document in verified_documents:
             amount = self._document_amount(document)
             if amount is not None:
@@ -78,6 +108,11 @@ class MonthlyReportService:
 
         by_party_rows = sorted(by_party.values(), key=lambda row: (row["total_amount"], row["document_count"]), reverse=True)
         by_item_rows = sorted(by_item.values(), key=lambda row: (row["total_amount"], row["quantity"]), reverse=True)
+        by_document_type_rows = sorted(
+            by_document_type.values(),
+            key=lambda row: (row["document_count"], row["total_amount"]),
+            reverse=True,
+        )
         issues = {
             "missing_required_fields": missing_required_fields,
             "calculation_mismatches": calculation_mismatches,
@@ -96,9 +131,12 @@ class MonthlyReportService:
                 "pending_documents": len(pending_documents),
                 "total_amount": self._number(total_amount),
                 "documents_with_errors": self._documents_with_errors(issues),
+                "no_price_documents": no_price_documents,
+                "review_required_documents": review_required_documents,
             },
             "by_party": [self._json_row(row) for row in by_party_rows],
             "by_item": [self._json_row(row) for row in by_item_rows],
+            "by_document_type": [self._json_row(row) for row in by_document_type_rows],
             "top_parties": [self._json_row(row) for row in by_party_rows[:5]],
             "top_items": [self._json_row(row) for row in by_item_rows[:10]],
             "issues": issues,
@@ -110,6 +148,7 @@ class MonthlyReportService:
             pd.DataFrame([self._summary_row(report)]).to_excel(writer, index=False, sheet_name="Summary")
             pd.DataFrame(report.get("by_party") or []).to_excel(writer, index=False, sheet_name="By Party")
             pd.DataFrame(report.get("by_item") or []).to_excel(writer, index=False, sheet_name="By Item")
+            pd.DataFrame(report.get("by_document_type") or []).to_excel(writer, index=False, sheet_name="By Document Type")
             pd.DataFrame(self._issue_rows(report)).to_excel(writer, index=False, sheet_name="Issues")
         return buffer.getvalue()
 
@@ -120,6 +159,8 @@ class MonthlyReportService:
             rows.append({"section": "By Party", **row})
         for row in report.get("by_item") or []:
             rows.append({"section": "By Item", **row})
+        for row in report.get("by_document_type") or []:
+            rows.append({"section": "By Document Type", **row})
         for row in self._issue_rows(report):
             rows.append({"section": "Issues", **row})
         buffer = io.StringIO()
@@ -255,6 +296,8 @@ class MonthlyReportService:
             "미검수 문서 수": summary.get("pending_documents", 0),
             "총 거래 금액": summary.get("total_amount", 0),
             "오류/확인 필요 문서 수": summary.get("documents_with_errors", 0),
+            "금액 없는 수량 확인 문서 수": summary.get("no_price_documents", 0),
+            "검토 필요 표시 문서 수": summary.get("review_required_documents", 0),
         }
 
     def _issue_rows(self, report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -267,6 +310,9 @@ class MonthlyReportService:
 
     def _json_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {key: self._number(value) if isinstance(value, Decimal) else value for key, value in row.items()}
+
+    def _document_type_value(self, document: Document) -> str:
+        return getattr(document.document_type, "value", str(document.document_type or "unknown")) or "unknown"
 
     def _number(self, value: Decimal | None) -> int | float | None:
         if value is None:

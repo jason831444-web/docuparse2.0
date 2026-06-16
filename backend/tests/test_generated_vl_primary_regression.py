@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from app.scripts.run_generated_vl_primary_regression import compare_expected_actual
+from app.scripts import run_generated_vl_primary_regression as regression
 
 
 def test_compare_rejects_hidden_row_amount_confirmation():
@@ -256,6 +259,38 @@ def test_compare_warns_when_required_document_number_is_missing():
 
     assert result["status"] == "WARN"
     assert "document_number_missing" in {issue["code"] for issue in result["warnings"]}
+
+
+def test_sample_paths_include_images_and_pdfs_only(tmp_path):
+    for filename in ("a.pdf", "b.jpg", "c.png", "d.webp", "e.tiff", "ignore.txt", "meta.json"):
+        (tmp_path / filename).write_text("sample", encoding="utf-8")
+
+    names = [path.name for path in regression._sample_paths(tmp_path)]
+
+    assert names == ["a.pdf", "b.jpg", "c.png", "d.webp", "e.tiff"]
+
+
+def test_expected_metadata_jsonl_maps_real_company_smoke_rows(tmp_path):
+    rows = [
+        {"filename": "DOC-002_tax_invoice_uncropped_photo.png", "document_no": "DOC-002", "document_type": "tax_invoice", "synthetic": True},
+        {"filename": "DOC-007_incoming_inspection_uncropped_photo.png", "document_no": "DOC-007", "document_type": "incoming_inspection", "synthetic": True},
+        {"filename": "DOC-009_return_credit_uncropped_photo.png", "document_no": "DOC-009", "document_type": "return_credit", "synthetic": True},
+        {"filename": "DOC-010_internal_transfer_uncropped_photo.webp", "document_no": "DOC-010", "document_type": "internal_transfer", "synthetic": True},
+    ]
+    (tmp_path / "expected_metadata.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+        encoding="utf-8",
+    )
+
+    metadata = regression._load_expected_metadata(tmp_path)
+
+    assert metadata["DOC-002_tax_invoice_uncropped_photo.png"]["document_type"] == "invoice"
+    assert metadata["DOC-007_incoming_inspection_uncropped_photo.png"]["document_type"] == "inspection_report"
+    assert metadata["DOC-007_incoming_inspection_uncropped_photo.png"]["no_price_document"] is True
+    assert metadata["DOC-009_return_credit_uncropped_photo.png"]["document_type"] == "general_document"
+    assert "no_price_document" not in metadata["DOC-009_return_credit_uncropped_photo.png"]
+    assert metadata["DOC-010_internal_transfer_uncropped_photo.webp"]["document_type"] == "general_document"
+    assert metadata["DOC-010_internal_transfer_uncropped_photo.webp"]["no_price_document"] is True
 
 
 def test_compare_warns_when_required_header_field_is_missing():

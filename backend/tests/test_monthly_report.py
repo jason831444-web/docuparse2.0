@@ -138,8 +138,40 @@ def test_no_price_document_does_not_emit_amount_validation_issues():
 
     assert report["summary"]["verified_documents"] == 1
     assert report["summary"]["total_amount"] == 0
+    assert report["summary"]["no_price_documents"] == 1
     assert report["issues"]["missing_required_fields"] == []
     assert report["issues"]["calculation_mismatches"] == []
+
+
+def test_report_groups_by_document_type_and_review_status():
+    service = MonthlyReportService()
+    documents = [
+        _document(document_number="PO-1", document_type=DocumentType.purchase_order),
+        _document(
+            document_number="DN-1",
+            document_type=DocumentType.delivery_note,
+            extracted_amount=None,
+            review_required=True,
+            workflow_metadata={
+                "taxonomy": {
+                    "document_profile": "no_price_document",
+                    "document_profiles": ["no_price_document", "inventory_movement_document"],
+                    "amount_required": False,
+                }
+            },
+            line_items=[{"item_name": "볼트", "quantity": "100", "unit": "EA"}],
+        ),
+        _document(document_number="INV-PENDING", document_type=DocumentType.invoice, processing_status=ProcessingStatus.needs_review),
+    ]
+
+    report = service.build(documents, year=2026, month=6)
+
+    by_type = {row["document_type"]: row for row in report["by_document_type"]}
+    assert by_type["purchase_order"]["document_count"] == 1
+    assert by_type["delivery_note"]["no_price_documents"] == 1
+    assert by_type["invoice"]["pending_documents"] == 1
+    assert report["summary"]["no_price_documents"] == 1
+    assert report["summary"]["review_required_documents"] == 1
 
 
 def test_monthly_report_exports_xlsx_and_csv():
@@ -156,6 +188,7 @@ def test_monthly_report_exports_xlsx_and_csv():
     assert "Summary" in workbook_xml
     assert "By Party" in workbook_xml
     assert "By Item" in workbook_xml
+    assert "By Document Type" in workbook_xml
     assert "Issues" in workbook_xml
     assert "Summary" in csv
     assert "By Party" in csv

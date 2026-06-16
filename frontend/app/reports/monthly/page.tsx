@@ -99,12 +99,13 @@ export default function MonthlyReportPage() {
             <Badge variant="outline" className="bg-slate-50 text-slate-700 shadow-none">{PERIOD_LABELS[(report.period as ReportPeriod) || "custom"] ?? "기간"}</Badge>
           </div>
 
-          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <MetricCard label="전체 문서 수" value={report.summary.total_documents} />
             <MetricCard label="검수 완료" value={report.summary.verified_documents} tone="emerald" />
             <MetricCard label="미검수/대기" value={report.summary.pending_documents} tone="amber" />
             <MetricCard label="총 거래 금액" value={formatMoney(report.summary.total_amount, "KRW")} />
             <MetricCard label="확인 필요 문서" value={report.summary.documents_with_errors} tone="red" />
+            <MetricCard label="금액 없는 수량 문서" value={report.summary.no_price_documents ?? 0} />
           </section>
 
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -114,6 +115,21 @@ export default function MonthlyReportPage() {
               headers={["거래처명", "문서 수", "총 거래 금액"]}
               rows={report.by_party.map((row) => [row.name, row.document_count, formatMoney(row.total_amount, "KRW")])}
             />
+            <ReportTable
+              title="문서 유형별 업무량"
+              description="발주서, 납품서, 검사성적서처럼 업무 문서 유형별 처리 현황을 봅니다."
+              headers={["문서 유형", "전체", "검수 완료", "미검수", "금액 없는 문서"]}
+              rows={(report.by_document_type ?? []).map((row) => [
+                titleCaseLabel(row.document_type),
+                row.document_count,
+                row.verified_documents,
+                row.pending_documents,
+                row.no_price_documents,
+              ])}
+            />
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <ReportTable
               title="품목별 수량/금액"
               description="품명과 규격이 같은 품목을 묶어서 봅니다."

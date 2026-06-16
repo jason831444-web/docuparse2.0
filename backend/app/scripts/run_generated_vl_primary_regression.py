@@ -24,6 +24,7 @@ DEFAULT_OUTPUT_DIR = Path(os.getenv("DOCUPARSE_GENERATED_VL_REPORT_DIR", "/tmp/d
 AMOUNT_FIELDS = ("unit_price", "supply_amount", "tax_amount", "line_total", "subtotal", "tax", "total")
 LINE_AMOUNT_FIELDS = ("unit_price", "supply_amount", "tax_amount", "line_total")
 SUMMARY_ROW_RE = ("총액", "합계", "subtotal", "total", "tax", "vat", "공급가액", "세액")
+SUPPORTED_SAMPLE_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
 
 
 def main() -> None:
@@ -55,20 +56,24 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
     detail_dir = args.output_dir / "document_details"
     export_dir = args.output_dir / "document_exports"
     rows: list[dict[str, Any]] = []
-    for pdf_path in sorted(args.sample_dir.glob("*.pdf")):
-        expected_path = pdf_path.with_suffix(".expected.json")
-        visual_path = pdf_path.with_suffix(".visual.md")
-        if not expected_path.exists():
+    expected_metadata = _load_expected_metadata(args.sample_dir)
+    for sample_path in _sample_paths(args.sample_dir):
+        expected_path = sample_path.with_suffix(".expected.json")
+        visual_path = sample_path.with_suffix(".visual.md")
+        if expected_path.exists():
+            expected = json.loads(expected_path.read_text(encoding="utf-8"))
+        else:
+            expected = dict(expected_metadata.get(sample_path.name) or {})
+        if not expected:
             continue
-        expected = json.loads(expected_path.read_text(encoding="utf-8"))
         if args.progress:
-            print(f"[generated-vl] start {pdf_path.name}", flush=True)
+            print(f"[generated-vl] start {sample_path.name}", flush=True)
         sample_started = time.monotonic()
         payload: dict[str, Any] = {}
         error = None
         try:
-            payload = _process_with_backend_api(pdf_path, args.api_base, timeout_seconds=args.timeout_seconds)
-            _write_api_dumps(pdf_path, payload, detail_dir, export_dir)
+            payload = _process_with_backend_api(sample_path, args.api_base, timeout_seconds=args.timeout_seconds)
+            _write_api_dumps(sample_path, payload, detail_dir, export_dir)
         except Exception as exc:  # pragma: no cover - exercised by server smoke
             error = str(exc)
         elapsed_ms = int((time.monotonic() - sample_started) * 1000)
@@ -79,11 +84,11 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
             comparison["status"] = "FAIL"
             comparison["failures"].append({"code": "upload_or_processing_failed", "message": error})
         row = {
-            "filename": pdf_path.name,
-            "expected_file": expected_path.name,
+            "filename": sample_path.name,
+            "expected_file": expected_path.name if expected_path.exists() else "expected_metadata.jsonl",
             "visual_file": visual_path.name if visual_path.exists() else None,
             "elapsed_ms": elapsed_ms,
-            "text_layer_chars": pdf_text_length(pdf_path),
+            "text_layer_chars": pdf_text_length(sample_path) if sample_path.suffix.lower() == ".pdf" else 0,
             "status": comparison["status"],
             "failures": comparison["failures"],
             "warnings": comparison["warnings"],
@@ -93,13 +98,13 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
                 "pdf_opened_and_visually_checked": True,
                 "visual_ground_truth_file": str(visual_path),
                 "expected_from_pdf": expected,
-                "comparison_basis": "rendered PDF visual fixture and expected JSON; hidden/cropped columns must not be visually confirmed.",
+                "comparison_basis": "rendered visual fixture and expected metadata; hidden/cropped columns must not be visually confirmed.",
             },
         }
         rows.append(row)
         if args.progress:
             print(
-                f"[generated-vl] done {pdf_path.name}: {row['status']} "
+                f"[generated-vl] done {sample_path.name}: {row['status']} "
                 f"failures={len(row['failures'])} warnings={len(row['warnings'])}",
                 flush=True,
             )
@@ -116,6 +121,61 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
         "summary": summarize_rows(rows),
         "rows": rows,
     }
+
+
+def _sample_paths(sample_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in sample_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SAMPLE_EXTENSIONS
+    )
+
+
+def _load_expected_metadata(sample_dir: Path) -> dict[str, dict[str, Any]]:
+    path = sample_dir / "expected_metadata.jsonl"
+    if not path.exists():
+        return {}
+    rows: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        filename = str(record.get("filename") or "")
+        if not filename:
+            continue
+        rows[filename] = _expected_from_metadata_row(record)
+    return rows
+
+
+def _expected_from_metadata_row(record: dict[str, Any]) -> dict[str, Any]:
+    source_document_type = str(record.get("document_type") or "").strip().casefold()
+    document_type = _document_type_from_metadata(source_document_type)
+    expected: dict[str, Any] = {
+        "document_type": document_type,
+        "document_number": record.get("document_no"),
+        "source_filename": record.get("source_filename"),
+        "synthetic": bool(record.get("synthetic", True)),
+        "smoke_only": True,
+    }
+    if source_document_type in {"delivery_note", "incoming_inspection", "internal_transfer"}:
+        expected["no_price_document"] = True
+    if record.get("blur_severity"):
+        expected["expected_review_flags"] = ["document_image_blurry"]
+        expected["quality_expectation"] = "review_required_allowed"
+    return {key: value for key, value in expected.items() if value not in (None, "", [])}
+
+
+def _document_type_from_metadata(value: Any) -> str | None:
+    normalized = str(value or "").strip().casefold()
+    aliases = {
+        "tax_invoice": "invoice",
+        "commercial_invoice": "invoice",
+        "incoming_inspection": "inspection_report",
+        "return_credit": "general_document",
+        "internal_transfer": "general_document",
+        "pos_daily_settlement": "transaction_statement",
+    }
+    return aliases.get(normalized, normalized or None)
 
 
 def compare_expected_actual(expected: dict[str, Any], actual: dict[str, Any], export_json: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import os
 import time
 import urllib.error
@@ -249,10 +250,11 @@ def _process_with_worker_api(pdf_path: Path, worker_url: str, render_dir: Path) 
 def _upload_document(pdf_path: Path, api_base: str) -> dict[str, Any]:
     boundary = f"----docuparse-{uuid4().hex}"
     file_bytes = pdf_path.read_bytes()
+    mime_type = mimetypes.guess_type(pdf_path.name)[0] or "application/octet-stream"
     body = b"".join([
         f"--{boundary}\r\n".encode(),
         f'Content-Disposition: form-data; name="file"; filename="{pdf_path.name}"\r\n'.encode(),
-        b"Content-Type: application/pdf\r\n\r\n",
+        f"Content-Type: {mime_type}\r\n\r\n".encode(),
         file_bytes,
         b"\r\n",
         f"--{boundary}--\r\n".encode(),
