@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.file_type_detection import DetectedFileType, FileTypeDetector
+from app.services.document_quality import DocumentQualityAnalyzer
 from app.services.office_extraction import OfficeExtractionService
 from app.services.ocr import OCRService
 from app.services.pdf_extraction import PdfExtractionService
@@ -35,6 +36,7 @@ class FileIngestionService:
     ) -> None:
         self.detector = detector or FileTypeDetector()
         self.ocr = ocr or OCRService()
+        self.document_quality = DocumentQualityAnalyzer()
         self.text = TextExtractionService()
         self.pdf = PdfExtractionService(self.ocr)
         self.office = OfficeExtractionService()
@@ -72,6 +74,7 @@ class FileIngestionService:
         )
 
     def _image(self, path: Path, detected: DetectedFileType) -> NormalizedDocument:
+        quality = self.document_quality.analyze_document_quality([path]).to_dict()
         result = self._ocr_result(path)
         text, confidence = result["text"], result["confidence"]
         warnings = []
@@ -89,7 +92,7 @@ class FileIngestionService:
                 "line_candidates": result["line_candidates"],
             }],
             extraction_warnings=warnings,
-            file_metadata={**self._metadata(path, detected), **result["metadata"]},
+            file_metadata={**self._metadata(path, detected), "document_quality": quality, **result["metadata"]},
             ocr_confidence=confidence,
             primary_image_path=path,
             heavy_ai_candidate=True,

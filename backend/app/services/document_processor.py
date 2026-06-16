@@ -296,6 +296,19 @@ class DocumentProcessor:
                     if not any(issue.get("code") == layout_issue["code"] for issue in issues if isinstance(issue, dict)):
                         issues.append(layout_issue)
                     workflow_metadata["normalized_review_issues"] = issues
+            document_quality = self._document_quality_workflow_metadata(normalized)
+            if document_quality:
+                workflow_metadata["document_quality"] = document_quality
+                quality_issues = self._document_quality_review_issues(document_quality)
+                if quality_issues:
+                    issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                    existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
+                    for issue in quality_issues:
+                        if issue.get("code") not in existing_codes:
+                            issues.append(issue)
+                            existing_codes.add(issue.get("code"))
+                    workflow_metadata["normalized_review_issues"] = issues
+                    workflow_metadata["review_required"] = True
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             workflow_review_required = bool((workflow.workflow_metadata or {}).get("review_required"))
             document.review_required = workflow_review_required if self._is_manufacturing_type(document) else document.review_required or workflow_review_required
@@ -340,6 +353,7 @@ class DocumentProcessor:
         metadata: dict,
     ) -> NormalizedDocument:
         provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
+        quality_metadata, quality_page_images = self._document_quality_for_source(stored_path)
         return NormalizedDocument(
             source_file_type=stored_path.suffix.casefold().lstrip(".") or "file",
             mime_type=document.mime_type or "application/octet-stream",
@@ -359,12 +373,39 @@ class DocumentProcessor:
                 "vl_worker_status": provider_metadata.get("status"),
                 "vl_worker_provider": provider_metadata.get("provider"),
                 "ocr_fallback_used": False,
+                **({"document_quality": quality_metadata} if quality_metadata else {}),
             },
             ocr_confidence=None,
-            primary_image_path=None,
+            primary_image_path=quality_page_images[0] if quality_page_images else None,
+            rendered_image_paths=quality_page_images,
             heavy_ai_candidate=False,
             partial_support=False,
         )
+
+    def _document_quality_for_source(self, stored_path: Path) -> tuple[dict | None, list[Path]]:
+        suffix = stored_path.suffix.casefold().lstrip(".")
+        image_suffixes = {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"}
+        if suffix in image_suffixes and stored_path.exists():
+            quality = self.ingestion.document_quality.analyze_document_quality([stored_path]).to_dict()
+            return quality, [stored_path]
+        if suffix != "pdf" or not stored_path.exists():
+            return None, []
+        try:
+            import fitz
+
+            output_dir = self.settings.upload_dir / "quality_rendered_pages"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"{stored_path.stem}-quality-page-1.png"
+            with fitz.open(stored_path) as pdf:
+                if len(pdf) <= 0:
+                    return None, []
+                page = pdf.load_page(0)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                pixmap.save(output_path)
+            quality = self.ingestion.document_quality.analyze_document_quality([output_path]).to_dict()
+            return quality, [output_path]
+        except Exception:
+            return None, []
 
     def _vl_primary_reader_metadata(
         self,
@@ -1024,6 +1065,62 @@ class DocumentProcessor:
             "blocking": False,
             "flags": flags,
         }
+
+    def _document_quality_workflow_metadata(self, normalized: NormalizedDocument) -> dict | None:
+        metadata = normalized.file_metadata if isinstance(normalized.file_metadata, dict) else {}
+        quality = metadata.get("document_quality")
+        return quality if isinstance(quality, dict) else None
+
+    def _document_quality_review_issues(self, document_quality: dict) -> list[dict]:
+        reasons = document_quality.get("review_reasons") if isinstance(document_quality.get("review_reasons"), list) else []
+        page_reasons: set[str] = {str(reason) for reason in reasons if reason}
+        pages = document_quality.get("pages") if isinstance(document_quality.get("pages"), list) else []
+        for page in pages:
+            if isinstance(page, dict):
+                page_reasons.update(str(reason) for reason in page.get("review_reasons") or [] if reason)
+
+        issue_map = {
+            "document_low_resolution": (
+                "document_low_resolution",
+                "문서 해상도가 낮아 숫자와 품목을 원본과 함께 확인해야 합니다.",
+            ),
+            "document_image_blurry": (
+                "document_image_blurry",
+                "문서가 흐릿해 수량, 단가, 금액 값을 검토해야 합니다.",
+            ),
+            "document_low_contrast": (
+                "document_low_contrast",
+                "문서 명암이 낮아 일부 글자가 불명확할 수 있습니다.",
+            ),
+            "document_page_skewed": (
+                "document_page_skewed",
+                "문서가 기울어져 표 행과 숫자 위치를 확인해야 합니다.",
+            ),
+            "document_right_column_crop_risk": (
+                "visual_crop_or_truncated_column",
+                "문서 오른쪽 끝에 내용이 있어 금액/세액/합계 컬럼 잘림 여부를 확인해야 합니다.",
+            ),
+            "document_photo_source": (
+                "photo_source_review_required",
+                "사진으로 촬영된 문서로 보입니다. 확정 전 원본 확인이 필요합니다.",
+            ),
+            "document_fax_like_source": (
+                "fax_like_source_review_required",
+                "팩스/저품질 스캔 문서로 보입니다. 0/O, 1/I 같은 문자 혼동을 확인해야 합니다.",
+            ),
+        }
+        issues: list[dict] = []
+        for reason, (code, message_ko) in issue_map.items():
+            if reason not in page_reasons:
+                continue
+            issues.append({
+                "code": code,
+                "message_ko": message_ko,
+                "field": "workflow_metadata.document_quality",
+                "severity": "warning",
+                "blocking": False,
+            })
+        return issues
 
     def _interpret_document(
         self,

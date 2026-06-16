@@ -4,6 +4,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.services.ocr import OCRService
+from app.services.document_quality import DocumentQualityAnalyzer
 
 
 @dataclass
@@ -21,6 +22,7 @@ class PdfExtractionService:
     def __init__(self, ocr: OCRService | None = None) -> None:
         self.ocr = ocr or OCRService()
         self.settings = get_settings()
+        self.document_quality = DocumentQualityAnalyzer()
 
     def extract(self, path: Path) -> PdfExtractionResult:
         result = PdfExtractionResult()
@@ -35,6 +37,7 @@ class PdfExtractionService:
             result.metadata["text_layer_exists"] = True
             result.metadata["image_only"] = False
             result.metadata["ocr_engine"] = None
+            result.metadata["document_quality"] = self.document_quality.digital_pdf_quality(page_count)
             return result
 
         result.warnings.append("PDF text layer was sparse; OCR was attempted on rendered pages.")
@@ -42,6 +45,8 @@ class PdfExtractionService:
         result.metadata["image_only"] = not bool(text.strip())
         rendered = self._render_pages(path, max_pages=self.settings.pdf_ocr_max_pages)
         result.rendered_page_images = rendered
+        if rendered:
+            result.metadata["document_quality"] = self.document_quality.analyze_document_quality(rendered).to_dict()
         if not rendered:
             result.text = text
             result.extraction_method = "pdf_partial_text_extract"
