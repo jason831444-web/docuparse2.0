@@ -309,6 +309,9 @@ class DocumentProcessor:
                             existing_codes.add(issue.get("code"))
                     workflow_metadata["normalized_review_issues"] = issues
                     workflow_metadata["review_required"] = True
+            field_provenance = self._field_provenance_metadata(document, normalized, workflow_metadata)
+            if field_provenance:
+                workflow_metadata["field_provenance"] = field_provenance
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             workflow_review_required = bool((workflow.workflow_metadata or {}).get("review_required"))
             document.review_required = workflow_review_required if self._is_manufacturing_type(document) else document.review_required or workflow_review_required
@@ -1121,6 +1124,130 @@ class DocumentProcessor:
                 "blocking": False,
             })
         return issues
+
+    def _field_provenance_metadata(
+        self,
+        document: Document,
+        normalized: NormalizedDocument,
+        workflow_metadata: dict,
+    ) -> dict | None:
+        quality = workflow_metadata.get("document_quality") if isinstance(workflow_metadata.get("document_quality"), dict) else {}
+        hidden_columns = {
+            str(column)
+            for column in (quality.get("hidden_or_cropped_columns") or [])
+            if isinstance(column, str)
+        }
+        quality_flags = [
+            str(reason)
+            for reason in (quality.get("review_reasons") or [])
+            if isinstance(reason, str)
+        ]
+        extraction_method = normalized.extraction_method or document.extraction_method
+        field_sources = dict(document.field_sources or {})
+        fields: dict[str, dict[str, Any]] = {}
+        for field_name in (
+            "document_number",
+            "vendor_name",
+            "customer_name",
+            "issue_date",
+            "due_date",
+            "currency",
+            "subtotal",
+            "tax",
+            "extracted_amount",
+        ):
+            value = getattr(document, field_name, None)
+            if value in (None, "", []):
+                continue
+            source = field_sources.get(field_name) or extraction_method or "unknown"
+            fields[field_name] = self._field_provenance_entry(
+                source=source,
+                extraction_method=extraction_method,
+                visible=True,
+                confidence=document.confidence_score,
+                quality_flags=quality_flags,
+            )
+
+        line_items: list[dict[str, dict[str, Any]]] = []
+        for item in document.line_items or []:
+            if not isinstance(item, dict):
+                continue
+            item_provenance = item.get("_provenance") if isinstance(item.get("_provenance"), dict) else {}
+            item_sources: dict[str, dict[str, Any]] = {}
+            for field_name in (
+                "item_name",
+                "item_code",
+                "document_item_code",
+                "internal_item_code",
+                "specification",
+                "quantity",
+                "unit",
+                "unit_price",
+                "supply_amount",
+                "tax_amount",
+                "line_total",
+            ):
+                if item.get(field_name) in (None, "", []):
+                    continue
+                visible = field_name not in hidden_columns
+                source = item_provenance.get("source") or field_sources.get("line_items") or extraction_method or "unknown"
+                item_sources[field_name] = self._field_provenance_entry(
+                    source=source,
+                    extraction_method=item_provenance.get("mode") or extraction_method,
+                    visible=visible,
+                    confidence=document.confidence_score,
+                    quality_flags=quality_flags,
+                )
+            if item_sources:
+                line_items.append(item_sources)
+
+        if not fields and not line_items:
+            return None
+        return {
+            "version": 1,
+            "summary": {
+                "extraction_method": extraction_method,
+                "visible_columns": quality.get("visible_columns") or [],
+                "hidden_or_cropped_columns": list(hidden_columns),
+                "policy": "confirmed values remain exportable; hidden/cropped column risk is recorded for review.",
+            },
+            "fields": fields,
+            "line_items": line_items,
+        }
+
+    def _field_provenance_entry(
+        self,
+        *,
+        source: str | None,
+        extraction_method: str | None,
+        visible: bool,
+        confidence: Any,
+        quality_flags: list[str],
+    ) -> dict[str, Any]:
+        source_name = str(source or "unknown")
+        return {
+            "source": source_name,
+            "source_type": self._field_source_type(source_name, extraction_method),
+            "extraction_method": extraction_method,
+            "page": None,
+            "bbox": None,
+            "confidence": str(confidence) if confidence not in (None, "", []) else None,
+            "visible": visible,
+            "review_required": (not visible) or bool(quality_flags),
+            "quality_flags": quality_flags,
+        }
+
+    def _field_source_type(self, source: str, extraction_method: str | None) -> str:
+        combined = f"{source} {extraction_method or ''}".casefold()
+        if "manual" in combined:
+            return "manual_confirmed"
+        if "paddleocr_vl" in combined or "vl" in combined:
+            return "vl_source"
+        if "text" in combined or "pdf_text" in combined:
+            return "text_layer_source"
+        if "ocr" in combined or "ppocr" in combined:
+            return "fallback_source"
+        return "parser_source"
 
     def _interpret_document(
         self,

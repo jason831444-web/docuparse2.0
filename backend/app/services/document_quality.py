@@ -27,6 +27,8 @@ class PageQualityResult:
     right_edge_content_risk: float
     possible_right_column_crop: bool
     quality_score: float
+    visible_columns: list[str] = field(default_factory=list)
+    hidden_or_cropped_columns: list[str] = field(default_factory=list)
     review_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,6 +52,8 @@ class DocumentQualityResult:
     possible_right_column_crop: bool
     has_blurry_pages: bool
     has_skewed_pages: bool
+    visible_columns: list[str] = field(default_factory=list)
+    hidden_or_cropped_columns: list[str] = field(default_factory=list)
     review_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,6 +63,8 @@ class DocumentQualityResult:
             "overall_quality_score": round(self.overall_quality_score, 3),
             "likely_scan_type": self.likely_scan_type,
             "possible_right_column_crop": self.possible_right_column_crop,
+            "visible_columns": list(self.visible_columns),
+            "hidden_or_cropped_columns": list(self.hidden_or_cropped_columns),
             "has_blurry_pages": self.has_blurry_pages,
             "has_skewed_pages": self.has_skewed_pages,
             "review_reasons": list(self.review_reasons),
@@ -88,6 +94,7 @@ class DocumentQualityAnalyzer:
         is_skewed = skew is not None and abs(skew) >= 2.0
         low_contrast = contrast < 0.105
         possible_crop = right_edge_risk >= 0.018
+        visible_columns, hidden_or_cropped_columns = self._visible_column_estimate(possible_crop)
         likely_scan_type = self._likely_scan_type(pil_image, is_blurry, is_skewed, contrast, brightness)
         review_reasons = self._review_reasons(
             resolution_bucket=resolution_bucket,
@@ -121,6 +128,8 @@ class DocumentQualityAnalyzer:
             likely_scan_type=likely_scan_type,
             right_edge_content_risk=right_edge_risk,
             possible_right_column_crop=possible_crop,
+            visible_columns=visible_columns,
+            hidden_or_cropped_columns=hidden_or_cropped_columns,
             quality_score=score,
             review_reasons=review_reasons,
         )
@@ -141,6 +150,8 @@ class DocumentQualityAnalyzer:
                 overall_quality_score=0.0,
                 likely_scan_type="unknown",
                 possible_right_column_crop=False,
+                visible_columns=[],
+                hidden_or_cropped_columns=[],
                 has_blurry_pages=False,
                 has_skewed_pages=False,
                 review_reasons=reasons,
@@ -152,12 +163,18 @@ class DocumentQualityAnalyzer:
                     reasons.append(reason)
         if failed_count:
             reasons.append("document_quality_unreadable_image")
+        hidden_columns = self._merge_columns(page.hidden_or_cropped_columns for page in pages)
+        visible_columns = self._merge_columns(page.visible_columns for page in pages)
+        if hidden_columns:
+            visible_columns = [column for column in visible_columns if column not in hidden_columns]
         return DocumentQualityResult(
             page_count=len(rendered_pages),
             pages=pages,
             overall_quality_score=float(mean(page.quality_score for page in pages)),
             likely_scan_type=self._dominant_scan_type(pages),
             possible_right_column_crop=any(page.possible_right_column_crop for page in pages),
+            visible_columns=visible_columns,
+            hidden_or_cropped_columns=hidden_columns,
             has_blurry_pages=any(page.is_blurry for page in pages),
             has_skewed_pages=any(page.is_skewed for page in pages),
             review_reasons=reasons,
@@ -170,10 +187,43 @@ class DocumentQualityAnalyzer:
             "overall_quality_score": 0.95,
             "likely_scan_type": "digital_pdf",
             "possible_right_column_crop": False,
+            "visible_columns": self._business_columns(),
+            "hidden_or_cropped_columns": [],
             "has_blurry_pages": False,
             "has_skewed_pages": False,
             "review_reasons": [],
         }
+
+    def _business_columns(self) -> list[str]:
+        return [
+            "item_name",
+            "document_item_code",
+            "internal_item_code",
+            "specification",
+            "quantity",
+            "unit",
+            "unit_price",
+            "supply_amount",
+            "tax_amount",
+            "line_total",
+        ]
+
+    def _visible_column_estimate(self, possible_crop: bool) -> tuple[list[str], list[str]]:
+        columns = self._business_columns()
+        if not possible_crop:
+            return columns, []
+        hidden = ["tax_amount", "line_total"]
+        return [column for column in columns if column not in hidden], hidden
+
+    def _merge_columns(self, column_lists: Any) -> list[str]:
+        merged: list[str] = []
+        for columns in column_lists:
+            if not isinstance(columns, list):
+                continue
+            for column in columns:
+                if isinstance(column, str) and column and column not in merged:
+                    merged.append(column)
+        return merged
 
     def _load_image(self, image: str | Path | Image.Image) -> tuple[Image.Image, int | None]:
         if isinstance(image, Image.Image):

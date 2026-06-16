@@ -92,10 +92,13 @@ class VLCandidateParser:
             "함께": "합격",
             "보득": "보류",
             "육각분트": "육각볼트",
+            "육각폴트": "육각볼트",
+            "폴트": "볼트",
             "육각볼트": "육각볼트",
             "스프장와야": "스프링와샤",
             "스프렁와샤": "스프링와샤",
             "스프링와야": "스프링와샤",
+            "브라컷": "브라켓",
             "봉제": "봉재",
             "545C": "S45C",
             "站到": "합계",
@@ -370,6 +373,7 @@ class VLCandidateParser:
             "quantity": quantity_match.group(1),
             "received_quantity": quantity_match.group(1),
             "validation_warnings": ["handwritten_vl_candidate", "handwritten_inspection_requires_review"],
+            "_provenance": {"source_type": "vl_source", "mode": "handwritten_label_parse"},
         }
         if specification:
             item["specification"] = specification
@@ -429,7 +433,8 @@ class VLCandidateParser:
         item: dict[str, Any] = {
             "item_name": item_name,
             "quantity": match.group("quantity"),
-            "validation_warnings": ["handwritten_vl_candidate"],
+            "validation_warnings": ["handwritten_vl_candidate", "handwritten_requires_review"],
+            "_provenance": {"source_type": "vl_source", "mode": "handwritten_freeform_row"},
         }
         if specification:
             item["specification"] = specification
@@ -446,6 +451,8 @@ class VLCandidateParser:
             item["validation_warnings"].append("line_total_not_visible_do_not_infer")
         elif unit_price is not None:
             item["validation_warnings"].append("trailing_number_requires_review")
+        else:
+            item["validation_warnings"].append("handwritten_amount_missing_or_not_applicable")
         return self.parser._normalize_line_item(item)
 
     def _should_skip_handwritten_row(self, text: str) -> bool:
@@ -584,6 +591,7 @@ class VLCandidateParser:
             "line_total",
             "validation_warnings",
             "review_flags",
+            "_provenance",
         )
         return {
             field: self._safe_value(item.get(field))

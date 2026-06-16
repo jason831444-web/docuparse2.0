@@ -204,6 +204,10 @@ class DocumentParser:
             return DocumentType.transaction_statement
         if re.search(r"(납품서|납품메모)", handwritten_type_text):
             return DocumentType.delivery_note
+        if re.search(r"(발주메모|주문목록|구매메모)", handwritten_type_text):
+            return DocumentType.purchase_order
+        if re.search(r"(자재리스트|자재목록|구매요청|현장.*공장)", handwritten_type_text):
+            return DocumentType.general_document
         first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])
         scored_types: list[tuple[int, DocumentType]] = []
         for document_type, keywords in MANUFACTURING_TYPE_INDICATORS:
@@ -2536,6 +2540,8 @@ class DocumentParser:
         item_warnings = list(item.get("validation_warnings") or [])
         if item_warnings:
             normalized["validation_warnings"] = item_warnings
+        if isinstance(item.get("_provenance"), dict):
+            normalized["_provenance"] = dict(item["_provenance"])
         if not normalized["unit"] and isinstance(normalized["quantity"], str):
             _, unit = self._parse_quantity_and_unit(normalized["quantity"])
             normalized["unit"] = unit

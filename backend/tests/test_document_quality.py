@@ -59,6 +59,10 @@ def test_right_edge_content_risk_flags_possible_crop(tmp_path):
     assert risky.right_edge_content_risk > safe.right_edge_content_risk
     assert risky.possible_right_column_crop is True
     assert "document_right_column_crop_risk" in risky.review_reasons
+    assert "tax_amount" in risky.hidden_or_cropped_columns
+    assert "line_total" in risky.hidden_or_cropped_columns
+    assert "item_name" in risky.visible_columns
+    assert "line_total" not in risky.visible_columns
 
 
 def test_document_quality_summary_stays_serializable(tmp_path):
@@ -70,6 +74,8 @@ def test_document_quality_summary_stays_serializable(tmp_path):
 
     assert summary["page_count"] == 2
     assert summary["possible_right_column_crop"] is True
+    assert "tax_amount" in summary["hidden_or_cropped_columns"]
+    assert "line_total" not in summary["visible_columns"]
     assert isinstance(summary["pages"][0]["quality_score"], float)
 
 

@@ -715,6 +715,69 @@ def test_parser_does_not_promote_quantity_only_value_as_vendor_name():
     assert parsed.vendor_name != "6본"
 
 
+def test_vl_candidate_parser_structures_handwritten_transaction_statement_rows():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "거래명세서",
+                "업체: 대한정밀",
+                "받는곳: 한빛산업",
+                "날짜: 26.6.15",
+                "S45C PIN 8x60 120EA 350",
+                "육각볼트 M6x25 500 45",
+                "스프링와샤 M6 500 12",
+                "AL 브라켓 40x80 30 2800",
+                "합계: 152,000",
+                "비고: 2박스 납품 / 일부 급함",
+            ]
+        ),
+        filename="handwritten-transaction-statement.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "transaction_statement"
+    assert candidate["line_item_count"] == 4
+    first = candidate["line_items"][0]
+    assert first["item_name"] == "S45C PIN"
+    assert first["specification"] == "8x60"
+    assert first["quantity"] == 120
+    assert first["unit"] == "EA"
+    assert first["unit_price"] == 350
+    assert "line_total_not_visible_do_not_infer" in first["validation_warnings"]
+    assert "vl_candidate_handwritten_vl_candidate" in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_structures_handwritten_no_price_delivery_rows_without_amounts():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "납품서",
+                "삼영금속 -> 태성테크",
+                "26/6/15",
+                "1) SUS 볼트 M5x20 300",
+                "2) 평와샤 M5 300",
+                "3) S45C SHAFT 12X150 40",
+                "4) AL PLATE 3T 50x100 25",
+                "총 4종",
+                "비고: 오전 입고 처리",
+            ]
+        ),
+        filename="handwritten-delivery-note.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "delivery_note"
+    assert candidate["line_item_count"] == 4
+    for item in candidate["line_items"]:
+        assert item.get("quantity") is not None
+        assert "unit_price" not in item
+        assert "supply_amount" not in item
+        assert "line_total" not in item
+        assert "handwritten_amount_missing_or_not_applicable" in item["validation_warnings"]
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

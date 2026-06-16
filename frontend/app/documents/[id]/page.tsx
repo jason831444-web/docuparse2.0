@@ -114,6 +114,10 @@ function readList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
 
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function InfoGrid({ items }: { items: Array<[string, string | null | undefined]> }) {
   const present = items.filter(([, value]) => value);
   if (!present.length) return null;
@@ -159,6 +163,96 @@ function TaxonomyPolicyCard({ document }: { document: DocumentRecord }) {
               {policyLines.map((line) => <li key={line}>{line}</li>)}
             </ul>
           </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
+  const metadata = readRecord(document.workflow_metadata);
+  const quality = readRecord(metadata.document_quality);
+  const pages = Array.isArray(quality.pages) ? quality.pages.filter((page): page is Record<string, unknown> => Boolean(page && typeof page === "object" && !Array.isArray(page))) : [];
+  if (!Object.keys(quality).length) return null;
+  const score = typeof quality.overall_quality_score === "number" ? Math.round(quality.overall_quality_score * 100) : null;
+  const reasons = readList(quality.review_reasons);
+  const visibleColumns = readList(quality.visible_columns);
+  const hiddenColumns = readList(quality.hidden_or_cropped_columns);
+  const hasCropRisk = Boolean(quality.possible_right_column_crop);
+  const hasBlurryPages = Boolean(quality.has_blurry_pages);
+  const hasSkewedPages = Boolean(quality.has_skewed_pages);
+  const scanType = typeof quality.likely_scan_type === "string" ? quality.likely_scan_type : "unknown";
+  const reasonLabels: Record<string, string> = {
+    document_low_resolution: "해상도가 낮아 숫자 확인 필요",
+    document_image_blurry: "문서가 흐릿함",
+    document_low_contrast: "명암이 낮음",
+    document_page_skewed: "문서 기울어짐",
+    document_right_column_crop_risk: "오른쪽 금액 컬럼 잘림 가능",
+    document_photo_source: "사진 촬영 문서",
+    document_fax_like_source: "팩스/저품질 스캔 가능",
+  };
+  return (
+    <Card className={hasCropRisk || hasBlurryPages || hasSkewedPages ? "border-amber-300 bg-amber-50/30" : ""}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="size-5 text-primary" />
+          문서 품질 진단
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <InfoGrid
+          items={[
+            ["품질 점수", score !== null ? `${score}%` : null],
+            ["문서 유형", scanType === "digital_pdf" ? "디지털 PDF" : scanType === "photo" ? "사진 문서" : scanType === "fax_like" ? "팩스형 문서" : scanType === "scan" ? "스캔 문서" : "확인 필요"],
+            ["페이지 수", typeof quality.page_count === "number" ? String(quality.page_count) : null],
+            ["오른쪽 컬럼", hasCropRisk ? "잘림 가능성 있음" : "잘림 위험 낮음"],
+          ]}
+        />
+        {reasons.length ? (
+          <div className="flex flex-wrap gap-2">
+            {reasons.map((reason) => (
+              <Badge key={reason} variant="outline" className="bg-white text-amber-800">
+                {reasonLabels[reason] ?? titleCaseLabel(reason)}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">자동 품질 진단에서 특별한 위험 신호가 없습니다.</p>
+        )}
+        {visibleColumns.length || hiddenColumns.length ? (
+          <div className="grid gap-3 text-sm sm:grid-cols-2">
+            {visibleColumns.length ? (
+              <div className="rounded-lg border bg-white p-3">
+                <p className="mb-2 text-xs font-medium text-muted-foreground">보이는 컬럼 후보</p>
+                <div className="flex flex-wrap gap-1">
+                  {visibleColumns.map((column) => <Badge key={column} variant="outline">{titleCaseLabel(column)}</Badge>)}
+                </div>
+              </div>
+            ) : null}
+            {hiddenColumns.length ? (
+              <div className="rounded-lg border border-amber-200 bg-white p-3">
+                <p className="mb-2 text-xs font-medium text-amber-700">가려졌거나 잘렸을 수 있는 컬럼</p>
+                <div className="flex flex-wrap gap-1">
+                  {hiddenColumns.map((column) => <Badge key={column} className="bg-amber-100 text-amber-900">{titleCaseLabel(column)}</Badge>)}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {pages.length ? (
+          <details className="rounded-lg border bg-white p-3 text-sm">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">페이지별 품질 정보</summary>
+            <div className="mt-3 grid gap-2">
+              {pages.slice(0, 6).map((page, index) => (
+                <div key={`${page.page_index ?? index}`} className="grid gap-1 rounded-md bg-slate-50 px-3 py-2 text-xs sm:grid-cols-4">
+                  <span>{String(page.page_index ?? index + 1)}페이지</span>
+                  <span>{String(page.width ?? "-")}×{String(page.height ?? "-")}</span>
+                  <span>흐림 {String(page.blur_score ?? "-")}</span>
+                  <span>{page.possible_right_column_crop ? "오른쪽 컬럼 확인" : "컬럼 위험 낮음"}</span>
+                </div>
+              ))}
+            </div>
+          </details>
         ) : null}
       </CardContent>
     </Card>
@@ -325,7 +419,7 @@ function InfoIssueDetails({ items }: { items: string[] }) {
 function ProcessingMetadataDetails({ document }: { document: DocumentRecord }) {
   const metadata = (document.workflow_metadata ?? {}) as Record<string, unknown>;
   const ingestion = (document.ingestion_metadata ?? {}) as Record<string, unknown>;
-  const quality = (metadata.quality ?? {}) as Record<string, unknown>;
+  const quality = (metadata.document_quality ?? metadata.quality ?? {}) as Record<string, unknown>;
   const escalation = (metadata.ai_escalation_decision ?? ingestion.ai_escalation_decision ?? null) as Record<string, unknown> | null;
   const providerDiagnostics = (metadata.ai_provider_diagnostics ?? ingestion.ai_provider_diagnostics ?? null) as Record<string, unknown> | null;
   const fileMetadata = (ingestion.file_metadata ?? {}) as Record<string, unknown>;
@@ -839,6 +933,14 @@ export default function DocumentDetailPage() {
                     </div>
                   </div>
                 ) : null}
+                {readRecord(readRecord(document.workflow_metadata).field_provenance).summary ? (
+                  <div className="rounded-lg border bg-white p-4">
+                    <p className="mb-3 text-xs font-medium uppercase text-muted-foreground">필드 근거 / 보이는 값 정책</p>
+                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-slate-700">
+                      {JSON.stringify(readRecord(document.workflow_metadata).field_provenance, null, 2)}
+                    </pre>
+                  </div>
+                ) : null}
                 <ProcessingMetadataDetails document={document} />
               </CardContent>
             </Card>
@@ -847,6 +949,7 @@ export default function DocumentDetailPage() {
 
         <section className="flex flex-col gap-6">
           <TaxonomyPolicyCard document={document} />
+          <QualityDiagnosisCard document={document} />
           <WorkflowPanel document={document} />
           <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
             <CardHeader>
