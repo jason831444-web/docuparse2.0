@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.documents import router as documents_router
 from app.api.routes.item_master import router as item_master_router
+from app.api.routes.reports import router as reports_router
 from app.core.config import get_settings
 from app.services.ocr import provider_health
 
@@ -30,3 +31,4 @@ def health() -> dict:
 
 app.include_router(documents_router, prefix=settings.api_prefix)
 app.include_router(item_master_router, prefix=settings.api_prefix)
+app.include_router(reports_router, prefix=settings.api_prefix)

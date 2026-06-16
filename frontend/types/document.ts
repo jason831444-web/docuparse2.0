@@ -407,6 +407,52 @@ export interface DocumentCalendarItem {
   action_url: string;
 }
 
+export interface MonthlyReportSummary {
+  total_documents: number;
+  verified_documents: number;
+  pending_documents: number;
+  total_amount: number;
+  documents_with_errors: number;
+}
+
+export interface MonthlyReportPartyRow {
+  name: string;
+  document_count: number;
+  total_amount: number;
+}
+
+export interface MonthlyReportItemRow {
+  item_name: string;
+  spec: string;
+  quantity: number;
+  total_amount: number;
+}
+
+export interface MonthlyReportIssueRow {
+  document_id?: string | null;
+  document_type?: string | null;
+  document_number?: string | null;
+  party_name?: string | null;
+  date?: string | null;
+  issue_type: string;
+  description: string;
+}
+
+export interface MonthlyReport {
+  year: number;
+  month: number;
+  summary: MonthlyReportSummary;
+  by_party: MonthlyReportPartyRow[];
+  by_item: MonthlyReportItemRow[];
+  top_parties: MonthlyReportPartyRow[];
+  top_items: MonthlyReportItemRow[];
+  issues: {
+    missing_required_fields: MonthlyReportIssueRow[];
+    calculation_mismatches: MonthlyReportIssueRow[];
+    pending_documents: MonthlyReportIssueRow[];
+  };
+}
+
 export interface DocumentStats {
   total: number;
   receipts: number;

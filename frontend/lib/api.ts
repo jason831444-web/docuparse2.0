@@ -14,6 +14,7 @@ import type {
   ItemMasterRecord,
   ItemMasterStats,
   ItemMasterUploadResult,
+  MonthlyReport,
   ProviderHealth,
   UpdateItemAliasPayload,
   UpdateItemMasterPayload,
@@ -51,6 +52,7 @@ export const api = {
   categories: () => request<FolderSummary[]>("/documents/categories", { cache: "no-store" }),
   notifications: () => request<AppNotification[]>("/documents/notifications", { cache: "no-store" }),
   calendar: (params = new URLSearchParams()) => request<DocumentCalendarItem[]>(`/documents/calendar?${params.toString()}`, { cache: "no-store" }),
+  monthlyReport: (params: URLSearchParams) => request<MonthlyReport>(`/reports/monthly?${params.toString()}`, { cache: "no-store" }),
   createCategory: (payload: { label: string; parent?: string | null; category?: string | null }) =>
     request<FolderSummary>("/documents/categories", { method: "POST", body: JSON.stringify(payload) }),
   deleteCategory: async (value: string) => {
@@ -111,6 +113,11 @@ export const api = {
   exportExcelUrl: (params = new URLSearchParams()) => `${API_BASE}/documents/export/xlsx${params.toString() ? `?${params.toString()}` : ""}`,
   exportJsonUrl: (id: string) => `${API_BASE}/documents/${id}/export/json`,
   exportTaxInvoiceXmlUrl: (id: string) => `${API_BASE}/documents/${id}/export/tax-invoice-xml`,
+  monthlyReportExportUrl: (params: URLSearchParams, format: "xlsx" | "csv") => {
+    const query = new URLSearchParams(params);
+    query.set("format", format);
+    return `${API_BASE}/reports/monthly/export?${query.toString()}`;
+  },
   itemMaster: {
     list: (params: URLSearchParams) => request<ItemMasterListResponse>(`/item-master/items?${params.toString()}`, { cache: "no-store" }),
     stats: () => request<ItemMasterStats>("/item-master/stats", { cache: "no-store" }),
