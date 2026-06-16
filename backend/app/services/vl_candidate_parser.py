@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from app.models.document import DocumentType
 from app.services.parser import DocumentParser, ParsedDocument
 
 
@@ -36,6 +37,12 @@ class VLCandidateParser:
             return None
         parsed = self.parser.parse(cleaned, filename)
         parsed.line_items = self._line_items_for_visible_columns_only(cleaned, doc_type, parsed.line_items)
+        handwritten_items = self._extract_handwritten_freeform_items(cleaned, parsed.document_type)
+        if (
+            not self._has_explicit_table_header(cleaned)
+            and self._should_prefer_handwritten_items(handwritten_items, parsed.line_items)
+        ):
+            parsed.line_items = handwritten_items
         issues = self._issues(parsed, cleaned, manual_visual_check or {}, validation or {})
         return {
             "source": "vl_candidate_parser",
@@ -53,12 +60,61 @@ class VLCandidateParser:
         }
 
     def _clean_text(self, text: str, doc_type: Any | None = None) -> str:
+        text = self._normalize_vl_text(text)
         lines = []
         for raw in (text or "").splitlines():
             line = " ".join(raw.strip().split())
             if line:
                 lines.extend(self._expand_inline_table_line(line, doc_type))
         return "\n".join(lines)
+
+    def _normalize_vl_text(self, text: str) -> str:
+        normalized = str(text or "")
+        normalized = normalized.replace("×", "x").replace("\\times", "x")
+        normalized = re.sub(r"\\begin\{array\}\{[^}]*\}", "\n", normalized)
+        normalized = normalized.replace("\\end{array}", "\n")
+        normalized = normalized.replace("\\\\", "\n")
+        normalized = normalized.replace("\\quad", " ")
+        normalized = re.sub(r"\\text\{([^{}]*)\}", r"\1", normalized)
+        normalized = normalized.replace("$$", "\n").replace("$", " ")
+        normalized = re.sub(
+            r"(?<=\d)\s*[xX]\s*(?=\d)",
+            lambda match: "X" if "X" in match.group(0) else "x",
+            normalized,
+        )
+        replacements = {
+            "거래멈세서": "거래명세서",
+            "거래명세": "거래명세서",
+            "자제 리스크": "자재 리스트",
+            "자제 리스트": "자재 리스트",
+            "거리처": "거래처",
+            "검사수감": "검사수량",
+            "함께": "합격",
+            "보득": "보류",
+            "육각분트": "육각볼트",
+            "육각볼트": "육각볼트",
+            "스프장와야": "스프링와샤",
+            "스프렁와샤": "스프링와샤",
+            "스프링와야": "스프링와샤",
+            "봉제": "봉재",
+            "545C": "S45C",
+            "站到": "합계",
+            "합게": "합계",
+        }
+        for source, target in replacements.items():
+            normalized = normalized.replace(source, target)
+        normalized = normalized.replace("거래명세서서", "거래명세서")
+        cleaned_lines: list[str] = []
+        for raw in normalized.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line in {"doc_title", "display_formula"}:
+                continue
+            line = re.sub(r"^#+\s*", "", line)
+            line = re.sub(r"^합계\s*[:：]", "총액:", line)
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
 
     def _expand_inline_table_line(self, line: str, doc_type: Any | None = None) -> list[str]:
         """Restore row boundaries when VL returns a whole table as one line."""
@@ -254,6 +310,194 @@ class VLCandidateParser:
             if item.get(field) not in (None, "", [])
         )
         return inline_amount_fields > fallback_amount_fields
+
+    def _should_prefer_handwritten_items(
+        self,
+        handwritten_items: list[dict[str, Any]],
+        fallback_items: list[dict[str, Any]],
+    ) -> bool:
+        if not handwritten_items:
+            return False
+        if not fallback_items:
+            return True
+        fallback_names = {str(item.get("item_name") or "").strip() for item in fallback_items}
+        handwritten_names = {str(item.get("item_name") or "").strip() for item in handwritten_items}
+        header_like_fallbacks = sum(1 for name in fallback_names if self._looks_like_table_header(name))
+        if header_like_fallbacks:
+            return True
+        if len(handwritten_names - fallback_names) >= max(1, len(fallback_names)):
+            return True
+        return len(handwritten_items) > len(fallback_items)
+
+    def _has_explicit_table_header(self, text: str) -> bool:
+        return bool(
+            re.search(
+                r"(?:^|\n)[^\n]*(?:품목명|품명|반품품목|Item\s+Description|Description|"
+                r"품목\s*코드|문서품목코드|Vendor\s+SKU)[^\n]*(?:수량|Qty|Quantity|단가|공급가액|합계|세액|"
+                r"입고수량|합격수량|불량수량)",
+                text or "",
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _extract_handwritten_freeform_items(
+        self,
+        text: str,
+        doc_type: Any | None,
+    ) -> list[dict[str, Any]]:
+        lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+        items: list[dict[str, Any]] = []
+        inspection_item = self._extract_handwritten_inspection_item(lines)
+        if inspection_item:
+            items.append(inspection_item)
+        for line in lines:
+            item = self._handwritten_row_item_from_line(line, doc_type)
+            if item:
+                items.append(item)
+        return self._dedupe_handwritten_items(items)
+
+    def _extract_handwritten_inspection_item(self, lines: list[str]) -> dict[str, Any] | None:
+        product = self._handwritten_labeled_value(lines, ["품명", "품목명"])
+        quantity_text = self._handwritten_labeled_value(lines, ["검사수량", "입고수량"])
+        if not product or not quantity_text:
+            return None
+        quantity_match = re.search(r"(\d[\d,]*)", quantity_text)
+        if not quantity_match:
+            return None
+        item_name, specification = self._split_handwritten_identity(product)
+        item: dict[str, Any] = {
+            "item_name": item_name,
+            "quantity": quantity_match.group(1),
+            "received_quantity": quantity_match.group(1),
+            "validation_warnings": ["handwritten_vl_candidate", "handwritten_inspection_requires_review"],
+        }
+        if specification:
+            item["specification"] = specification
+        accepted, hold = self._extract_handwritten_accept_hold(lines)
+        if accepted is not None:
+            item["accepted_quantity"] = accepted
+        if hold is not None:
+            item["hold_quantity"] = hold
+            item["validation_warnings"].append("hold_quantity_requires_review")
+        return self.parser._normalize_line_item(item)
+
+    def _handwritten_labeled_value(self, lines: list[str], labels: list[str]) -> str | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        for index, line in enumerate(lines):
+            match = re.search(rf"(?:^|\s)(?:{label_pattern})\s*[:：]?\s*(.+)$", line, flags=re.IGNORECASE)
+            if match:
+                value = match.group(1).strip(" -:：")
+                if value:
+                    return value
+            if re.sub(r"[\s:：]+", "", line) in {re.sub(r"[\s:：]+", "", label) for label in labels}:
+                for candidate in lines[index + 1 : min(index + 4, len(lines))]:
+                    if candidate and not re.search(r"[:：]$", candidate):
+                        return candidate.strip()
+        return None
+
+    def _extract_handwritten_accept_hold(self, lines: list[str]) -> tuple[str | None, str | None]:
+        joined = " ".join(lines)
+        accepted_match = re.search(r"합격\s*(\d[\d,]*)", joined)
+        hold_match = re.search(r"(?:보류|보류수량)\s*(\d[\d,]*)", joined)
+        return (
+            accepted_match.group(1) if accepted_match else None,
+            hold_match.group(1) if hold_match else None,
+        )
+
+    def _handwritten_row_item_from_line(self, line: str, doc_type: Any | None) -> dict[str, Any] | None:
+        text = re.sub(r"^\s*\d+\)\s*", "", line.strip())
+        text = re.sub(r"^\s*\d+\.\s*", "", text)
+        if self._should_skip_handwritten_row(text):
+            return None
+        match = re.match(
+            r"^(?P<body>.+?)\s+"
+            r"(?P<quantity>\d[\d,]*)\s*(?P<unit>EA|ea|개|장|본|봉)?"
+            r"(?:\s+(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?))?\s*$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        body = match.group("body").strip()
+        if not re.search(r"[A-Za-z가-힣]", body):
+            return None
+        if self._looks_like_date_or_note_row(text):
+            return None
+        item_name, specification = self._split_handwritten_identity(body)
+        if not item_name or self._looks_like_business_label(item_name):
+            return None
+        item: dict[str, Any] = {
+            "item_name": item_name,
+            "quantity": match.group("quantity"),
+            "validation_warnings": ["handwritten_vl_candidate"],
+        }
+        if specification:
+            item["specification"] = specification
+        if match.group("unit"):
+            item["unit"] = match.group("unit").upper() if match.group("unit").lower() == "ea" else match.group("unit")
+        unit_price = match.group("unit_price")
+        if unit_price is not None and doc_type in {
+            DocumentType.transaction_statement,
+            DocumentType.invoice,
+            DocumentType.purchase_order,
+            DocumentType.quotation,
+        }:
+            item["unit_price"] = unit_price
+            item["validation_warnings"].append("line_total_not_visible_do_not_infer")
+        elif unit_price is not None:
+            item["validation_warnings"].append("trailing_number_requires_review")
+        return self.parser._normalize_line_item(item)
+
+    def _should_skip_handwritten_row(self, text: str) -> bool:
+        if not text:
+            return True
+        normalized = re.sub(r"\s+", "", text)
+        if re.search(r"^(?:제목|날짜|일자|업체|거래처|받는곳|현장|담당|비고|메모|서명|납기|총|합계|공급가액|세액|품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류)", normalized):
+            return True
+        if text in {"간이 검사 기록", "거래명세서", "납품서", "발주 메모", "입고 확인", "자재 리스트"}:
+            return True
+        return False
+
+    def _looks_like_date_or_note_row(self, text: str) -> bool:
+        return bool(
+            re.fullmatch(r"\d{1,2}[./-]\d{1,2}[./-]\d{1,2,4}", text)
+            or re.search(r"(이상\s*없음|먼저|부탁|급함|처리|완료|예정)", text)
+        )
+
+    def _split_handwritten_identity(self, value: str) -> tuple[str, str | None]:
+        text = " ".join(str(value or "").replace("×", "x").split()).strip(" -")
+        tokens = text.split()
+        if len(tokens) < 2:
+            return text, None
+        spec_tokens: list[str] = []
+        while tokens and self._looks_like_handwritten_spec_token(tokens[-1]):
+            spec_tokens.insert(0, tokens.pop())
+            if len(spec_tokens) >= 2:
+                break
+        if not tokens:
+            return text, None
+        return " ".join(tokens), " ".join(spec_tokens) if spec_tokens else None
+
+    def _looks_like_handwritten_spec_token(self, token: str) -> bool:
+        value = str(token or "").strip()
+        return bool(
+            re.fullmatch(r"(?:M\d+(?:x\d+)?|\d+(?:x\d+){1,2}|\d+(?:T|t|파이|mm)|\d{3,5})", value)
+            or re.fullmatch(r"[A-Z]{2,}\d+[A-Z0-9-]*", value)
+        )
+
+    def _looks_like_business_label(self, value: str) -> bool:
+        return bool(re.fullmatch(r"(품목|품명|수량|단가|합계|거래처|업체|담당|비고)", str(value or "").strip()))
+
+    def _dedupe_handwritten_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[Any, Any, Any]] = set()
+        for item in items:
+            key = (item.get("item_name"), item.get("specification"), item.get("quantity"))
+            if not item.get("item_name") or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     def _has_hidden_or_truncated_amount_signal(self, text: str) -> bool:
         return bool(

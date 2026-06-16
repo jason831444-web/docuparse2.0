@@ -535,6 +535,140 @@ def test_text_layer_parser_can_supply_invoice_payment_due_date_for_vl_reconcilia
     assert parsed.due_date == date(2026, 12, 11)
 
 
+def test_vl_candidate_parser_structures_handwritten_transaction_statement_array():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "거래멈세서",
+                "업체: 대한정밀",
+                "받는곳: 한빛산업",
+                "날짜: 26.6.15",
+                r"$$ \begin{array}{l} 545C \quad PIN\quad 8\times60 \quad 120EA \quad 350\\ \text{육각분트 } M6\times25 \quad 500 \quad 45\\ \text{스프장와야 } M6 \quad 500 \quad 12\\ \text{AL 브라켓 } 40\times80 \quad 30 \quad 2800 \end{array} $$",
+                "display_formula",
+                "站到：152,000",
+                "비고:2박스 납품/일부 급함",
+            ]
+        ),
+        filename="handwritten-statement.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "transaction_statement"
+    assert candidate["document"]["vendor_name"] == "대한정밀"
+    assert candidate["document"]["customer_name"] == "한빛산업"
+    assert candidate["document"]["issue_date"] == "2026-06-15"
+    assert candidate["document"]["total"] == "152000"
+    assert candidate["line_item_count"] == 4
+    first = candidate["line_items"][0]
+    assert first["item_name"] == "S45C PIN"
+    assert first["specification"] == "8x60"
+    assert first["quantity"] == 120
+    assert first["unit"] == "EA"
+    assert first["unit_price"] == 350
+    assert "line_total" not in first
+    assert "line_total_not_visible_do_not_infer" in first["validation_warnings"]
+
+
+def test_vl_candidate_parser_structures_handwritten_inspection_note():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "간이 검사 기록",
+                "거리처: 한성기계",
+                "날짜: 26.6.18",
+                "품명: SUS 핀 6×40",
+                "검사수감: 50개",
+                "치수 이상없음",
+                "표면 스크레치 2개",
+                "합격 48 / 보득 2",
+                "담당: 최주임",
+            ]
+        ),
+        filename="handwritten-inspection.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "inspection_report"
+    assert candidate["document"]["vendor_name"] == "한성기계"
+    assert candidate["document"]["issue_date"] == "2026-06-18"
+    assert candidate["line_item_count"] == 1
+    item = candidate["line_items"][0]
+    assert item["item_name"] == "SUS 핀"
+    assert item["specification"] == "6x40"
+    assert item["quantity"] == 50
+    assert item["received_quantity"] == 50
+    assert item["accepted_quantity"] == 48
+    assert "unit_price" not in item
+    assert "supply_amount" not in item
+
+
+def test_vl_candidate_parser_structures_handwritten_delivery_rows_without_amounts():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "납품서",
+                "삼염금속→태성테크",
+                "26/6/15",
+                "3) S45C SHAFT $ 12 x 150 $ 40",
+                "4) AL PLATE 3T $ 50 x 100 $ 25",
+                "종 4종",
+                "담당:김부장",
+                "비고:오전 입고 처리",
+            ]
+        ),
+        filename="handwritten-delivery.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "delivery_note"
+    assert candidate["document"]["issue_date"] == "2026-06-15"
+    assert candidate["line_item_count"] == 2
+    first = candidate["line_items"][0]
+    assert first["item_name"] == "S45C SHAFT"
+    assert first["specification"] == "12x150"
+    assert first["quantity"] == 40
+    assert "unit_price" not in first
+    assert "supply_amount" not in first
+
+
+def test_vl_candidate_parser_structures_handwritten_material_list_without_amounts():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "자제 리스크",
+                "현장: 2공장",
+                "26.6.19",
+                "알루미늄 판 2T 15장",
+                "SUS 봉제 10파이 8본",
+                "육각볼트 M6×20 400",
+                "스프링와샤 M6 400",
+                "케이블 타이 2봉",
+                "메모: 부족분 먼저 구매",
+            ]
+        ),
+        filename="handwritten-material-list.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["vendor_name"] == "2공장"
+    assert candidate["document"]["issue_date"] == "2026-06-19"
+    assert candidate["line_item_count"] == 5
+    assert candidate["line_items"][0]["item_name"] == "알루미늄 판"
+    assert candidate["line_items"][0]["specification"] == "2T"
+    assert candidate["line_items"][0]["quantity"] == 15
+    assert candidate["line_items"][0]["unit"] == "장"
+    assert candidate["line_items"][1]["item_name"] == "SUS 봉재"
+    assert candidate["line_items"][1]["unit"] == "본"
+    assert candidate["line_items"][2]["item_name"] == "육각볼트"
+    assert candidate["line_items"][2]["specification"] == "M6x20"
+    assert all("unit_price" not in item for item in candidate["line_items"])
+    assert all("supply_amount" not in item for item in candidate["line_items"])
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

@@ -168,10 +168,10 @@ class DocumentParser:
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
         due_date = self._extract_due_date(joined, doc_type)
-        vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급엽체", "공급자", "판매자", "매입처", "발행처", "청구처", "vendor", "supplier", "seller"])
-        customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "고객시", "구매처", "발주처", "수신처", "납품처", "수요처", "구매자", "customer", "buyer", "bill to"])
+        vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급엽체", "공급자", "판매자", "매입처", "발행처", "청구처", "업체", "거래처", "현장", "vendor", "supplier", "seller"])
+        customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "고객시", "구매처", "발주처", "수신처", "납품처", "수요처", "구매자", "받는곳", "받는 곳", "customer", "buyer", "bill to"])
         if customer_name and vendor_name and customer_name == vendor_name:
-            customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "구매처", "발주처", "수신처", "납품처", "customer", "buyer", "bill to"])
+            customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "구매처", "발주처", "수신처", "납품처", "받는곳", "받는 곳", "customer", "buyer", "bill to"])
         return ParsedDocument(
             document_type=doc_type,
             title=self._guess_title(lines, doc_type, filename),
@@ -197,6 +197,13 @@ class DocumentParser:
         first_lines_for_return = "\n".join(line.strip() for line in text.splitlines()[:8])
         if re.search(r"\bRTN[-_ ]?\d{4}|credit\s+(?:note|memo)|return\s+note", text, flags=re.IGNORECASE) or re.search(r"(반품\s*/?\s*차감|차감\s*요청|반품\s*요청)", first_lines_for_return, flags=re.IGNORECASE):
             return DocumentType.general_document
+        handwritten_type_text = re.sub(r"\s+", "", text.casefold())
+        if re.search(r"(간이검사기록|입고확인|검사수량|치수이상없음|수량확인완료)", handwritten_type_text):
+            return DocumentType.inspection_report
+        if re.search(r"(거래멈세서|거래명세서|거래명세)", handwritten_type_text):
+            return DocumentType.transaction_statement
+        if re.search(r"(납품서|납품메모)", handwritten_type_text):
+            return DocumentType.delivery_note
         first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])
         scored_types: list[tuple[int, DocumentType]] = []
         for document_type, keywords in MANUFACTURING_TYPE_INDICATORS:
@@ -265,14 +272,24 @@ class DocumentParser:
         return sum(1 for keyword in keywords if keyword.lower() in haystack)
 
     def _extract_date(self, text: str) -> date | None:
-        candidates = re.findall(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|[A-Z][a-z]+ \d{1,2}, \d{4})\b", text)
+        candidates = re.findall(r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|[A-Z][a-z]+ \d{1,2}, \d{4})\b", text)
         candidates.extend(re.findall(r"\b\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\b", text))
         for candidate in candidates:
             normalized = candidate
-            if re.search(r"[년월일.]", normalized):
+            if re.search(r"[년월일./-]", normalized):
                 parts = re.findall(r"\d{1,4}", normalized)
                 if len(parts) >= 3:
-                    normalized = f"{parts[0]}-{parts[1]}-{parts[2]}"
+                    if len(parts[0]) <= 2 and int(parts[0]) > 12:
+                        year = int(parts[0]) + 2000
+                        normalized = f"{year}-{parts[1]}-{parts[2]}"
+                    else:
+                        year = int(parts[0])
+                        if year < 100 and len(parts[2]) == 4:
+                            normalized = f"{parts[2]}-{parts[0]}-{parts[1]}"
+                        elif year < 100:
+                            normalized = f"{year + 2000}-{parts[1]}-{parts[2]}"
+                        else:
+                            normalized = f"{year}-{parts[1]}-{parts[2]}"
             normalized = normalized.replace("-", "/") if re.match(r"\d{1,2}-\d{1,2}-", normalized) else normalized
             for pattern in DATE_PATTERNS:
                 try:
