@@ -1178,6 +1178,51 @@ def test_vl_inline_blank_quantity_preserves_visible_price_and_supply_amount():
     assert "row_amount_hidden_do_not_infer" in second["validation_warnings"]
 
 
+def test_labeled_party_extraction_stops_before_delivery_location_labels():
+    text = "\n".join([
+        "납품서",
+        "납품번호 DN-GEN-2026-LOC",
+        "공급업체 대영부품 고객사 오성테크 입고장소 오성테크 2공장 자재창고 수령",
+        "수령자 박성호 차량번호 서울85가2311",
+        "품목명 문서품목코드 규격 납품수량 단위",
+        "베어링 하우징 BRG-H-100 100mm 25 EA",
+    ])
+
+    parsed = DocumentParser().parse(text, "delivery_note_inline_location.txt")
+
+    assert parsed.vendor_name == "대영부품"
+    assert parsed.customer_name == "오성테크"
+
+
+def test_vl_inline_code_backed_item_name_typos_are_cleaned():
+    text = "\n".join([
+        "견적서",
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "스테인리스 브라젯 BRK-SUS-O1 50x80x3T 100 EA 1500 150000 15000 165000",
+        "베어린 한읙징 BRG-H-100 100mm 25 EA 12000 300000 30000 330000",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_item_name_typos.txt")
+
+    assert parsed.line_items[0]["item_name"] == "스테인리스 브라켓"
+    assert parsed.line_items[0]["item_code"] == "BRK-SUS-01"
+    assert parsed.line_items[1]["item_name"] == "베어링 하우징"
+
+
+def test_quantity_correction_marker_does_not_pollute_specification():
+    text = "\n".join([
+        "수량 정정 발주서",
+        "문서번호 PO-GEN-2026-QTY",
+        "품목명 품목코드 규격 수량 단위 단가 공급가액 세액 합계금액",
+        "SUS304 PLATE STS304-2T 1000x20004-> 5 EA 33000 165000 16500 181500",
+    ])
+
+    parsed = DocumentParser().parse(text, "vl_inline_quantity_correction.txt")
+
+    assert parsed.line_items[0]["specification"] == "1000x2000"
+    assert parsed.line_items[0]["quantity"] == 5
+
+
 def test_vl_inline_option_quote_moves_trailing_material_grade_to_specification():
     text = "\n".join([
         "견적서",

@@ -763,6 +763,12 @@ class DocumentProcessor:
             if not isinstance(item, dict):
                 continue
             safe_item = dict(item)
+            try:
+                safe_item = self.parser._clean_ocr_line_item_artifacts(safe_item)
+                if safe_item.get("specification") not in (None, "", []):
+                    safe_item["specification"] = self.parser._normalize_specification_value(safe_item.get("specification"))
+            except Exception:
+                pass
             warnings = list(safe_item.get("validation_warnings") or [])
             warning_set = {str(warning) for warning in warnings}
             if "explicit_quantity_price_amount_mismatch" in warning_set:

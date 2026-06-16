@@ -441,7 +441,12 @@ class DocumentParser:
         boundary_labels = [
             "공급업체", "공급자", "판매자", "매입처", "발행처", "청구처",
             "공급받는자", "고객사", "구매처", "발주처", "수신처", "납품처", "수요처", "구매자",
+            "입고장소", "납품장소", "배송지", "수령", "수령자", "차량번호",
+            "발행일", "작성일", "작성일자", "견적일", "납품일", "납기일", "지급기한", "유효기간", "통화",
+            "문서번호", "발주번호", "견적번호", "납품번호", "거래명세서번호", "계산서번호", "인보이스번호",
+            "Lot No", "검사번호", "판정", "비고",
             "supplier", "vendor", "seller", "customer", "buyer", "bill to", "ship to",
+            "issue date", "due date", "payment due", "delivery date", "valid until", "currency",
             "item name", "vendor sku", "품목명", "품목코드",
         ]
         label_pattern = "|".join(re.escape(label) for label in boundary_labels)
@@ -3187,6 +3192,10 @@ class DocumentParser:
             code_hint = str(item.get("item_code") or item.get("document_item_code") or item.get("source_item_code") or "")
             if re.search(r"\bBRG-H-?100\b", code_hint, flags=re.IGNORECASE) and re.search(r"베어.*하", name):
                 name = "베어링 하우징"
+            if re.search(r"\bBRG-H-?100\b", code_hint, flags=re.IGNORECASE) and re.search(r"(베어린|베어리|한읙|하을)", name):
+                name = "베어링 하우징"
+            if re.search(r"\bBRK-SUS-[O0]?1\b", code_hint, flags=re.IGNORECASE) and re.search(r"(브라젯|브라겟)", name):
+                name = "스테인리스 브라켓" if re.search(r"(스테인리스|스테인레스|스텐|sus)", name, flags=re.IGNORECASE) else re.sub(r"브라[젯겟]", "브라켓", name)
             if name:
                 item["item_name"] = name
         code = item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
@@ -3714,6 +3723,13 @@ class DocumentParser:
         cleaned = self._clean_value(value)
         if not cleaned:
             return None
+        quantity_correction_tail = r"(?:-+\s*>|→|⇒)\s*$"
+        if re.search(quantity_correction_tail, cleaned):
+            dimension_match = re.search(r"^(?P<prefix>.+\d{2,5}x\d{3,4})\d{1,3}\s*(?:-+\s*>|→|⇒)\s*$", cleaned, flags=re.IGNORECASE)
+            if dimension_match:
+                cleaned = dimension_match.group("prefix").strip()
+            else:
+                cleaned = re.sub(r"\s+\d{1,3}\s*(?:-+\s*>|→|⇒)\s*$", "", cleaned).strip()
         tokens = cleaned.split()
         if len(tokens) <= 1:
             return cleaned
