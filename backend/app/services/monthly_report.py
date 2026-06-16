@@ -17,12 +17,24 @@ AMOUNT_TOLERANCE = Decimal("1")
 
 
 class MonthlyReportService:
-    """Build ERP pre-upload monthly transaction reports from reviewed documents."""
+    """Build business-data transaction reports from reviewed manufacturing documents."""
 
     def build(self, documents: list[Document], *, year: int, month: int) -> dict[str, Any]:
-        month_documents = [document for document in documents if self._belongs_to_month(document, year, month)]
-        verified_documents = [document for document in month_documents if self._is_verified(document)]
-        pending_documents = [document for document in month_documents if not self._is_verified(document)]
+        start = date(year, month, 1)
+        end = date(year + (month // 12), (month % 12) + 1, 1)
+        return self.build_for_range(documents, start_date=start, end_date=end, period="month")
+
+    def build_for_range(
+        self,
+        documents: list[Document],
+        *,
+        start_date: date,
+        end_date: date,
+        period: str = "custom",
+    ) -> dict[str, Any]:
+        range_documents = [document for document in documents if self._belongs_to_range(document, start_date, end_date)]
+        verified_documents = [document for document in range_documents if self._is_verified(document)]
+        pending_documents = [document for document in range_documents if not self._is_verified(document)]
 
         by_party: dict[str, dict[str, Any]] = {}
         by_item: dict[tuple[str, str], dict[str, Any]] = {}
@@ -30,7 +42,7 @@ class MonthlyReportService:
         calculation_mismatches: list[dict[str, Any]] = []
         pending_issue_rows: list[dict[str, Any]] = []
 
-        for document in month_documents:
+        for document in range_documents:
             missing_required_fields.extend(self._missing_required_field_issues(document))
             calculation_mismatches.extend(self._calculation_mismatch_issues(document))
             if not self._is_verified(document):
@@ -72,10 +84,14 @@ class MonthlyReportService:
             "pending_documents": pending_issue_rows,
         }
         return {
-            "year": year,
-            "month": month,
+            "year": start_date.year,
+            "month": start_date.month,
+            "period": period,
+            "start_date": start_date.isoformat(),
+            "end_date": self._inclusive_end_date(end_date).isoformat(),
+            "range_label": self._range_label(start_date, end_date, period),
             "summary": {
-                "total_documents": len(month_documents),
+                "total_documents": len(range_documents),
                 "verified_documents": len(verified_documents),
                 "pending_documents": len(pending_documents),
                 "total_amount": self._number(total_amount),
@@ -113,6 +129,10 @@ class MonthlyReportService:
     def _belongs_to_month(self, document: Document, year: int, month: int) -> bool:
         value = document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
         return bool(value and value.year == year and value.month == month)
+
+    def _belongs_to_range(self, document: Document, start_date: date, end_date: date) -> bool:
+        value = document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
+        return bool(value and start_date <= value < end_date)
 
     def _date_from_datetime(self, value: datetime | None) -> date | None:
         return value.date() if isinstance(value, datetime) else None
@@ -229,7 +249,7 @@ class MonthlyReportService:
     def _summary_row(self, report: dict[str, Any]) -> dict[str, Any]:
         summary = report.get("summary") or {}
         return {
-            "월": f"{report.get('year')}-{int(report.get('month')):02d}",
+            "기간": report.get("range_label") or f"{report.get('year')}-{int(report.get('month')):02d}",
             "전체 문서 수": summary.get("total_documents", 0),
             "검수 완료 문서 수": summary.get("verified_documents", 0),
             "미검수 문서 수": summary.get("pending_documents", 0),
@@ -275,3 +295,13 @@ class MonthlyReportService:
     def _clean_text(self, value: Any) -> str | None:
         text = str(value or "").strip()
         return text or None
+
+    def _inclusive_end_date(self, end_date: date) -> date:
+        return date.fromordinal(end_date.toordinal() - 1)
+
+    def _range_label(self, start_date: date, end_date: date, period: str) -> str:
+        end_label = self._inclusive_end_date(end_date)
+        if start_date == end_label:
+            return start_date.isoformat()
+        period_label = {"day": "일", "week": "주", "month": "월", "year": "년"}.get(period, "기간")
+        return f"{start_date.isoformat()} ~ {end_label.isoformat()} ({period_label})"

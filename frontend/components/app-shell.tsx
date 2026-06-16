@@ -33,7 +33,7 @@ const navGroups = [
       { href: "/upload", label: "문서 업로드", icon: Upload },
       { href: "/documents", label: "문서 목록", icon: Files },
       { href: "/calendar", label: "문서 일정", icon: CalendarDays },
-      { href: "/reports/monthly", label: "월말 보고서", icon: FileSpreadsheet },
+      { href: "/reports/monthly", label: "보고서", icon: FileSpreadsheet },
       { href: "/categories", label: "문서 유형", icon: FolderKanban },
     ],
   },

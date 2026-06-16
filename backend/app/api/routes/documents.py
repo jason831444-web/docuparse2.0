@@ -220,7 +220,7 @@ def list_notifications(db: Session = Depends(get_db)) -> list[DocumentNotificati
         elif document.processing_status == ProcessingStatus.needs_review:
             notifications.append(_notification(document, "review", "검토 필요", "확정 처리 전에 사람이 확인해야 하는 항목이 있습니다."))
         else:
-            notifications.append(_notification(document, "processed", "자동 추출 완료", "문서 처리가 완료되어 ERP/엑셀 입력용 데이터로 검토할 수 있습니다."))
+            notifications.append(_notification(document, "processed", "자동 추출 완료", "문서 처리가 완료되어 업무데이터/엑셀 입력용 데이터로 검토할 수 있습니다."))
     return notifications[:30]
 
 

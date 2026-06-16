@@ -74,6 +74,27 @@ def test_monthly_report_summary_party_and_item_aggregation():
     assert report["by_item"][0]["total_amount"] == 1500
 
 
+def test_report_can_aggregate_custom_date_range():
+    service = MonthlyReportService()
+    documents = [
+        _document(document_number="IN-RANGE", issue_date=date(2026, 6, 15), extracted_amount=Decimal("1000")),
+        _document(document_number="OUT-RANGE", issue_date=date(2026, 6, 22), extracted_amount=Decimal("2000")),
+    ]
+
+    report = service.build_for_range(
+        documents,
+        start_date=date(2026, 6, 15),
+        end_date=date(2026, 6, 22),
+        period="week",
+    )
+
+    assert report["period"] == "week"
+    assert report["start_date"] == "2026-06-15"
+    assert report["end_date"] == "2026-06-21"
+    assert report["summary"]["total_documents"] == 1
+    assert report["summary"]["total_amount"] == 1000
+
+
 def test_monthly_report_issues_include_pending_missing_and_calculation_mismatch():
     service = MonthlyReportService()
     missing = _document(

@@ -362,7 +362,7 @@ class CategoryInterpretationService:
         vendor = getattr(document, "vendor_name", None) or document.merchant_name or "공급업체 미확인"
         customer = getattr(document, "customer_name", None) or "고객사 미확인"
         count = len(getattr(document, "line_items", None) or [])
-        return f"{label}에서 {vendor}와 {customer} 간 거래 정보와 품목 {count}건을 ERP/엑셀 입력용 데이터로 추출했습니다."
+        return f"{label}에서 {vendor}와 {customer} 간 거래 정보와 품목 {count}건을 업무데이터/엑셀 입력용 데이터로 추출했습니다."
 
     def _meaningful_title(self, current: str | None, text: str) -> str | None:
         cleaned_current = self._clean_title_candidate(current)

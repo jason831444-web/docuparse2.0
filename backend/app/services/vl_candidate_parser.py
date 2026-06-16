@@ -873,7 +873,7 @@ class VLCandidateParser:
             {
                 "code": "vl_candidate_untrusted_source_quality",
                 "severity": "warn",
-                "message": "VL output contains low-confidence or distorted-source signals; require review before ERP export.",
+                "message": "VL output contains low-confidence or distorted-source signals; require review before business-data export.",
             }
         ]
 

@@ -45,7 +45,7 @@ export default function ReviewPage() {
   function exportSelected() {
     if (!selectedIds.length) return;
     const selectedDocuments = (data?.items || []).filter((document) => selected.has(document.id));
-    if (selectedDocuments.some(requiresReviewExportConfirmation) && !window.confirm("검토 필요 문서를 내보냅니다. ERP 입력 전 review_required와 경고 정보를 확인해야 합니다. 계속할까요?")) return;
+    if (selectedDocuments.some(requiresReviewExportConfirmation) && !window.confirm("검토 필요 문서를 내보냅니다. 업무데이터 확정 전 review_required와 경고 정보를 확인해야 합니다. 계속할까요?")) return;
     const params = new URLSearchParams({ sheet_mode: "combined" });
     selectedIds.forEach((id) => params.append("document_ids", id));
     window.location.href = api.exportExcelUrl(params);
@@ -57,7 +57,7 @@ export default function ReviewPage() {
         <div className="max-w-3xl">
           <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">사람 검토 단계</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-normal">검토 필요</h1>
-          <p className="mt-2 text-muted-foreground">여러 문서의 품목 매칭, 수량, 단가, 금액 불일치를 한 화면에서 훑고 ERP/엑셀 내보내기 전에 정리합니다.</p>
+          <p className="mt-2 text-muted-foreground">여러 문서의 품목 매칭, 수량, 단가, 금액 불일치를 한 화면에서 훑고 업무데이터/엑셀 내보내기 전에 정리합니다.</p>
         </div>
         <div className="rounded-lg border bg-white px-4 py-3 text-sm text-muted-foreground">
           <span className="font-semibold text-foreground">{data?.total ?? 0}</span>건 대기 중
@@ -88,7 +88,7 @@ export default function ReviewPage() {
               <CardContent className="flex items-center justify-between p-4">
                 <div>
                   <p className="text-sm text-muted-foreground">결과</p>
-                  <p className="mt-1 text-lg font-semibold">ERP 입력 준비</p>
+                  <p className="mt-1 text-lg font-semibold">업무데이터 입력 준비</p>
                 </div>
                 <CheckCircle2 className="size-6 text-emerald-600" />
               </CardContent>
@@ -98,7 +98,7 @@ export default function ReviewPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white p-4">
             <div className="text-sm text-muted-foreground">
               <p>{selected.size}개 문서 선택됨</p>
-              <p className="mt-1">검토 필요 문서를 내보내면 ERP 입력 전 확인해야 할 review_required와 경고 정보가 함께 포함됩니다.</p>
+              <p className="mt-1">검토 필요 문서를 내보내면 업무데이터 확정 전 확인해야 할 review_required와 경고 정보가 함께 포함됩니다.</p>
             </div>
             <div className="flex gap-2">
               <Button type="button" variant="outline" disabled={!selected.size} onClick={exportSelected}>선택 문서 Excel</Button>

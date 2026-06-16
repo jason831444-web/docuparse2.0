@@ -875,7 +875,7 @@ export function reviewIssueDescription(issue: NormalizedReviewIssue) {
     internal_item_unmatched: "사내 품목 master에서 확실한 항목을 찾지 못했습니다.",
     item_code_name_conflict: "문서 품목명과 선택된 내부 품목코드가 서로 맞지 않을 수 있습니다.",
     missing_line_items: "표 또는 품목 후보가 충분히 구조화되지 않았습니다.",
-    missing_quantity: "ERP 입력에 필요한 수량을 확인해야 합니다.",
+    missing_quantity: "업무데이터 확정에 필요한 수량을 확인해야 합니다.",
   };
   return descriptions[issue.code] || issue.message_ko;
 }

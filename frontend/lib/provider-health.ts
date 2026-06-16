@@ -19,7 +19,7 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
   if (isGgufPrimary && (providers.primary_provider_available || primaryReaderReady)) {
     return {
       label: `VL Reader 정상 · GGUF${device}`,
-      detail: `Primary reader: ${providers.primary_provider}. Model: ${vlModel}. Confirmed ERP values still pass parser/validation. Fallback OCR: ${providers.fallback_provider || "PP-OCRv4"}.`,
+      detail: `Primary reader: ${providers.primary_provider}. Model: ${vlModel}. Confirmed business-data values still pass parser/validation. Fallback OCR: ${providers.fallback_provider || "PP-OCRv4"}.`,
       tone: "primary",
     };
   }

@@ -157,7 +157,7 @@ function VLCandidateBlock({ metadata, document }: { metadata: VLCandidateMetadat
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs font-medium uppercase tracking-normal text-violet-900">VL 문서 이해 후보</p>
         <Badge className="border-violet-300 bg-white text-violet-800">확정값 아님</Badge>
-        <Badge variant="outline" className="border-slate-300 bg-white text-slate-700">ERP 내보내기 제외</Badge>
+        <Badge variant="outline" className="border-slate-300 bg-white text-slate-700">업무데이터 내보내기 제외</Badge>
         {handlingLabel ? <Badge variant="outline" className="border-violet-300 bg-white text-violet-800">{handlingLabel}</Badge> : null}
       </div>
       <p className="mt-2 text-sm text-violet-950">
@@ -204,7 +204,7 @@ export function WorkflowPanel({ document }: { document: DocumentRecord }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Zap className="size-5 text-primary" />
-          ERP/엑셀 입력 준비 상태
+          업무데이터/엑셀 입력 준비 상태
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">

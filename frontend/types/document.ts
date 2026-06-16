@@ -441,6 +441,10 @@ export interface MonthlyReportIssueRow {
 export interface MonthlyReport {
   year: number;
   month: number;
+  period: "day" | "week" | "month" | "year" | "custom" | string;
+  start_date: string;
+  end_date: string;
+  range_label: string;
   summary: MonthlyReportSummary;
   by_party: MonthlyReportPartyRow[];
   by_item: MonthlyReportItemRow[];

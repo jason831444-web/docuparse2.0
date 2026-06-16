@@ -109,7 +109,7 @@ export default function DashboardPage() {
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-base"><FileDown className="size-4 text-emerald-700" /> ERP / 엑셀 내보내기 준비</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-base"><FileDown className="size-4 text-emerald-700" /> 업무데이터 / 엑셀 내보내기 준비</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               <div className="flex items-center justify-between rounded-lg bg-emerald-50 px-4 py-3 text-emerald-800">

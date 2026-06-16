@@ -209,7 +209,7 @@ def test_layout_debug_vl_candidate_issue_warns_but_does_not_block_approval():
 
 def test_export_reflects_approval_metadata():
     document = _document()
-    validation = approve_document(document, approval_note="ERP 입력 전 확인 완료")
+    validation = approve_document(document, approval_note="업무데이터 확정 전 확인 완료")
     assert validation.ok is True
 
     payload = json.loads(document_to_json(document))
@@ -217,6 +217,6 @@ def test_export_reflects_approval_metadata():
 
     assert payload["export_policy"]["approved"] is True
     assert payload["export_policy"]["review_state"] == "approved"
-    assert payload["export_policy"]["approval_note"] == "ERP 입력 전 확인 완료"
+    assert payload["export_policy"]["approval_note"] == "업무데이터 확정 전 확인 완료"
     assert "approved" in csv
-    assert "ERP 입력 전 확인 완료" in csv
+    assert "업무데이터 확정 전 확인 완료" in csv

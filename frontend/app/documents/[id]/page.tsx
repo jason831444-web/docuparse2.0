@@ -186,7 +186,7 @@ function ErpReadinessBanner({
     <Card className={`${toneClass} mb-6`}>
       <CardContent className="grid gap-4 p-5 lg:grid-cols-[1fr_auto] lg:items-center">
         <div>
-          <p className="text-sm font-medium">ERP/엑셀 입력 준비 상태</p>
+          <p className="text-sm font-medium">업무데이터/엑셀 입력 준비 상태</p>
           <h2 className="mt-1 text-2xl font-semibold tracking-normal">{readiness.title}</h2>
           <p className="mt-2 text-sm">{summary}</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -878,7 +878,7 @@ export default function DocumentDetailPage() {
                   승인 메모
                   <Textarea
                     className="min-h-20"
-                    placeholder="예: 원본 PDF와 대조 후 ERP 입력 전 확인 완료"
+                    placeholder="예: 원본 PDF와 대조 후 업무데이터 확정 전 확인 완료"
                     value={approvalNote}
                     onChange={(event) => setApprovalNote(event.target.value)}
                   />
@@ -1071,7 +1071,7 @@ export default function DocumentDetailPage() {
               <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">
                 <div>
                   <p className="text-sm font-semibold">문서 기본 정보</p>
-                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 날짜, 금액을 ERP 입력 기준으로 수정하세요.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">공급업체, 고객사, 문서번호, 날짜, 금액을 업무데이터 기준으로 수정하세요.</p>
                 </div>
                 <label className="grid gap-2 text-sm font-medium">
                   제목

@@ -94,7 +94,7 @@ const candidateNotIntegrated = providerHealthLabel({
 
 assert.equal(candidateNotIntegrated.label, "VL Reader 정상 · GGUF");
 assert.equal(candidateNotIntegrated.tone, "primary");
-assert.match(candidateNotIntegrated.detail, /Confirmed ERP values still pass parser\/validation/);
+assert.match(candidateNotIntegrated.detail, /Confirmed business-data values still pass parser\/validation/);
 assert.match(candidateNotIntegrated.detail, /Fallback OCR: paddleocr_ppocrv4/);
 
 const loading = providerHealthLabel(null);
