@@ -748,6 +748,31 @@ def test_vl_candidate_parser_structures_handwritten_transaction_statement_rows()
     assert "vl_candidate_handwritten_vl_candidate" in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_does_not_promote_settlement_summary_lines_as_items():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "일일 정산",
+                "날짜: 26.6.18",
+                "김밥 120 3000",
+                "라면 80 4500",
+                "실 판매금액 968,400",
+                "판매 총액 968,400",
+                "+ 판입금액 0",
+                "+ 온라인결제 240,000",
+            ]
+        ),
+        filename="blurry-pos-daily-settlement.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    names = [item["item_name"] for item in candidate["line_items"]]
+    assert "김밥" in names
+    assert "라면" in names
+    assert all("판매" not in name and "온라인결제" not in name and "판입금액" not in name for name in names)
+
+
 def test_vl_candidate_parser_structures_handwritten_no_price_delivery_rows_without_amounts():
     candidate = VLCandidateParser().parse_text(
         "\n".join(

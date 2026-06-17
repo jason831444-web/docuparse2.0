@@ -411,6 +411,7 @@ class VLCandidateParser:
     def _handwritten_row_item_from_line(self, line: str, doc_type: Any | None) -> dict[str, Any] | None:
         text = re.sub(r"^\s*\d+\)\s*", "", line.strip())
         text = re.sub(r"^\s*\d+\.\s*", "", text)
+        text = re.sub(r"^\s*[+\-•·]\s*", "", text)
         if self._should_skip_handwritten_row(text):
             return None
         match = re.match(
@@ -459,7 +460,12 @@ class VLCandidateParser:
         if not text:
             return True
         normalized = re.sub(r"\s+", "", text)
-        if re.search(r"^(?:제목|날짜|일자|업체|거래처|받는곳|현장|담당|비고|메모|서명|납기|총|합계|공급가액|세액|품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류)", normalized):
+        if re.search(
+            r"^(?:제목|날짜|일자|업체|거래처|받는곳|현장|담당|비고|메모|서명|납기|총|합계|공급가액|세액|"
+            r"품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류|판매총액|실판매금액|판입금액|"
+            r"온라인결제|카드결제|현금결제|입금액|결제금액)",
+            normalized,
+        ):
             return True
         if text in {"간이 검사 기록", "거래명세서", "납품서", "발주 메모", "입고 확인", "자재 리스트"}:
             return True
