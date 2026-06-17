@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import requests
 
 from app.services import vl_worker_server
 from app.services.vl_candidate_client import VLCandidateWorkerClient
@@ -86,6 +87,63 @@ def test_vl_candidate_client_falls_back_to_path_endpoint_for_legacy_worker(monke
     assert result["ok"] is True
     assert result["worker_transport"] == "shared_file_path"
     assert result["worker_location"] == "remote"
+
+
+def test_vl_candidate_client_retries_remote_upload_connection_error(monkeypatch, tmp_path: Path):
+    sample = tmp_path / "retry.pdf"
+    sample.write_bytes(b"%PDF-retry-worker-test")
+    calls: list[str] = []
+
+    def fake_post(url, **kwargs):
+        calls.append(url)
+        uploaded = kwargs["files"]["file"]
+        assert uploaded[1].read() == b"%PDF-retry-worker-test"
+        if len(calls) == 1:
+            raise requests.exceptions.ConnectionError("remote closed connection")
+        return _FakeResponse({"ok": True, "classification": "pass"})
+
+    client = VLCandidateWorkerClient(worker_url="http://runpod-worker:8020", timeout_seconds=12)
+    monkeypatch.setattr(client, "enabled", lambda: True)
+    monkeypatch.setattr("app.services.vl_candidate_client.requests.post", fake_post)
+    monkeypatch.setattr("app.services.vl_candidate_client.time.sleep", lambda _seconds: None)
+
+    result = client.analyze(sample, original_filename="retry.pdf")
+
+    assert calls == [
+        "http://runpod-worker:8020/analyze-upload",
+        "http://runpod-worker:8020/analyze-upload",
+    ]
+    assert result["ok"] is True
+    assert result["worker_transport"] == "multipart_upload"
+    assert result["worker_location"] == "remote"
+
+
+def test_vl_candidate_client_overrides_worker_runtime_metadata(monkeypatch, tmp_path: Path):
+    sample = tmp_path / "metadata.pdf"
+    sample.write_bytes(b"%PDF-metadata-worker-test")
+
+    def fake_post(url, **kwargs):
+        return _FakeResponse(
+            {
+                "ok": True,
+                "classification": "pass",
+                "worker_transport": "multipart_upload",
+                "worker_location": "worker_runtime",
+                "worker_provider": "vl_worker_api",
+                "worker_url_host": "internal-worker",
+            }
+        )
+
+    client = VLCandidateWorkerClient(worker_url="http://runpod-worker:8020", timeout_seconds=12)
+    monkeypatch.setattr(client, "enabled", lambda: True)
+    monkeypatch.setattr("app.services.vl_candidate_client.requests.post", fake_post)
+
+    result = client.analyze(sample, original_filename="metadata.pdf")
+
+    assert result["worker_location"] == "remote"
+    assert result["worker_provider"] == "remote_vl_worker"
+    assert result["worker_url_host"] == "runpod-worker"
+    assert result["worker_transport"] == "multipart_upload"
 
 
 def test_vl_worker_analyze_upload_saves_file_and_runs_pipeline(monkeypatch, tmp_path: Path):

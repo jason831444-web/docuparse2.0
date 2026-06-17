@@ -22,6 +22,8 @@ _pipeline: Any | None = None
 _pipeline_lock = threading.Lock()
 _inference_lock = threading.Lock()
 _last_error: str | None = None
+_last_request_at: str | None = None
+_last_success_at: str | None = None
 
 
 class VLAnalyzeRequest(BaseModel):
@@ -70,6 +72,8 @@ def health() -> dict[str, Any]:
         "n_predict": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
         "worker_transport": "multipart_upload",
         "last_error": _last_error,
+        "last_request_at": _last_request_at,
+        "last_success_at": _last_success_at,
     }
 
 
@@ -138,8 +142,9 @@ def _analyze_path(
     original_filename: str | None = None,
     transport_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    global _last_error
+    global _last_error, _last_request_at, _last_success_at
     started = time.perf_counter()
+    _last_request_at = _utc_now_iso()
     report = _base_report(
         path,
         original_filename=original_filename,
@@ -158,6 +163,9 @@ def _analyze_path(
             )
         text = extract_text(output)
         validation = validate_output_text(text, [])
+        if validation.get("ok"):
+            _last_error = None
+            _last_success_at = _utc_now_iso()
         report.update(
             {
                 "ok": bool(validation.get("ok")),
@@ -234,6 +242,12 @@ def _safe_upload_filename(filename: str) -> str:
     name = re.sub(r"[^A-Za-z0-9가-힣._ -]+", "_", name)
     name = re.sub(r"\s+", "_", name)
     return name[:160] or "upload.bin"
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _prepare_input_image(path: Path) -> Path:

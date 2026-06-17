@@ -42,13 +42,12 @@ class VLCandidateWorkerClient:
             upload_url = f"{self.worker_url}/analyze-upload"
             filename = original_filename or file_path.name
             content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-            with file_path.open("rb") as handle:
-                response = requests.post(
-                    upload_url,
-                    files={"file": (filename, handle, content_type)},
-                    data={"original_filename": filename},
-                    timeout=self.timeout_seconds,
-                )
+            response = self._post_upload_with_retry(
+                upload_url,
+                file_path=file_path,
+                filename=filename,
+                content_type=content_type,
+            )
             if response.status_code in {404, 405}:
                 return self._analyze_by_path(file_path, original_filename=original_filename, started=started)
             response.raise_for_status()
@@ -62,6 +61,34 @@ class VLCandidateWorkerClient:
             return payload
         except Exception as exc:
             return self._failed(f"{type(exc).__name__}: {exc}", started)
+
+    def _post_upload_with_retry(
+        self,
+        upload_url: str,
+        *,
+        file_path: Path,
+        filename: str,
+        content_type: str,
+    ) -> requests.Response:
+        attempts = 2 if self.worker_location == "remote" else 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                with file_path.open("rb") as handle:
+                    return requests.post(
+                        upload_url,
+                        files={"file": (filename, handle, content_type)},
+                        data={"original_filename": filename},
+                        timeout=self.timeout_seconds,
+                    )
+            except requests.exceptions.ConnectionError as exc:
+                last_error = exc
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(1.0)
+        if last_error:
+            raise last_error
+        raise RuntimeError("vl_worker_upload_retry_exhausted")
 
     def _analyze_by_path(self, file_path: Path, *, original_filename: str = "", started: float) -> dict[str, Any]:
         try:
@@ -86,10 +113,10 @@ class VLCandidateWorkerClient:
             return self._failed(f"{type(exc).__name__}: {exc}", started)
 
     def _attach_worker_metadata(self, payload: dict[str, Any]) -> None:
-        payload.setdefault("worker_location", self.worker_location)
-        payload.setdefault("worker_provider", self.worker_provider)
-        payload.setdefault("worker_url_host", self.worker_url_host)
-        payload.setdefault("timeout_seconds", self.timeout_seconds)
+        payload["worker_location"] = self.worker_location
+        payload["worker_provider"] = self.worker_provider
+        payload["worker_url_host"] = self.worker_url_host
+        payload["timeout_seconds"] = self.timeout_seconds
         if payload.get("worker_transport") == "multipart_upload":
             payload.setdefault("remote_upload_transport", True)
 
