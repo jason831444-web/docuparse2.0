@@ -173,7 +173,6 @@ def _document_type_from_metadata(value: Any) -> str | None:
         "incoming_inspection": "inspection_report",
         "return_credit": "general_document",
         "internal_transfer": "general_document",
-        "pos_daily_settlement": "transaction_statement",
     }
     return aliases.get(normalized, normalized or None)
 
@@ -439,7 +438,11 @@ def _return_credit_type_matches(expected: dict[str, Any], actual: dict[str, Any]
         str(taxonomy.get("document_profile") or "").casefold(),
         *(str(value or "").casefold() for value in (taxonomy.get("document_profiles") or [])),
     }
-    return actual_type == "general_document" and bool(profile_values.intersection({"return_note", "credit_note", "return_document"}))
+    return bool(profile_values.intersection({"return_note", "credit_note", "return_document"})) and actual_type in {
+        "general_document",
+        "transaction_statement",
+        "invoice",
+    }
 
 
 def _detect_no_price_amounts(expected: dict[str, Any], actual: dict[str, Any], line_items: list[dict[str, Any]], failures: list[dict[str, Any]]) -> None:

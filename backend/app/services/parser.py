@@ -121,6 +121,7 @@ class DocumentParser:
         document_scope_text = self._document_scope_text(lines)
         no_amount_quantity_document = self._is_no_amount_quantity_document(lines, doc_type)
         option_selection_quote = self._is_option_selection_quotation(lines, doc_type)
+        return_or_credit_document = self._has_return_or_credit_signal(joined)
         if no_amount_quantity_document:
             special_quantity_items = self._extract_special_quantity_table_items(lines)
             if doc_type == DocumentType.inspection_report:
@@ -152,11 +153,14 @@ class DocumentParser:
         else:
             subtotal = self._extract_labeled_amount(document_scope_text, ["차감 공급가액", "차감공급가액", "공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "금월공급가액", "subtotal total", "subtotal", "supply amount", "supply total"])
             tax = self._extract_labeled_amount(document_scope_text, ["차감 세액", "차감세액", "세액 합계", "세액", "세 액", "부가세", "금월세액", "vat total", "vat", "tax", "w세액"])
-            amount = self._extract_labeled_amount(document_scope_text, ["차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
-            line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
-            line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
+            amount = self._extract_labeled_amount(document_scope_text, ["조정 합계", "조정합계", "반품 합계", "반품합계", "크레딧 합계", "크레딧합계", "차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            protect_signed_return_rows = return_or_credit_document and self._has_signed_return_line_items(line_items)
+            if not protect_signed_return_rows:
+                line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
+                line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
             currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
-        line_items = self._repair_ocr_table_postprocess(line_items, amount, currency, lines)
+        if not (return_or_credit_document and self._has_signed_return_line_items(line_items)):
+            line_items = self._repair_ocr_table_postprocess(line_items, amount, currency, lines)
         if not no_amount_quantity_document:
             line_items = self._suppress_untrusted_foreign_amounts(line_items, amount, currency)
         if no_amount_quantity_document:
@@ -195,7 +199,7 @@ class DocumentParser:
     def _guess_document_type(self, text: str, filename: str) -> DocumentType:
         content = text.lower()
         first_lines_for_return = "\n".join(line.strip() for line in text.splitlines()[:8])
-        if re.search(r"\bRTN[-_ ]?\d{4}|credit\s+(?:note|memo)|return\s+note", text, flags=re.IGNORECASE) or re.search(r"(반품\s*/?\s*차감|차감\s*요청|반품\s*요청)", first_lines_for_return, flags=re.IGNORECASE):
+        if re.search(r"\b(?:RTN|RCM)[-_ ]?\d{4}|credit\s+(?:note|memo)|return\s+note", text, flags=re.IGNORECASE) or re.search(r"(반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|차감\s*요청|반품\s*요청)", first_lines_for_return, flags=re.IGNORECASE):
             return DocumentType.general_document
         handwritten_type_text = re.sub(r"\s+", "", text.casefold())
         if re.search(r"(간이검사기록|입고확인|검사수량|치수이상없음|수량확인완료)", handwritten_type_text):
@@ -343,6 +347,8 @@ class DocumentParser:
     def _amount_label_lookahead(self, lines: list[str], start_index: int) -> list[str]:
         collected: list[str] = []
         for line in lines[start_index:start_index + 4]:
+            if self._looks_like_exchange_rate_or_reference_note(line):
+                break
             if not collected and self._looks_like_amount_label_line(line):
                 break
             if collected and self._looks_like_amount_label_line(line):
@@ -352,19 +358,22 @@ class DocumentParser:
                 break
         return collected
 
+    def _looks_like_exchange_rate_or_reference_note(self, line: str) -> bool:
+        return bool(re.search(r"(exchange\s*rate|환율|참고|reference|total/amount가\s*아님|total\s*/\s*amount\s*(?:is\s*)?not)", str(line or ""), flags=re.IGNORECASE))
+
     def _looks_like_amount_label_line(self, line: str) -> bool:
         key = self._normalized_amount_label_key(line)
         return key in {
             "공급가액", "공급가액합계", "공급액", "공급금액", "subtotal", "supplyamount", "supplytotal",
             "금월공급가액", "차감공급가액", "차감공급액", "세액", "부가세", "금월세액", "차감세액", "vat", "tax",
-            "총액", "총합계", "합계", "합계금액", "금월합계", "차감합계", "invoicetotal", "grandtotal", "totaldue", "totalamount", "amountdue", "total",
+            "총액", "총합계", "합계", "합계금액", "금월합계", "차감합계", "조정합계", "반품합계", "크레딧합계", "invoicetotal", "grandtotal", "totaldue", "totalamount", "amountdue", "total",
         }
 
     def _looks_like_summary_amount_label_line(self, line: str) -> bool:
         key = self._normalized_amount_label_key(line)
         return key in {
             "공급가액합계", "공급액합계", "공급금액합계", "금월공급가액", "차감공급가액", "차감공급액",
-            "세액합계", "금월세액", "차감세액", "총액", "총합계", "합계금액", "금월합계", "차감합계",
+            "세액합계", "금월세액", "차감세액", "총액", "총합계", "합계금액", "금월합계", "차감합계", "조정합계", "반품합계", "크레딧합계",
             "grandtotal", "totaldue", "totalamount", "amountdue",
         }
 
@@ -517,7 +526,7 @@ class DocumentParser:
 
     def _extract_document_number(self, text: str) -> str | None:
         if self._has_return_or_credit_signal(text):
-            return_number = self._first_document_number_for_prefix(text, "RTN")
+            return_number = self._first_document_number_for_prefix(text, "RTN") or self._first_document_number_for_prefix(text, "RCM")
             if return_number:
                 return return_number
         if self._has_internal_transfer_signal(text):
@@ -556,10 +565,18 @@ class DocumentParser:
 
     def _has_return_or_credit_signal(self, text: str) -> bool:
         return bool(re.search(
-            r"\bRTN[-_ ]?\d{4}|반품\s*/?\s*차감|반품\s*요청|차감\s*요청|credit\s+memo|credit\s+note|return\s+note",
+            r"\b(?:RTN|RCM)[-_ ]?\d{4}|반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|반품\s*요청|차감\s*요청|credit\s+memo|credit\s+note|return\s+note",
             text,
             flags=re.IGNORECASE,
         ))
+
+    def _has_signed_return_line_items(self, line_items: list[dict]) -> bool:
+        for item in line_items or []:
+            for field in ("quantity", "unit_price", "supply_amount", "tax_amount", "line_total"):
+                value = self._to_decimal(item.get(field))
+                if value is not None and value < 0:
+                    return True
+        return False
 
     def _has_internal_transfer_signal(self, text: str) -> bool:
         normalized = re.sub(r"\s+", "", text.lower())
@@ -584,9 +601,10 @@ class DocumentParser:
             r"\bDN[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bTS[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\b(?:I?QC|QC)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
-            r"\bRTN[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\b(?:RTN|RCM)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bTRF[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\b(?:PO|QT|INV|DN|TS|IQC|QC|RTN|TRF)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)+(?:[-_][A-Z]{1,10}){0,2}\b",
+            r"\bINV(?:[-_ ]+[A-Z]{2,10}){1,3}[-_ ]+\d{3,4}\b",
         ]
         candidates: list[str] = []
         compact_text = re.sub(r"(?<=\bINV-\d{4})-\s*-\s*(?=\d)", "-", text, flags=re.IGNORECASE)
@@ -600,7 +618,11 @@ class DocumentParser:
         return normalized[0]
 
     def _normalize_document_number(self, value: object) -> str | None:
-        text = re.sub(r"\s+", "", str(value or "")).strip(" -:：[](){}")
+        raw = str(value or "").strip(" -:：[](){}")
+        if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|QC|RTN|RCM|TRF|FAX)\b", raw, flags=re.IGNORECASE) and re.search(r"\s", raw):
+            text = re.sub(r"[\s_]+", "-", raw)
+        else:
+            text = re.sub(r"\s+", "", raw)
         if not text:
             return None
         text = text.replace("_", "-")
@@ -642,7 +664,7 @@ class DocumentParser:
         if self._looks_like_business_label(text):
             return -100
         score = 0
-        if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|QC|RTN|TRF|FAX-PO)-", text, flags=re.IGNORECASE):
+        if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|QC|RTN|RCM|TRF|FAX-PO)-", text, flags=re.IGNORECASE):
             score += 40
         if re.match(r"^FAX(?:-[A-Z0-9]{2,10})*-PO-", text, flags=re.IGNORECASE):
             score += 40
@@ -706,7 +728,7 @@ class DocumentParser:
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
-        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원문서", "원 문서", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
         if related_document_number:
             fields["related_document_number"] = self._normalize_document_number(related_document_number) or related_document_number
         if doc_type == DocumentType.quotation:
@@ -822,7 +844,7 @@ class DocumentParser:
 
     def _looks_like_vl_inline_table_header(self, line: str, doc_type: DocumentType | None = None) -> bool:
         text = str(line or "")
-        if not re.search(r"(품목명|반품품목|품목\s*코드|item\s+name|item\s+code|description|vendor\s+sku)", text, flags=re.IGNORECASE):
+        if not re.search(r"(^|\s)(품목)(\s|$)|품목명|반품품목|품목\s*코드|item\s+name|item\s+code|description|vendor\s+sku", text, flags=re.IGNORECASE):
             return False
         has_quantity = bool(re.search(r"(수량|qty|quantity)", text, flags=re.IGNORECASE))
         has_amount = bool(re.search(r"(단가|unit\s*price|공급가액|subtotal|supply|amount|total|세액|합계)", text, flags=re.IGNORECASE))
@@ -862,6 +884,7 @@ class DocumentParser:
         missing_quantity_supply_only_match = None
         supply_only_match = None
         supply_without_unit_price_match = None
+        priced_without_unit_match = None
         if not match:
             missing_supply_match = re.match(
                 r"^(?P<body>.+?)\s+"
@@ -901,6 +924,23 @@ class DocumentParser:
                 text,
                 flags=re.IGNORECASE,
             )
+        if (
+            not match
+            and not missing_supply_match
+            and not supply_only_match
+            and not supply_without_unit_price_match
+            and not missing_quantity_supply_only_match
+        ):
+            priced_without_unit_match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<tax_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+                r"(?P<line_total>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE,
+            )
         if not match and not missing_supply_match and not missing_quantity_supply_only_match:
             missing_quantity_match = re.match(
                 r"^(?P<body>.+?)\s+"
@@ -918,6 +958,7 @@ class DocumentParser:
             or supply_only_match
             or supply_without_unit_price_match
             or missing_quantity_supply_only_match
+            or priced_without_unit_match
             or missing_quantity_match
         )
         if not row_match:
@@ -934,9 +975,11 @@ class DocumentParser:
             "item_name": item_name,
             "item_code": item_code,
             "specification": specification,
-            "unit": row_match.group("unit"),
         }
-        if "unit_price" in row_match.groupdict():
+        row_groups = row_match.groupdict()
+        if row_groups.get("unit"):
+            item["unit"] = row_groups.get("unit")
+        if "unit_price" in row_groups:
             item["unit_price"] = row_match.group("unit_price")
         warnings: list[str] = []
         if match:
@@ -1011,6 +1054,13 @@ class DocumentParser:
         elif missing_quantity_supply_only_match:
             item["supply_amount"] = missing_quantity_supply_only_match.group("supply_amount")
             warnings.extend(["missing_quantity", "quantity_cell_blank", "row_amount_hidden_do_not_infer"])
+        elif priced_without_unit_match:
+            item["quantity"] = priced_without_unit_match.group("quantity")
+            item["unit_price"] = priced_without_unit_match.group("unit_price")
+            item["supply_amount"] = priced_without_unit_match.group("supply_amount")
+            item["tax_amount"] = priced_without_unit_match.group("tax_amount")
+            item["line_total"] = priced_without_unit_match.group("line_total")
+            warnings.append("unit_not_visible")
         elif supply_without_unit_price_match:
             item["quantity"] = supply_without_unit_price_match.group("quantity")
             lone_amount = self._to_decimal(supply_without_unit_price_match.group("supply_amount"))
@@ -1217,6 +1267,8 @@ class DocumentParser:
         return self._clean_value(body), None, None
 
     def _strip_vl_inline_row_prefix_tokens(self, tokens: list[str]) -> list[str]:
+        if len(tokens) >= 2 and re.fullmatch(r"\d{1,3}", tokens[0]):
+            return tokens[1:]
         if len(tokens) >= 2 and re.fullmatch(r"\d{1,2}[-./]\d{1,2}", tokens[0]):
             return tokens[1:]
         return tokens
@@ -2072,6 +2124,9 @@ class DocumentParser:
         table_items = self._extract_inspection_report_table_items(lines)
         if table_items:
             return table_items
+        sparse_items = self._extract_sparse_inspection_report_items(lines)
+        if sparse_items:
+            return sparse_items
         items: list[dict] = []
         for index, line in enumerate(lines):
             cleaned = self._clean_value(line) or ""
@@ -2094,6 +2149,65 @@ class DocumentParser:
                     item["unit"] = "EA"
             items.append(item)
         return items
+
+    def _extract_sparse_inspection_report_items(self, lines: list[str]) -> list[dict]:
+        """Preserve visible inspection item names when OCR loses the quantity columns.
+
+        Real inspection photos often keep product names readable while the
+        received/accepted/rejected columns are fragmented or missed. In that
+        case we keep item candidates as no-price review rows instead of
+        fabricating quantities or dropping the business data entirely.
+        """
+        text = "\n".join(lines)
+        if not re.search(r"(입고검사|검사기록|검사성적서|검사일|합격|불량|Lot\s*No)", text, flags=re.IGNORECASE):
+            return []
+        items: list[dict] = []
+        for line in lines:
+            cleaned = self._clean_value(line) or ""
+            if not cleaned or not re.search(r"[A-Za-z가-힣]", cleaned):
+                continue
+            if self._looks_like_sparse_inspection_non_item(cleaned):
+                continue
+            if not self._looks_like_sparse_inspection_item_name(cleaned):
+                continue
+            item: dict = {
+                "item_name": cleaned,
+                "validation_warnings": [
+                    "inspection_quantity_breakdown_missing",
+                    "inspection_row_details_require_review",
+                ],
+            }
+            if re.search(r"\bLOT[-_A-Za-z0-9]+", cleaned, flags=re.IGNORECASE):
+                item["lot_no"] = cleaned
+            items.append(self._normalize_line_item(item))
+        return self._dedupe_line_items(items)[:20]
+
+    def _looks_like_sparse_inspection_non_item(self, value: str) -> bool:
+        text = str(value or "").strip()
+        compact = re.sub(r"\s+", "", text).casefold()
+        if len(compact) < 3:
+            return True
+        if re.fullmatch(r"\d{4}[-./]?\d{2}[-./]?\d{2}|\d{6,8}", compact):
+            return True
+        if re.search(
+            r"(문서번호|검사일|검사자|협력사|품질팀|담당|승인|검사의견|금액항목|금액|별도|격리|통보|확인|조건부합격|합격$|불합격$|입고수량|합격수량|불량수량|lotn[co]|^lot$)",
+            compact,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        if re.fullmatch(r"LOT[-_A-Z0-9]+", text, flags=re.IGNORECASE):
+            return True
+        if re.fullmatch(r"[A-Z]*[-_]?\d{3,}[-_A-Z0-9]*", text, flags=re.IGNORECASE):
+            return True
+        return False
+
+    def _looks_like_sparse_inspection_item_name(self, value: str) -> bool:
+        text = str(value or "").strip()
+        if re.search(r"\b(?:S\d{2,3}C|SCM\d+|SUS\d*|AL\d*|PIN|SHAFT|PLATE|BOLT|WASHER|BRG|PCB|M\d+)\b", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(하우징|핀|볼트|와셔|브라켓|판재|샤프트|플레이트|커넥터|하네스|케이블|베어링|기어|부싱)", text):
+            return True
+        return False
 
     def _extract_inspection_report_table_items(self, lines: list[str]) -> list[dict]:
         vertical_items = self._extract_vertical_header_table_items(
@@ -2678,6 +2792,11 @@ class DocumentParser:
         supply = self._to_decimal(str(item.get("supply_amount"))) if item.get("supply_amount") is not None else None
         tax = self._to_decimal(str(item.get("tax_amount"))) if item.get("tax_amount") is not None else None
         total = self._to_decimal(str(item.get("line_total"))) if item.get("line_total") is not None else None
+        if any(value is not None and value < 0 for value in (supply, tax, total)):
+            if supply is not None and tax is not None and total is not None:
+                expected = abs(supply) + abs(tax)
+                if abs(expected - abs(total)) <= max(Decimal("1"), abs(total) * Decimal("0.02")):
+                    return warnings
         if tax is not None and total is not None and total >= 0 and tax > total:
             warnings.append("invalid_tax_greater_than_total")
         if supply is not None and tax is not None and supply > 0 and tax > supply:
@@ -3903,7 +4022,7 @@ class DocumentParser:
     def _guess_category(self, text: str) -> str | None:
         lowered = text.lower()
         if self._has_return_or_credit_signal(text):
-            return "credit_note" if re.search(r"차감|credit\s+(?:note|memo)", text, flags=re.IGNORECASE) else "return_note"
+            return "credit_note" if re.search(r"차감|크레딧|credit\s+(?:note|memo)", text, flags=re.IGNORECASE) else "return_note"
         if self._has_internal_transfer_signal(text):
             return "internal_transfer"
         if "납품서" in lowered or "delivery note" in lowered:

@@ -357,18 +357,32 @@ class DocumentProcessor:
     ) -> NormalizedDocument:
         provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
         quality_metadata, quality_page_images = self._document_quality_for_source(stored_path)
+        header_supplement = self._vl_visual_header_ocr_supplement(text, quality_page_images)
+        normalized_text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+        if header_supplement:
+            normalized_text = "\n".join([header_supplement, normalized_text])
+        raw_blocks = [{
+            "type": "vl_primary_reader_text",
+            "provider": provider_metadata.get("provider") or "paddleocr_vl_1_6_gguf",
+            "content": text[:20000],
+            "parser_integrated": True,
+            "confirmed_promotion": True,
+        }]
+        if header_supplement:
+            raw_blocks.append({
+                "type": "visual_header_ocr_supplement",
+                "provider": "paddleocr_ppocrv4",
+                "content": header_supplement[:4000],
+                "scope": "visible_header_only",
+                "parser_integrated": True,
+                "confirmed_promotion": False,
+            })
         return NormalizedDocument(
             source_file_type=stored_path.suffix.casefold().lstrip(".") or "file",
             mime_type=document.mime_type or "application/octet-stream",
             extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
-            normalized_text="\n".join(line.strip() for line in text.splitlines() if line.strip()),
-            raw_extracted_blocks=[{
-                "type": "vl_primary_reader_text",
-                "provider": provider_metadata.get("provider") or "paddleocr_vl_1_6_gguf",
-                "content": text[:20000],
-                "parser_integrated": True,
-                "confirmed_promotion": True,
-            }],
+            normalized_text=normalized_text,
+            raw_extracted_blocks=raw_blocks,
             extraction_warnings=[],
             file_metadata={
                 "vl_primary_reader": True,
@@ -376,6 +390,7 @@ class DocumentProcessor:
                 "vl_worker_status": provider_metadata.get("status"),
                 "vl_worker_provider": provider_metadata.get("provider"),
                 "ocr_fallback_used": False,
+                "visual_header_ocr_supplement_used": bool(header_supplement),
                 **({"document_quality": quality_metadata} if quality_metadata else {}),
             },
             ocr_confidence=None,
@@ -409,6 +424,52 @@ class DocumentProcessor:
             return quality, [output_path]
         except Exception:
             return None, []
+
+    def _vl_visual_header_ocr_supplement(self, vl_text: str, page_images: list[Path]) -> str | None:
+        if not page_images:
+            return None
+        if self.parser._extract_document_number(vl_text):
+            return None
+        image_path = page_images[0]
+        if not image_path.exists():
+            return None
+        try:
+            result = self.ocr.extract(image_path)
+        except Exception:
+            return None
+        lines = [line.strip() for line in str(result.text or "").splitlines() if line.strip()]
+        header_lines = self._visible_header_lines_only(lines)
+        if not header_lines:
+            return None
+        header_text = "\n".join(header_lines)
+        if not self.parser._extract_document_number(header_text):
+            return None
+        return header_text
+
+    def _visible_header_lines_only(self, lines: list[str]) -> list[str]:
+        header: list[str] = []
+        for line in lines[:40]:
+            if re.search(r"(품목명|description|vendor\s+sku|unit\s+price|amount|공급가액|세액|합계|total\s+usd)", line, flags=re.IGNORECASE):
+                break
+            header.append(line)
+        useful: list[str] = []
+        keep_next = 0
+        for line in header:
+            if keep_next > 0:
+                useful.append(line)
+                keep_next -= 1
+                continue
+            if re.search(
+                r"(문서번호|발행일|작성일|invoice\s*(?:no|number)|document\s*(?:no|number)|vendor|customer|공급업체|고객사|currency|통화)",
+                line,
+                flags=re.IGNORECASE,
+            ):
+                useful.append(line)
+                keep_next = 1
+                continue
+            if re.search(r"\b(?:INV|PO|QT|DN|TS|IQC|QC|RTN|RCM|TRF)[-_ ][A-Z0-9][A-Z0-9-_ ]*\d", line, flags=re.IGNORECASE):
+                useful.append(line)
+        return useful[:16]
 
     def _vl_primary_reader_metadata(
         self,
@@ -1528,8 +1589,8 @@ class DocumentProcessor:
         doc_number = str(getattr(parsed, "document_number", "") or "")
         text = "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:10])
         return bool(
-            re.search(r"^RTN[-_ ]?\d{4}", doc_number, flags=re.IGNORECASE)
-            or re.search(r"(반품\s*/?\s*차감|반품\s*요청|차감\s*요청|return\s+note|credit\s+(?:note|memo))", text, flags=re.IGNORECASE)
+            re.search(r"^(?:RTN|RCM)[-_ ]?\d{4}", doc_number, flags=re.IGNORECASE)
+            or re.search(r"(반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|반품\s*요청|차감\s*요청|return\s+note|credit\s+(?:note|memo))", text, flags=re.IGNORECASE)
         )
 
     def _is_internal_transfer_parsed_document(self, parsed: object, raw_text: str) -> bool:

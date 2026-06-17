@@ -83,9 +83,10 @@ class DocumentTaxonomyService:
                 party_required=True,
                 confidence=0.88,
                 evidence=self._evidence(content, [
-                    r"\bRTN[-_ ]?\d{4}",
+                    r"\b(?:RTN|RCM)[-_ ]?\d{4}",
                     r"반품",
                     r"차감",
+                    r"크레딧",
                     r"credit\s+note|credit\s+memo",
                     r"return\s+note|return\s+authorization",
                     r"관련\s*납품서|원\s*납품서|related\s+(?:delivery|document)",
@@ -176,14 +177,14 @@ class DocumentTaxonomyService:
 
     def _is_return_or_credit(self, text: str) -> bool:
         return bool(re.search(
-            r"\bRTN[-_ ]?\d{4}|반품\s*/?\s*차감|반품\s*요청|차감\s*요청|반품전표|차감전표|"
+            r"\b(?:RTN|RCM)[-_ ]?\d{4}|반품\s*/?\s*(?:차감|크레딧)|반품\s*요청|차감\s*요청|크레딧\s*메모|반품전표|차감전표|"
             r"return\s+note|credit\s+note|credit\s+memo|deduction",
             text,
             flags=re.IGNORECASE,
         ))
 
     def _is_credit_note(self, text: str) -> bool:
-        return bool(re.search(r"credit\s+note|credit\s+memo|deduction|차감", text, flags=re.IGNORECASE))
+        return bool(re.search(r"credit\s+note|credit\s+memo|deduction|차감|크레딧", text, flags=re.IGNORECASE))
 
     def _is_internal_transfer(self, text: str) -> bool:
         normalized = re.sub(r"\s+", "", text.lower())

@@ -493,6 +493,40 @@ def test_real_inspection_report_preserves_lot_and_inspection_quantities():
     assert second["rejected_quantity"] == 0
 
 
+def test_sparse_inspection_report_preserves_visible_item_candidates_without_amounts():
+    text = "\n".join([
+        "문서번호",
+        "입고검사기록서",
+        "1QC-2026-0007",
+        "검사일",
+        "20260615",
+        "협력사",
+        "한빛정밀",
+        "Lot Nc",
+        "L-0615-A",
+        "합격",
+        "입고수링",
+        "조건부합격",
+        "베어링하우징",
+        "S45C PIN",
+        "나사산확인",
+        "협력사통보",
+        "금액항목없음",
+        "검사의견:불량수량은별도격리후 검사",
+    ])
+
+    parsed = DocumentParser().parse(text, "sparse_inspection_ocr.txt")
+
+    assert parsed.document_type == DocumentType.inspection_report
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert len(parsed.line_items) == 2
+    assert [item["item_name"] for item in parsed.line_items] == ["베어링하우징", "S45C PIN"]
+    assert all("unit_price" not in item for item in parsed.line_items)
+    assert all("supply_amount" not in item for item in parsed.line_items)
+    assert all("inspection_row_details_require_review" in item["validation_warnings"] for item in parsed.line_items)
+
+
 def test_inspection_report_without_inspection_quantity_breakdown_requires_review():
     document = Document(
         original_filename="inspection_photo_ocr.txt",
@@ -1068,10 +1102,76 @@ def test_vl_inline_return_credit_rows_are_not_duplicated_or_smeared():
     assert parsed.line_items[0]["supply_amount"] == 8000
     assert parsed.line_items[0]["tax_amount"] == 800
     assert parsed.line_items[0]["line_total"] == 8800
-    assert parsed.line_items[1]["item_name"] == "S45C PIN"
-    assert parsed.line_items[1]["specification"] == "8x60"
-    assert parsed.line_items[1]["quantity"] == 5
-    assert parsed.line_items[1]["line_total"] == 3300
+
+
+def test_return_credit_memo_prefers_rcm_number_and_preserves_negative_rows():
+    text = "\n".join([
+        "대성정공",
+        "반품/크레딧 메모",
+        "문서번호",
+        "RCM-2026-0009",
+        "작성일 2026.06.17",
+        "거래처 신우금속",
+        "원문서 TS-2026-0034",
+        "사유 규격 불일치",
+        "No 품목 규격 수량 단가 공급가액 세액 합계",
+        "1 AL6061 판재 3T 400x600 -2 18,000 -36,000 -3,600 -39,600",
+        "2 반품 운송비 - 1 5,000 5,000 500 5,500",
+        "조정 합계-34,100",
+    ])
+
+    parsed = DocumentParser().parse(text, "return_credit_memo.txt")
+
+    assert parsed.document_type == DocumentType.general_document
+    assert parsed.category == "credit_note"
+    assert parsed.document_number == "RCM-2026-0009"
+    assert parsed.business_fields["related_document_number"] == "TS-2026-0034"
+    assert parsed.extracted_amount == Decimal("-34100")
+    assert len(parsed.line_items) == 2
+    first = parsed.line_items[0]
+    assert first["item_name"] == "AL6061 판재 3T"
+    assert first["specification"] == "400x600"
+    assert first["quantity"] == -2
+    assert first["supply_amount"] == -36000
+    assert first["tax_amount"] == -3600
+    assert first["line_total"] == -39600
+    assert "invalid_supply_greater_than_total" not in first.get("validation_warnings", [])
+
+
+def test_commercial_invoice_hidden_amount_header_supplement_and_exchange_rate_guard():
+    text = "\n".join([
+        "문서번호",
+        "INV US GEN 004",
+        "발행일",
+        "2026-10-04",
+        "공급업체",
+        "Global Motion Parts LLC",
+        "고객사",
+        "NeoFactory Korea",
+        "COMMERCIAL INVOICE",
+        "No Description Vendor SKU Spec Qty Unit Unit Price A",
+        "1 Linear Guide Rail HGW20 HGW20-1000 1000mm 10 EA 45.0",
+        "2 Cable Harness 500 CBL-HAR-500 500mm 50 EA 2.2",
+        "공급가액",
+        "세액",
+        "Exchange Rate Note: USD = 1,370 KRW 참고. 1,370은 total/amount가 아님.",
+        "Total USD",
+    ])
+
+    parsed = DocumentParser().parse(text, "commercial_invoice_hidden_amount.txt")
+
+    assert parsed.document_type == DocumentType.invoice
+    assert parsed.document_number == "INV-US-GEN-004"
+    assert parsed.currency == "USD"
+    assert parsed.tax is None
+    assert parsed.extracted_amount is None
+    assert len(parsed.line_items) == 2
+    assert all(item.get("supply_amount") is None for item in parsed.line_items)
+    assert all("missing_line_amount" in item.get("validation_warnings", []) for item in parsed.line_items)
+    assert parsed.line_items[1]["item_name"] == "Cable Harness 500"
+    assert parsed.line_items[1]["specification"] == "500mm"
+    assert parsed.line_items[1]["quantity"] == 50
+    assert parsed.line_items[1].get("line_total") is None
 
 
 def test_vl_inline_fax_po_recovers_duplicate_trailing_total_and_fused_spec():

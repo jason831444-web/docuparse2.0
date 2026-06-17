@@ -794,9 +794,9 @@ class VLCandidateParser:
     def _has_strong_return_credit_signal(self, text: str) -> bool:
         first_lines = "\n".join(line.strip() for line in str(text or "").splitlines()[:10])
         return bool(
-            re.search(r"\bRTN[-_ ]?\d{4}", text, flags=re.IGNORECASE)
+            re.search(r"\b(?:RTN|RCM)[-_ ]?\d{4}", text, flags=re.IGNORECASE)
             or re.search(
-                r"(반품\s*/?\s*차감|반품\s*요청|차감\s*요청|반품전표|차감전표|"
+                r"(반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|반품\s*요청|차감\s*요청|반품전표|차감전표|"
                 r"credit\s+(?:note|memo)|return\s+note|deduction)",
                 first_lines,
                 flags=re.IGNORECASE,
