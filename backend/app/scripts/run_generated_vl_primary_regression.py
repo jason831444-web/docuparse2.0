@@ -195,6 +195,7 @@ def compare_expected_actual(expected: dict[str, Any], actual: dict[str, Any], ex
     _detect_summary_or_header_rows(line_items, failures)
     _detect_exchange_rate_as_amount(actual, line_items, failures)
     _detect_vendor_sku_row(line_items, failures)
+    _detect_document_expectations(expected, actual, line_items, warnings, failures)
     _detect_review_flags(expected_items, actual, warnings)
     _detect_export_candidate_leak(export_json or {}, failures)
 
@@ -553,6 +554,46 @@ def _detect_vendor_sku_row(line_items: list[dict[str, Any]], failures: list[dict
             failures.append({"code": "vendor_sku_not_item_row", "line_index": index, "item_name": item.get("item_name")})
 
 
+def _detect_document_expectations(
+    expected: dict[str, Any],
+    actual: dict[str, Any],
+    line_items: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+) -> None:
+    min_count = _int_or_none(expected.get("expected_line_item_min_count"))
+    if min_count is not None and len(line_items) < min_count:
+        warnings.append(
+            {
+                "code": "line_item_min_count_not_met",
+                "expected_value": min_count,
+                "actual_value": len(line_items),
+            }
+        )
+
+    expected_status = str(expected.get("expected_review_status") or "").strip()
+    if expected_status:
+        actual_status = str(actual.get("processing_status") or "").strip()
+        if actual_status and actual_status != expected_status:
+            warnings.append(
+                {
+                    "code": "review_status_mismatch",
+                    "expected_value": expected_status,
+                    "actual_value": actual_status,
+                }
+            )
+
+    required_quality_flags = [str(flag) for flag in (expected.get("expected_quality_flags") or []) if flag]
+    if required_quality_flags:
+        present = set(_review_issue_codes(actual))
+        metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+        quality = metadata.get("document_quality") if isinstance(metadata.get("document_quality"), dict) else {}
+        present.update(str(reason) for reason in (quality.get("review_reasons") or []) if reason)
+        for flag in required_quality_flags:
+            if flag not in present:
+                warnings.append({"code": "expected_quality_flag_missing", "expected_flag": flag})
+
+
 def _detect_review_flags(expected_items: list[dict[str, Any]], actual: dict[str, Any], warnings: list[dict[str, Any]]) -> None:
     required = {
         flag
@@ -724,6 +765,15 @@ def _decimal(value: Any) -> Decimal | None:
     try:
         return Decimal(str(value).replace(",", "").strip())
     except (InvalidOperation, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
         return None
 
 

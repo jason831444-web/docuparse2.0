@@ -1,0 +1,15 @@
+fixture_id,filename,source_pool,expected_document_type,review_policy,notes
+MFG-001,MFG-001_purchase_order_uncropped.jpg,real_company_style,purchase_order,needs_review_allowed,Uncropped photographed purchase order; visible amounts should be preserved when confidently read.
+MFG-002,MFG-002_tax_invoice_uncropped.png,real_company_style,invoice,needs_review_allowed,Uncropped tax invoice; header/date/amount fields should stay separated.
+MFG-003,MFG-003_delivery_no_price_uncropped.jpg,real_company_style,delivery_note,needs_review_allowed,No-price delivery note; no amount/currency generation.
+MFG-004,MFG-004_quotation_uncropped.pdf,real_company_style,quotation,needs_review_allowed,Quotation; total policy depends on visible final total and option semantics.
+MFG-005,MFG-005_incoming_inspection_uncropped.png,real_company_style,inspection_report,needs_review_allowed,No-price inspection/quality document; quantities are business data, amounts are not.
+MFG-006,MFG-006_transaction_statement_uncropped.jpg,real_company_style,transaction_statement,needs_review_allowed,Transaction statement with item rows and totals.
+MFG-007,MFG-007_return_credit_uncropped.pdf,real_company_style,credit_note,needs_review_allowed,Return/credit document; sign and related-doc policy should remain reviewable.
+MFG-008,MFG-008_internal_transfer_uncropped.webp,real_company_style,general_document,needs_review_allowed,Internal transfer/no-price movement document.
+MFG-009,MFG-009_purchase_order_blurry.jpg,blurry_real_company,purchase_order,needs_review_expected,Blurry photographed purchase order; review-first but no dangerous contamination.
+MFG-010,MFG-010_delivery_no_price_blurry.jpg,blurry_real_company,delivery_note,needs_review_expected,Blurry no-price delivery note; no amounts.
+MFG-011,MFG-011_handwritten_transaction_statement.jpg,handwritten,transaction_statement,needs_review_expected,Handwritten transaction statement; item rows are candidates and totals need review.
+MFG-012,MFG-012_handwritten_material_list.jpg,handwritten,general_document,needs_review_expected,Handwritten material list; quantity-focused business data.
+MFG-013,MFG-013_delivery_hidden_columns.pdf,generated_cropped,delivery_note,needs_review_expected,Right-side remaining/note columns cropped; no-price policy.
+MFG-014,MFG-014_commercial_invoice_hidden_amount.pdf,generated_cropped,invoice,needs_review_expected,Commercial invoice with amount column hidden; exchange-rate guardrail.

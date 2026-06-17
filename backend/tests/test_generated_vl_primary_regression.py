@@ -474,3 +474,54 @@ def test_compare_accepts_return_credit_policy_type_via_expected_subtype():
     result = compare_expected_actual(expected, actual, {})
 
     assert "document_type_mismatch" not in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_warns_when_expected_line_item_min_count_is_not_met():
+    expected = {
+        "document_type": "delivery_note",
+        "expected_line_item_min_count": 2,
+        "no_price_document": True,
+    }
+    actual = {
+        "document_type": "delivery_note",
+        "line_items": [{"item_name": "S45C PIN", "quantity": 120}],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert result["status"] == "WARN"
+    assert not result["failures"]
+    assert "line_item_min_count_not_met" in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_warns_when_expected_quality_flag_is_missing():
+    expected = {
+        "document_type": "purchase_order",
+        "expected_quality_flags": ["document_image_blurry"],
+    }
+    actual = {
+        "document_type": "purchase_order",
+        "line_items": [{"item_name": "S45C PIN", "quantity": 120}],
+        "workflow_metadata": {"document_quality": {"review_reasons": []}},
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert result["status"] == "WARN"
+    assert "expected_quality_flag_missing" in {issue["code"] for issue in result["warnings"]}
+
+
+def test_compare_accepts_expected_quality_flag_from_document_quality():
+    expected = {
+        "document_type": "purchase_order",
+        "expected_quality_flags": ["document_image_blurry"],
+    }
+    actual = {
+        "document_type": "purchase_order",
+        "line_items": [{"item_name": "S45C PIN", "quantity": 120}],
+        "workflow_metadata": {"document_quality": {"review_reasons": ["document_image_blurry"]}},
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert "expected_quality_flag_missing" not in {issue["code"] for issue in result["warnings"]}

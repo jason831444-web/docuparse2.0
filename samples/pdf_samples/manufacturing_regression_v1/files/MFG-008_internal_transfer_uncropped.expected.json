@@ -1,0 +1,1 @@
+{"document_type":"general_document","document_subtype":"internal_transfer","expected_review_status":"needs_review","expected_line_item_min_count":1,"expected_no_dangerous_contamination":true,"visual_crop":false,"no_price_document":true,"visible_columns":["item_name","spec","requested_quantity","quantity","unit"],"hidden_or_cropped_columns":[]}

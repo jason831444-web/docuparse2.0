@@ -183,13 +183,15 @@ function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
   const hasSkewedPages = Boolean(quality.has_skewed_pages);
   const scanType = typeof quality.likely_scan_type === "string" ? quality.likely_scan_type : "unknown";
   const reasonLabels: Record<string, string> = {
-    document_low_resolution: "해상도가 낮아 숫자 확인 필요",
-    document_image_blurry: "문서가 흐릿함",
-    document_low_contrast: "명암이 낮음",
-    document_page_skewed: "문서 기울어짐",
-    document_right_column_crop_risk: "오른쪽 금액 컬럼 잘림 가능",
-    document_photo_source: "사진 촬영 문서",
-    document_fax_like_source: "팩스/저품질 스캔 가능",
+    document_low_resolution: "해상도가 낮아 수량과 금액을 원본으로 확인해야 합니다.",
+    document_image_blurry: "글자가 흐려 일부 값은 원본 확인이 필요합니다.",
+    document_low_contrast: "명암이 낮아 인식 정확도가 떨어질 수 있습니다.",
+    document_page_skewed: "문서가 기울어져 표 행/열 확인이 필요합니다.",
+    document_right_column_crop_risk: "오른쪽 금액/세액 컬럼이 잘렸을 가능성이 있습니다.",
+    document_photo_source: "사진 촬영본으로 감지되어 자동 확정보다 검토가 필요합니다.",
+    document_fax_like_source: "팩스/저품질 스캔 문서로 감지되어 원본 확인이 필요합니다.",
+    document_quality_unreadable_image: "문서 이미지를 품질 진단하기 어려워 원본 확인이 필요합니다.",
+    document_quality_no_rendered_pages: "렌더링된 페이지가 없어 원본 확인이 필요합니다.",
   };
   return (
     <Card className={hasCropRisk || hasBlurryPages || hasSkewedPages ? "border-amber-300 bg-amber-50/30" : ""}>
@@ -205,7 +207,7 @@ function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
             ["품질 점수", score !== null ? `${score}%` : null],
             ["문서 유형", scanType === "digital_pdf" ? "디지털 PDF" : scanType === "photo" ? "사진 문서" : scanType === "fax_like" ? "팩스형 문서" : scanType === "scan" ? "스캔 문서" : "확인 필요"],
             ["페이지 수", typeof quality.page_count === "number" ? String(quality.page_count) : null],
-            ["오른쪽 컬럼", hasCropRisk ? "잘림 가능성 있음" : "잘림 위험 낮음"],
+            ["오른쪽 컬럼", hasCropRisk ? "금액/세액 컬럼 확인 필요" : "잘림 위험 낮음"],
           ]}
         />
         {reasons.length ? (
@@ -248,7 +250,7 @@ function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
                   <span>{String(page.page_index ?? index + 1)}페이지</span>
                   <span>{String(page.width ?? "-")}×{String(page.height ?? "-")}</span>
                   <span>흐림 {String(page.blur_score ?? "-")}</span>
-                  <span>{page.possible_right_column_crop ? "오른쪽 컬럼 확인" : "컬럼 위험 낮음"}</span>
+                  <span>{page.possible_right_column_crop ? "금액/세액 컬럼 확인" : "컬럼 위험 낮음"}</span>
                 </div>
               ))}
             </div>

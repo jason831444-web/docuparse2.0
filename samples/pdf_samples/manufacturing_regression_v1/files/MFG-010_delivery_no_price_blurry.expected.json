@@ -1,0 +1,1 @@
+{"document_type":"delivery_note","expected_review_status":"needs_review","expected_line_item_min_count":1,"expected_no_dangerous_contamination":true,"visual_crop":false,"no_price_document":true,"expected_quality_flags":["document_image_blurry"],"visible_columns":["item_name","quantity","unit"],"hidden_or_cropped_columns":[]}

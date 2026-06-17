@@ -1,0 +1,1 @@
+{"document_type":"invoice","expected_review_status":"needs_review","expected_line_item_min_count":2,"expected_no_dangerous_contamination":true,"visual_crop":false,"no_price_document":false,"visible_columns":["item_name","quantity","unit_price","supply_amount","tax_amount","line_total"],"hidden_or_cropped_columns":[]}
