@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -72,23 +74,77 @@ def health() -> dict[str, Any]:
 
 @app.post("/analyze")
 def analyze(request: VLAnalyzeRequest) -> dict[str, Any]:
+    return _analyze_path(
+        Path(request.file_path),
+        original_filename=request.original_filename,
+        transport_metadata={"mode": "shared_file_path"},
+    )
+
+
+@app.post("/analyze-upload")
+async def analyze_upload(
+    file: UploadFile = File(...),
+    original_filename: str | None = Form(None),
+) -> dict[str, Any]:
+    global _last_error
+    settings = get_settings()
+    filename = original_filename or file.filename or "upload.bin"
+    upload_dir = settings.upload_dir / "vl_remote_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = upload_dir / f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:10]}-{_safe_upload_filename(filename)}"
+    uploaded_bytes = 0
+    try:
+        with saved_path.open("wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                uploaded_bytes += len(chunk)
+                output.write(chunk)
+    except Exception as exc:
+        _last_error = f"{type(exc).__name__}: {exc}"
+        logger.exception("PaddleOCR-VL worker upload failed for %s", filename)
+        return _base_report(
+            saved_path,
+            original_filename=filename,
+            transport_metadata={
+                "mode": "multipart_upload",
+                "uploaded_bytes": uploaded_bytes,
+                "saved_path": str(saved_path),
+            },
+            started=time.perf_counter(),
+            error=_last_error,
+            decision_reason="vl_worker_upload_error",
+        )
+    finally:
+        await file.close()
+
+    return _analyze_path(
+        saved_path,
+        original_filename=filename,
+        transport_metadata={
+            "mode": "multipart_upload",
+            "uploaded_bytes": uploaded_bytes,
+            "saved_path": str(saved_path),
+            "content_type": file.content_type,
+        },
+    )
+
+
+def _analyze_path(
+    path: Path,
+    *,
+    original_filename: str | None = None,
+    transport_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     global _last_error
     started = time.perf_counter()
-    path = Path(request.file_path)
-    report: dict[str, Any] = {
-        "ok": False,
-        "provider": "paddleocr_vl_1_6_gguf",
-        "source": "vl_worker_api",
-        "sample": str(path),
-        "original_filename": request.original_filename,
-        "provider_available_candidate": False,
-        "provider_available_decision_reason": "worker_not_completed",
-        "manual_visual_check": {
-            "sample": str(path),
-            "pdf_opened_and_visually_checked": False,
-            "notes": "Upload pipeline candidate; manual visual check has not been performed.",
-        },
-    }
+    report = _base_report(
+        path,
+        original_filename=original_filename,
+        transport_metadata=transport_metadata,
+        started=started,
+    )
     try:
         if not path.exists():
             raise FileNotFoundError(f"file_path_not_found: {path}")
@@ -128,6 +184,51 @@ def analyze(request: VLAnalyzeRequest) -> dict[str, Any]:
         report["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         report["candidate_metadata"] = build_docuparse_vl_candidate_metadata(report)
     return report
+
+
+def _base_report(
+    path: Path,
+    *,
+    original_filename: str | None,
+    transport_metadata: dict[str, Any] | None,
+    started: float,
+    error: str | None = None,
+    decision_reason: str = "worker_not_completed",
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "ok": False,
+        "provider": "paddleocr_vl_1_6_gguf",
+        "source": "vl_worker_api",
+        "sample": str(path),
+        "original_filename": original_filename,
+        "provider_available_candidate": False,
+        "provider_available_decision_reason": decision_reason,
+        "worker_transport": (transport_metadata or {}).get("mode"),
+        "remote_upload": transport_metadata or {},
+        "manual_visual_check": {
+            "sample": str(path),
+            "pdf_opened_and_visually_checked": False,
+            "notes": "Upload pipeline candidate; manual visual check has not been performed.",
+        },
+    }
+    if error:
+        report.update(
+            {
+                "classification": "error",
+                "error": error,
+                "fallback_reason": error,
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "candidate_metadata": {"vl_candidates": [], "vl_candidate_summary": {"candidate_count": 0}},
+            }
+        )
+    return report
+
+
+def _safe_upload_filename(filename: str) -> str:
+    name = Path(filename).name.strip() or "upload.bin"
+    name = re.sub(r"[^A-Za-z0-9가-힣._ -]+", "_", name)
+    name = re.sub(r"\s+", "_", name)
+    return name[:160] or "upload.bin"
 
 
 def _prepare_input_image(path: Path) -> Path:
