@@ -21,7 +21,38 @@ and PP-OCRv4 fallback policy.
 
 ## RunPod Processes
 
-Start `llama-server` on the RunPod pod:
+The preferred operational path is to use the repo scripts from the RunPod pod:
+
+```bash
+cd /workspace/docuparse-gpu-test/docuparse2.0
+scripts/runpod-start-vl-stack.sh
+scripts/runpod-check-vl-stack.sh
+```
+
+The start script is idempotent: if `llama-server` or `vl-worker-api` is already
+running from the recorded PID files, it reports the existing process instead of
+starting a duplicate.
+
+It expects these default paths:
+
+- repo: `/workspace/docuparse-gpu-test/docuparse2.0`
+- logs: `/workspace/docuparse-gpu-test/logs`
+- uploads: `/workspace/docuparse-gpu-test/uploads`
+- model dir: `/workspace/docuparse_models/paddleocr_vl_1_6_gguf`
+- worker venv: `/workspace/docuparse-gpu-test/worker-venv`
+- llama-server: `/opt/llama.cpp/build/bin/llama-server`
+
+You can override paths with environment variables such as `MODEL_DIR`,
+`DOCUPARSE_REPO`, `VENV_DIR`, `LLAMA_SERVER_BIN`, `LOG_DIR`, and `UPLOAD_DIR`.
+
+To run a one-file inference smoke from the RunPod pod, pass `SMOKE_FILE`:
+
+```bash
+SMOKE_FILE=/workspace/docuparse-gpu-test/docuparse2.0/samples/pdf_samples/manufacturing_regression_v1/files/MFG-001_purchase_order_uncropped.pdf \
+  scripts/runpod-check-vl-stack.sh
+```
+
+Manual command reference for `llama-server`:
 
 ```bash
 /opt/llama.cpp/build/bin/llama-server \
@@ -57,6 +88,17 @@ Check the worker:
 ```bash
 curl -s http://127.0.0.1:8020/health | python3 -m json.tool
 ```
+
+Stop only the RunPod-side worker stack with PID files:
+
+```bash
+scripts/runpod-stop-vl-stack.sh
+```
+
+The stop script does not delete models, uploads, logs, or Docker volumes. It does
+not stop or terminate the RunPod pod. By default it leaves any reverse tunnel
+alone; set `STOP_TUNNEL=1` only when you intentionally want to stop the tunnel
+PID recorded in `/workspace/docuparse-gpu-test/logs/reverse_upload_tunnel.pid`.
 
 ## DigitalOcean Connection
 
@@ -97,6 +139,16 @@ Expected active remote state:
   "worker_transport": "multipart_upload"
 }
 ```
+
+The check script prints:
+
+- remote worker `/health`;
+- backend `/health` VL block;
+- whether backend reports `worker_location=remote`;
+- whether backend reports `worker_transport=multipart_upload`;
+- whether the primary reader is available;
+- likely causes when the worker URL is unreachable;
+- DigitalOcean tunnel/forward PID hints when PID files are present.
 
 ## Roll Back To Local CPU Worker
 
@@ -152,3 +204,58 @@ Keep these invariants:
 
 Stop or terminate the RunPod pod only after confirming the DigitalOcean backend
 has been rolled back to local worker or fallback-only operation.
+
+## Pod Start Lifecycle
+
+When a stopped RunPod pod is started again, the network endpoint may come back
+before all processes are ready. Do this sequence:
+
+1. SSH into RunPod.
+2. Check GPU availability with `nvidia-smi`.
+3. Run `scripts/runpod-start-vl-stack.sh`.
+4. Run `scripts/runpod-check-vl-stack.sh`.
+5. Confirm the DigitalOcean tunnel/forward is alive.
+6. On DigitalOcean, run `scripts/check-vl-worker.sh`.
+7. Upload one fixture through the normal UI/API path.
+8. Confirm RunPod logs show `POST /analyze-upload 200 OK`.
+9. Confirm document metadata includes `worker_transport=multipart_upload` and
+   `worker_location=remote`.
+
+RunPod start does not automatically guarantee that DigitalOcean is connected
+because four independent pieces must be alive: the pod, `llama-server`,
+`vl-worker-api`, and the DigitalOcean reachable endpoint/tunnel.
+
+## Startup Command Candidate
+
+Do not apply this automatically without an operator review, but the RunPod
+template/start command can be configured with a variant of:
+
+```bash
+set -euo pipefail
+cd /workspace/docuparse-gpu-test/docuparse2.0
+git fetch origin main
+git checkout main
+git pull --ff-only origin main
+test -f /workspace/docuparse_models/paddleocr_vl_1_6_gguf/PaddleOCR-VL-1.6-GGUF.gguf
+test -f /workspace/docuparse_models/paddleocr_vl_1_6_gguf/PaddleOCR-VL-1.6-GGUF-mmproj.gguf
+scripts/runpod-start-vl-stack.sh
+scripts/runpod-check-vl-stack.sh
+```
+
+If a reverse tunnel is required, start it after the worker stack and record its
+PID in `/workspace/docuparse-gpu-test/logs/reverse_upload_tunnel.pid`. Keep
+tunnel credentials out of git.
+
+## Before Stopping RunPod
+
+RunPod billing continues until the pod is stopped or terminated. Before stopping
+it, choose one of these operational states:
+
+- keep DigitalOcean pointed at RunPod and accept that uploads will fall back if
+  the pod is down;
+- switch DigitalOcean back to the local CPU worker with
+  `scripts/use-local-vl-worker.sh`;
+- pause uploads while the remote worker is unavailable.
+
+Never stop the pod and assume existing tunnels or backend health will remain
+valid after restart. Re-run both RunPod and DigitalOcean check scripts.
