@@ -207,6 +207,10 @@ export interface ProviderHealth {
       in_process_enabled?: boolean | null;
       error?: string | null;
       server_url?: string | null;
+      worker_url_host?: string | null;
+      worker_location?: string | null;
+      worker_provider?: string | null;
+      worker_transport?: string | null;
       model_file?: string | null;
       mmproj_file?: string | null;
       smoke_passed?: boolean | null;

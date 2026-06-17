@@ -59,6 +59,9 @@ def test_vl_candidate_client_uploads_file_to_remote_worker(monkeypatch, tmp_path
     assert calls[0]["url"] == "http://runpod-worker:8020/analyze-upload"
     assert result["ok"] is True
     assert result["worker_transport"] == "multipart_upload"
+    assert result["worker_location"] == "remote"
+    assert result["worker_provider"] == "remote_vl_worker"
+    assert result["worker_url_host"] == "runpod-worker"
 
 
 def test_vl_candidate_client_falls_back_to_path_endpoint_for_legacy_worker(monkeypatch, tmp_path: Path):
@@ -82,6 +85,7 @@ def test_vl_candidate_client_falls_back_to_path_endpoint_for_legacy_worker(monke
     assert calls == ["http://legacy-worker:8020/analyze-upload", "http://legacy-worker:8020/analyze"]
     assert result["ok"] is True
     assert result["worker_transport"] == "shared_file_path"
+    assert result["worker_location"] == "remote"
 
 
 def test_vl_worker_analyze_upload_saves_file_and_runs_pipeline(monkeypatch, tmp_path: Path):
@@ -118,6 +122,8 @@ def test_vl_worker_analyze_upload_saves_file_and_runs_pipeline(monkeypatch, tmp_
     payload = response.json()
     assert payload["ok"] is True
     assert payload["worker_transport"] == "multipart_upload"
+    assert payload["worker_provider"] == "vl_worker_api"
+    assert payload["model_name"] == "PaddleOCR-VL-1.6-GGUF"
     assert payload["remote_upload"]["uploaded_bytes"] == len(b"fake-jpeg-fixture")
     assert payload["remote_upload"]["saved_path"].endswith(".jpg")
     assert "견적서" in payload["text_preview"]

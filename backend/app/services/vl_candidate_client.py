@@ -4,6 +4,7 @@ import mimetypes
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -17,6 +18,9 @@ class VLCandidateWorkerClient:
         settings = get_settings()
         self.worker_url = (worker_url or settings.paddleocr_vl_gguf_worker_url or "").rstrip("/")
         self.timeout_seconds = timeout_seconds or settings.paddleocr_vl_gguf_timeout_seconds
+        self.worker_url_host = _redacted_worker_host(self.worker_url)
+        self.worker_location = _worker_location(self.worker_url)
+        self.worker_provider = _worker_provider(self.worker_url)
 
     def enabled(self) -> bool:
         settings = get_settings()
@@ -54,6 +58,7 @@ class VLCandidateWorkerClient:
             payload.setdefault("provider", self.provider)
             payload.setdefault("elapsed_ms", int((time.perf_counter() - started) * 1000))
             payload.setdefault("worker_transport", "multipart_upload")
+            self._attach_worker_metadata(payload)
             return payload
         except Exception as exc:
             return self._failed(f"{type(exc).__name__}: {exc}", started)
@@ -75,9 +80,18 @@ class VLCandidateWorkerClient:
             payload.setdefault("provider", self.provider)
             payload.setdefault("elapsed_ms", int((time.perf_counter() - started) * 1000))
             payload.setdefault("worker_transport", "shared_file_path")
+            self._attach_worker_metadata(payload)
             return payload
         except Exception as exc:
             return self._failed(f"{type(exc).__name__}: {exc}", started)
+
+    def _attach_worker_metadata(self, payload: dict[str, Any]) -> None:
+        payload.setdefault("worker_location", self.worker_location)
+        payload.setdefault("worker_provider", self.worker_provider)
+        payload.setdefault("worker_url_host", self.worker_url_host)
+        payload.setdefault("timeout_seconds", self.timeout_seconds)
+        if payload.get("worker_transport") == "multipart_upload":
+            payload.setdefault("remote_upload_transport", True)
 
     def _skipped(self, reason: str) -> dict[str, Any]:
         return {
@@ -85,6 +99,10 @@ class VLCandidateWorkerClient:
             "provider": self.provider,
             "status": "skipped",
             "fallback_reason": reason,
+            "worker_location": self.worker_location,
+            "worker_provider": self.worker_provider,
+            "worker_url_host": self.worker_url_host,
+            "timeout_seconds": self.timeout_seconds,
             "candidate_metadata": {"vl_candidates": [], "vl_candidate_summary": {"candidate_count": 0}},
         }
 
@@ -95,5 +113,37 @@ class VLCandidateWorkerClient:
             "status": "failed",
             "fallback_reason": reason,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
+            "worker_location": self.worker_location,
+            "worker_provider": self.worker_provider,
+            "worker_url_host": self.worker_url_host,
+            "timeout_seconds": self.timeout_seconds,
             "candidate_metadata": {"vl_candidates": [], "vl_candidate_summary": {"candidate_count": 0}},
         }
+
+
+def _worker_location(worker_url: str) -> str:
+    host = (urlparse(worker_url).hostname or "").casefold()
+    if host in {"", "vl-worker-api", "localhost", "127.0.0.1", "::1"}:
+        return "local"
+    if host.startswith("172.") or host.startswith("10.") or host.startswith("192.168."):
+        return "remote"
+    return "remote"
+
+
+def _worker_provider(worker_url: str) -> str:
+    host = (urlparse(worker_url).hostname or "").casefold()
+    if host in {"", "vl-worker-api", "localhost", "127.0.0.1", "::1"}:
+        return "local_cpu_worker"
+    return "remote_vl_worker"
+
+
+def _redacted_worker_host(worker_url: str) -> str | None:
+    host = urlparse(worker_url).hostname
+    if not host:
+        return None
+    normalized = host.casefold()
+    if normalized in {"vl-worker-api", "localhost", "127.0.0.1", "::1"}:
+        return normalized
+    if normalized.startswith(("172.", "10.", "192.168.")):
+        return "remote-gateway"
+    return host

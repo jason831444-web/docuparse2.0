@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -572,6 +573,9 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
     model_dir = settings.paddleocr_vl_gguf_model_dir
     model_file = model_dir / settings.paddleocr_vl_gguf_model_file
     mmproj_file = model_dir / settings.paddleocr_vl_gguf_mmproj_file
+    worker_url = (settings.paddleocr_vl_gguf_worker_url or "").rstrip("/")
+    worker_location = _vl_worker_location(worker_url)
+    worker_url_host = _redacted_vl_worker_host(worker_url)
     base: dict[str, Any] = {
         "provider": "paddleocr_vl_1_6_gguf",
         "repo_id": settings.paddleocr_vl_gguf_repo_id,
@@ -579,6 +583,11 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
         "model_file": settings.paddleocr_vl_gguf_model_file,
         "mmproj_file": settings.paddleocr_vl_gguf_mmproj_file,
         "server_url": settings.paddleocr_vl_gguf_server_url,
+        "worker_url_configured": bool(worker_url),
+        "worker_url_host": worker_url_host,
+        "worker_location": worker_location,
+        "worker_provider": "remote_vl_worker" if worker_location == "remote" else "local_cpu_worker",
+        "worker_transport": "multipart_upload",
         "enabled": settings.enable_paddleocr_vl_gguf,
         "max_pages": settings.paddleocr_vl_gguf_max_pages,
         "concurrency": settings.paddleocr_vl_gguf_concurrency,
@@ -595,6 +604,43 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
     if not settings.enable_paddleocr_vl_gguf:
         base["status"] = "disabled"
         base["error"] = "paddleocr_vl_gguf_disabled"
+        return base
+    if worker_url:
+        try:
+            request = urllib.request.Request(f"{worker_url}/health", method="GET")
+            with urllib.request.urlopen(request, timeout=min(settings.paddleocr_vl_gguf_timeout_seconds, 5.0)) as response:
+                worker_health = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            base["status"] = "worker_unreachable"
+            base["error"] = f"vl_worker_unreachable: {exc}"
+            return base
+        base["worker_health"] = worker_health if isinstance(worker_health, dict) else {"raw": worker_health}
+        if isinstance(worker_health, dict):
+            base["model_file_exists"] = worker_health.get("model_file_exists")
+            base["mmproj_file_exists"] = worker_health.get("mmproj_file_exists")
+            base["llama_server_health"] = {
+                "status": worker_health.get("status"),
+                "llama_server_url": worker_health.get("llama_server_url"),
+                "pipeline_initialized": worker_health.get("pipeline_initialized"),
+                "last_error": worker_health.get("last_error"),
+            }
+            if worker_health.get("status") not in {"ok", "ready"}:
+                base["status"] = "worker_not_ready"
+                base["error"] = f"vl_worker_status_{worker_health.get('status')}"
+                return base
+        if not settings.paddleocr_vl_gguf_smoke_passed:
+            base["status"] = "remote_worker_ready" if worker_location == "remote" else "llama_server_ready"
+            base["error"] = "paddleocr_vl_gguf_smoke_not_run"
+            return base
+        base["candidate_available"] = True
+        if settings.paddleocr_vl_gguf_primary_reader_enabled:
+            base["primary_reader_available"] = True
+        if not settings.paddleocr_vl_gguf_in_process_enabled:
+            base["status"] = "remote_primary_reader_candidate" if worker_location == "remote" else "primary_reader_candidate"
+            base["error"] = None if worker_location == "remote" else "paddleocr_vl_gguf_confirmed_extraction_not_enabled"
+            return base
+        base["status"] = "active_candidate"
+        base["available"] = True
         return base
     missing = [str(path) for path in (model_file, mmproj_file) if not path.exists()]
     if missing:
@@ -632,6 +678,25 @@ def _paddleocr_vl_gguf_status() -> dict[str, Any]:
     base["status"] = "active_candidate"
     base["available"] = True
     return base
+
+
+def _vl_worker_location(worker_url: str) -> str:
+    host = (urlparse(worker_url).hostname or "").casefold()
+    if host in {"", "vl-worker-api", "localhost", "127.0.0.1", "::1"}:
+        return "local"
+    return "remote"
+
+
+def _redacted_vl_worker_host(worker_url: str) -> str | None:
+    host = urlparse(worker_url).hostname
+    if not host:
+        return None
+    normalized = host.casefold()
+    if normalized in {"vl-worker-api", "localhost", "127.0.0.1", "::1"}:
+        return normalized
+    if normalized.startswith(("172.", "10.", "192.168.")):
+        return "remote-gateway"
+    return host
 
 
 def _ocr_line_candidate_from_mapping(item: dict[str, Any], text: str, score: object) -> dict[str, Any] | None:

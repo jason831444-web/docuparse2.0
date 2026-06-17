@@ -399,6 +399,50 @@ def test_provider_health_reports_gguf_primary_reader_before_confirmed_integratio
     assert payload["paddleocr_vl_gguf"]["primary_reader_available"] is True
 
 
+def test_provider_health_reports_remote_vl_worker(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ocr_module,
+        "get_settings",
+        lambda: _ocr_settings(
+            enable_paddleocr_vl_gguf=True,
+            paddleocr_vl_gguf_worker_url="http://172.18.0.1:18024",
+            paddleocr_vl_gguf_smoke_passed=True,
+        ),
+    )
+    monkeypatch.setattr(ocr_module.PaddleOCRProvider, "is_available", classmethod(lambda cls: True))
+    monkeypatch.setattr(ocr_module, "_paddleocr_usable", lambda: (True, None))
+    monkeypatch.setattr(ocr_module, "_paddleocr_vl_status", lambda: {"importable": True, "usable": True, "error": None})
+    monkeypatch.setattr(
+        ocr_module.urllib.request,
+        "urlopen",
+        lambda request, timeout=5.0: _JsonResponse({
+            "status": "ok",
+            "model_file_exists": True,
+            "mmproj_file_exists": True,
+            "llama_server_url": "http://127.0.0.1:8080/v1",
+            "pipeline_initialized": True,
+        }),
+    )
+    monkeypatch.setattr(
+        ocr_module,
+        "_ocr_worker_health",
+        lambda url, timeout: (
+            {"status": "ok", "ocr_engine": "PP-OCRv4", "model": "PP-OCRv4", "ocr_version": "PP-OCRv4"},
+            None,
+        ),
+    )
+
+    payload = ocr_module.provider_health()
+
+    assert payload["primary_reader_available"] is True
+    assert payload["paddleocr_vl_gguf"]["status"] == "remote_primary_reader_candidate"
+    assert payload["paddleocr_vl_gguf"]["worker_location"] == "remote"
+    assert payload["paddleocr_vl_gguf"]["worker_provider"] == "remote_vl_worker"
+    assert payload["paddleocr_vl_gguf"]["worker_url_host"] == "remote-gateway"
+    assert payload["paddleocr_vl_gguf"]["worker_transport"] == "multipart_upload"
+    assert payload["paddleocr_vl_gguf"]["worker_health"]["pipeline_initialized"] is True
+
+
 def test_provider_health_reports_gguf_primary_only_when_in_process_enabled(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()

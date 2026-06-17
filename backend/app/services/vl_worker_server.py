@@ -68,6 +68,7 @@ def health() -> dict[str, Any]:
         "concurrency": settings.paddleocr_vl_gguf_concurrency,
         "max_pages": settings.paddleocr_vl_gguf_max_pages,
         "n_predict": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+        "worker_transport": "multipart_upload",
         "last_error": _last_error,
     }
 
@@ -204,6 +205,10 @@ def _base_report(
         "provider_available_candidate": False,
         "provider_available_decision_reason": decision_reason,
         "worker_transport": (transport_metadata or {}).get("mode"),
+        "worker_location": "worker_runtime",
+        "worker_provider": "vl_worker_api",
+        "model_name": "PaddleOCR-VL-1.6-GGUF",
+        "n_predict": getattr(get_settings(), "paddleocr_vl_gguf_n_predict", 512),
         "remote_upload": transport_metadata or {},
         "manual_visual_check": {
             "sample": str(path),

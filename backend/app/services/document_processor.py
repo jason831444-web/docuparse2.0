@@ -35,6 +35,18 @@ logger = logging.getLogger(__name__)
 _PROCESSING_SEMAPHORE = threading.BoundedSemaphore(3)
 
 
+def _safe_remote_upload_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    metadata: dict[str, Any] = {}
+    for key in ("mode", "uploaded_bytes", "content_type"):
+        if value.get(key) not in (None, "", []):
+            metadata[key] = value.get(key)
+    if value.get("saved_path"):
+        metadata["saved_path_present"] = True
+    return metadata
+
+
 class DocumentProcessor:
     def __init__(self, ocr: OCRService | None = None, parser: DocumentParser | None = None) -> None:
         self.settings = get_settings()
@@ -673,6 +685,14 @@ class DocumentProcessor:
             "fallback_reason": result.get("fallback_reason"),
             "elapsed_ms": result.get("elapsed_ms"),
             "provider_available_decision_reason": result.get("provider_available_decision_reason"),
+            "worker_transport": result.get("worker_transport"),
+            "worker_location": result.get("worker_location"),
+            "worker_provider": result.get("worker_provider"),
+            "worker_url_host": result.get("worker_url_host"),
+            "timeout_seconds": result.get("timeout_seconds"),
+            "model_name": result.get("model_name") or result.get("model") or "PaddleOCR-VL-1.6-GGUF",
+            "n_predict": result.get("n_predict"),
+            "remote_upload": _safe_remote_upload_metadata(result.get("remote_upload")),
         }
         text = result.get("text") or result.get("text_preview")
         if not isinstance(text, str) or not text.strip():

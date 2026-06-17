@@ -15,11 +15,21 @@ export function providerHealthLabel(health: ProviderHealth | null): { label: str
   const candidateReady = providers.primary_provider_candidate_available || providers.paddleocr_vl_gguf?.candidate_available;
   const primaryReaderReady = providers.primary_reader_available || providers.paddleocr_vl_gguf?.primary_reader_available;
   const vlModel = providers.paddleocr_vl_gguf?.model_file || providers.ocr_model || "PaddleOCR-VL-1.6-GGUF";
+  const workerLocation = providers.paddleocr_vl_gguf?.worker_location;
+  const workerTransport = providers.paddleocr_vl_gguf?.worker_transport;
+  const workerHost = providers.paddleocr_vl_gguf?.worker_url_host;
+  const remoteWorker = workerLocation === "remote";
+  const workerLabel = remoteWorker
+    ? "Remote GPU"
+    : workerLocation === "local"
+      ? "Local CPU"
+      : "GGUF";
+  const transportLabel = workerTransport === "multipart_upload" ? " · Multipart Upload" : "";
 
   if (isGgufPrimary && (providers.primary_provider_available || primaryReaderReady)) {
     return {
-      label: `VL Reader 정상 · GGUF${device}`,
-      detail: `Primary reader: ${providers.primary_provider}. Model: ${vlModel}. Confirmed business-data values still pass parser/validation. Fallback OCR: ${providers.fallback_provider || "PP-OCRv4"}.`,
+      label: `VL Reader 정상 · ${workerLabel}${transportLabel}`,
+      detail: `Primary reader: ${providers.primary_provider}. Model: ${vlModel}. Worker: ${workerLabel}${workerHost ? ` (${workerHost})` : ""}. Confirmed business-data values still pass parser/validation. Fallback OCR: ${providers.fallback_provider || "PP-OCRv4"}.`,
       tone: "primary",
     };
   }
