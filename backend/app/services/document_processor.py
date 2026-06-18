@@ -82,7 +82,8 @@ class DocumentProcessor:
         try:
             stored_path = Path(document.stored_file_path)
             vl_primary_attempt = self._vl_primary_reader_attempt(stored_path, document, {})
-            if vl_primary_attempt and vl_primary_attempt.get("promoted") and vl_primary_attempt.get("text"):
+            vl_primary_drives_reader = self._vl_primary_attempt_should_drive_reader(vl_primary_attempt)
+            if vl_primary_drives_reader:
                 normalized = self._vl_primary_normalized_document(
                     stored_path,
                     document,
@@ -93,7 +94,7 @@ class DocumentProcessor:
                 normalized = self.ingestion.ingest(stored_path, document.original_filename, document.mime_type)
             raw_text = normalized.normalized_text
             parsed = self.parser.parse(raw_text, document.original_filename)
-            vl_promoted_structured = self._vl_promoted_structured_candidate(vl_primary_attempt)
+            vl_promoted_structured = self._vl_primary_structured_candidate(vl_primary_attempt) if vl_primary_drives_reader else None
             if vl_promoted_structured:
                 self._apply_vl_structured_candidate_to_parsed(parsed, vl_promoted_structured)
                 self._reconcile_vl_parsed_with_pdf_text_layer(parsed, stored_path, normalized)
@@ -387,10 +388,12 @@ class DocumentProcessor:
             "processed_path_present": bool(input_variant.get("processed_path")),
             "error": input_variant.get("error"),
         }
+        has_structured_candidate = bool(self._vl_primary_structured_candidate({"metadata": metadata}))
         return {
             "metadata": metadata,
             "text": text,
             "promoted": bool((metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
+            "has_structured_candidate": has_structured_candidate,
         }
 
     def _vl_primary_normalized_document(
@@ -540,6 +543,43 @@ class DocumentProcessor:
                 return structured
         return None
 
+    def _vl_primary_structured_candidate(self, attempt: dict | None) -> dict | None:
+        if not isinstance(attempt, dict):
+            return None
+        promoted = self._vl_promoted_structured_candidate(attempt)
+        if promoted:
+            return promoted
+        metadata = attempt.get("metadata") if isinstance(attempt.get("metadata"), dict) else {}
+        summary = metadata.get("vl_candidate_summary") if isinstance(metadata.get("vl_candidate_summary"), dict) else {}
+        if summary.get("provider_available_candidate") is False:
+            return None
+        for candidate in metadata.get("vl_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            structured = candidate.get("structured_candidate") if isinstance(candidate.get("structured_candidate"), dict) else None
+            if structured and (candidate.get("parser_evaluated") or structured.get("line_items") or structured.get("document")):
+                return structured
+        return None
+
+    def _vl_primary_attempt_should_drive_reader(self, attempt: dict | None) -> bool:
+        if not isinstance(attempt, dict):
+            return False
+        metadata = attempt.get("metadata") if isinstance(attempt.get("metadata"), dict) else {}
+        summary = metadata.get("vl_candidate_summary") if isinstance(metadata.get("vl_candidate_summary"), dict) else {}
+        if summary.get("provider_available_candidate") is False:
+            return False
+        provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
+        table_count = int(provider_metadata.get("table_count") or 0)
+        if summary.get("gate_decision") == "reject":
+            return False
+        if summary.get("promotion_applied") or summary.get("promotion_mode") in {"full", "partial"}:
+            return True
+        if table_count and self._vl_primary_structured_candidate(attempt):
+            return True
+        if self._vl_primary_structured_candidate(attempt):
+            return summary.get("gate_decision") not in {"review_required", "reject"}
+        return False
+
     def _apply_vl_structured_candidate_to_parsed(self, parsed: Any, structured: dict) -> None:
         candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}
         if candidate_doc.get("document_type"):
@@ -569,12 +609,13 @@ class DocumentProcessor:
             parsed.extracted_date = issue_date
         if due_date:
             parsed.due_date = due_date
-        for attr, key in (("subtotal", "subtotal"), ("tax", "tax"), ("extracted_amount", "total")):
-            value = self._vl_decimal(candidate_doc.get(key))
-            if value is not None:
-                if attr in {"subtotal", "tax", "extracted_amount"} and value < 0:
-                    continue
-                setattr(parsed, attr, value)
+        if not self._vl_structured_candidate_is_amountless(structured):
+            for attr, key in (("subtotal", "subtotal"), ("tax", "tax"), ("extracted_amount", "total")):
+                value = self._vl_decimal(candidate_doc.get(key))
+                if value is not None:
+                    if attr in {"subtotal", "tax", "extracted_amount"} and value < 0:
+                        continue
+                    setattr(parsed, attr, value)
         line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
         if line_items:
             parsed.line_items = self._safe_vl_promoted_line_items(line_items)
@@ -740,7 +781,11 @@ class DocumentProcessor:
                 "processed_path_present": bool(input_variant.get("processed_path")),
             }
         text = result.get("text") or result.get("text_preview")
-        if not isinstance(text, str) or not text.strip():
+        if not isinstance(text, str):
+            text = ""
+        tables = result.get("tables") if isinstance(result.get("tables"), list) else None
+        provider_available_candidate = bool(result.get("ok") or tables)
+        if not text.strip() and not tables:
             fallback_reason = provider_metadata.get("fallback_reason") or "vl_worker_empty_or_unreadable_output"
             return {
                 "vl_provider_metadata": provider_metadata,
@@ -767,7 +812,7 @@ class DocumentProcessor:
         structured = self.vl_candidate_parser.parse_text(
             text,
             filename=document.original_filename,
-            tables=result.get("tables") if isinstance(result.get("tables"), list) else None,
+            tables=tables,
             validation=result.get("validation") if isinstance(result.get("validation"), dict) else None,
         )
         candidate = {
@@ -776,7 +821,7 @@ class DocumentProcessor:
             "candidate_only": True,
             "parser_integrated": False,
             "parser_evaluated": bool(structured),
-            "provider_available_candidate": bool(result.get("ok")),
+            "provider_available_candidate": provider_available_candidate,
             "validation_severity": result.get("classification"),
             "issue_codes": list((structured or {}).get("issue_codes") or []),
             "review_flags": list((structured or {}).get("review_flags") or (structured or {}).get("issue_codes") or []),
@@ -819,7 +864,7 @@ class DocumentProcessor:
                 "parser_evaluated": bool(structured),
                 "parsed_line_item_count": (structured or {}).get("line_item_count"),
                 "provider": provider_metadata["provider"],
-                "provider_available_candidate": bool(result.get("ok")),
+                "provider_available_candidate": provider_available_candidate,
                 "gate_decision": gate.get("decision"),
                 "gate_reasons": gate.get("reasons") or [],
                 "promotion_mode": gate.get("promotion_mode") or "none",
@@ -977,18 +1022,47 @@ class DocumentProcessor:
                 pass
             warnings = list(safe_item.get("validation_warnings") or [])
             warning_set = {str(warning) for warning in warnings}
-            if "explicit_quantity_price_amount_mismatch" in warning_set:
+            review_flags = list(safe_item.get("review_flags") or [])
+            hidden_amount_review = self._vl_line_item_has_hidden_amount_review_signal(safe_item, warning_set, review_flags)
+            if "explicit_quantity_price_amount_mismatch" in warning_set or hidden_amount_review:
                 for field in ("supply_amount", "tax_amount", "line_total"):
                     safe_item.pop(field, None)
-                if "vl_amount_suppressed_due_to_arithmetic_mismatch" not in warning_set:
-                    warnings.append("vl_amount_suppressed_due_to_arithmetic_mismatch")
+                suppression_code = (
+                    "vl_amount_suppressed_due_to_hidden_or_unverified_column"
+                    if hidden_amount_review
+                    else "vl_amount_suppressed_due_to_arithmetic_mismatch"
+                )
+                if suppression_code not in warning_set:
+                    warnings.append(suppression_code)
                 safe_item["validation_warnings"] = sorted(set(warnings))
-                review_flags = list(safe_item.get("review_flags") or [])
-                if "vl_amount_suppressed_due_to_arithmetic_mismatch" not in review_flags:
-                    review_flags.append("vl_amount_suppressed_due_to_arithmetic_mismatch")
+                if suppression_code not in review_flags:
+                    review_flags.append(suppression_code)
                 safe_item["review_flags"] = sorted(set(review_flags))
             safe_items.append(safe_item)
         return safe_items
+
+    def _vl_line_item_has_hidden_amount_review_signal(
+        self,
+        item: dict[str, Any],
+        warning_set: set[str],
+        review_flags: list[Any],
+    ) -> bool:
+        codes = set(warning_set)
+        codes.update(str(flag) for flag in review_flags if flag not in (None, ""))
+        codes.update(str(code) for code in item.get("issue_codes") or [] if code not in (None, ""))
+        hidden_fragments = (
+            "hidden",
+            "cropped",
+            "truncated",
+            "not_visible",
+            "not-visible",
+            "do_not_infer",
+            "missing_line_amount",
+            "amount_column_not_visible",
+            "row_amount_hidden",
+            "line_total_not_visible",
+        )
+        return any(any(fragment in code for fragment in hidden_fragments) for code in codes)
 
     def _line_items_for_extraction_method(self, line_items: list[dict], extraction_method: str | None) -> list[dict]:
         if extraction_method == "paddleocr_vl_1_6_gguf_primary_reader":

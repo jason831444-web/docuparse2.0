@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import logging
 import mimetypes
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -322,23 +324,31 @@ def _analyze_path(
                     else:
                         schema_metadata["repair_error"] = repair_error
         validation = validate_output_text(text, [])
+        official_table_available = bool(tables)
+        readable_output = bool(validation.get("ok") or official_table_available)
         if not tables:
             tables = _extract_structured_tables(text, output, original_filename=original_filename or path.name)
-        if validation.get("ok"):
+        if readable_output:
             _last_error = None
             _last_success_at = _utc_now_iso()
         report.update(
             {
-                "ok": bool(validation.get("ok")),
-                "classification": validation.get("status"),
+                "ok": readable_output,
+                "classification": validation.get("status") or ("warn" if official_table_available else None),
                 "validation": validation,
                 "render": {"image_path": str(image_path)},
                 "text_preview": text[:5000],
                 "structured_schema": VLM_STRUCTURED_OUTPUT_SCHEMA,
                 "schema_prompt": schema_metadata,
                 "tables": tables,
-                "provider_available_candidate": bool(validation.get("ok")),
-                "provider_available_decision_reason": "vl_worker_output_readable" if validation.get("ok") else "vl_worker_output_invalid",
+                "provider_available_candidate": readable_output,
+                "provider_available_decision_reason": (
+                    "paddleocrvl_official_table_available"
+                    if official_table_available and not validation.get("ok")
+                    else "vl_worker_output_readable"
+                    if validation.get("ok")
+                    else "vl_worker_output_invalid"
+                ),
             }
         )
     except Exception as exc:
@@ -687,12 +697,7 @@ def _official_parsing_blocks(output: Any) -> list[dict[str, Any]]:
     items = output if isinstance(output, (list, tuple)) else [output]
     for item in items or []:
         for payload in _official_json_payload_candidates(item):
-            if not isinstance(payload, dict):
-                continue
-            res = payload.get("res") if isinstance(payload.get("res"), dict) else payload
-            parsing = res.get("parsing_res_list") if isinstance(res, dict) else None
-            if isinstance(parsing, list):
-                blocks.extend(block for block in parsing if isinstance(block, dict))
+            blocks.extend(_collect_official_parsing_blocks(payload))
     return blocks
 
 
@@ -701,6 +706,8 @@ def _official_json_payload_candidates(item: Any) -> list[Any]:
     if isinstance(item, dict):
         candidates.append(item)
         if isinstance(item.get("json"), dict):
+            candidates.append(item["json"])
+        elif isinstance(item.get("json"), list):
             candidates.append(item["json"])
         if isinstance(item.get("res"), dict):
             candidates.append({"res": item["res"]})
@@ -718,7 +725,66 @@ def _official_json_payload_candidates(item: Any) -> list[Any]:
             candidates.append(value)
             if attr == "json":
                 return candidates
+        elif isinstance(value, list):
+            candidates.append(value)
+        elif isinstance(value, str) and value.strip().startswith(("{", "[")):
+            try:
+                candidates.append(json.loads(value))
+            except Exception:
+                pass
+    if not candidates:
+        candidates.extend(_official_json_payloads_from_save_to_json(item))
     return candidates
+
+
+def _official_json_payloads_from_save_to_json(item: Any) -> list[Any]:
+    method = getattr(item, "save_to_json", None)
+    if not callable(method):
+        return []
+    payloads: list[Any] = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="docparse_paddleocrvl_json_") as tmp:
+            tmp_path = Path(tmp)
+            try:
+                signature = inspect.signature(method)
+                parameters = signature.parameters
+                if "save_path" in parameters:
+                    method(save_path=str(tmp_path))
+                elif "save_dir" in parameters:
+                    method(save_dir=str(tmp_path))
+                else:
+                    method(str(tmp_path))
+            except TypeError:
+                try:
+                    method(str(tmp_path))
+                except TypeError:
+                    return []
+            for json_path in tmp_path.rglob("*.json"):
+                try:
+                    payloads.append(json.loads(json_path.read_text(encoding="utf-8")))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return payloads
+
+
+def _collect_official_parsing_blocks(payload: Any) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        for item in payload:
+            blocks.extend(_collect_official_parsing_blocks(item))
+        return blocks
+    if not isinstance(payload, dict):
+        return blocks
+    parsing = payload.get("parsing_res_list")
+    if isinstance(parsing, list):
+        blocks.extend(block for block in parsing if isinstance(block, dict))
+    for key in ("res", "result", "results", "page_res_list", "pages", "data"):
+        nested = payload.get(key)
+        if nested is not None:
+            blocks.extend(_collect_official_parsing_blocks(nested))
+    return blocks
 
 
 def _parse_html_table_rows(html_table: str) -> list[list[str]]:

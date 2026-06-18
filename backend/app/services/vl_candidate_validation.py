@@ -107,6 +107,11 @@ class VLCandidateValidationGate:
             has_non_promotable_issue = bool(set(issue_codes) & self.non_promotable_issue_codes) or any(
                 code.startswith("vl_candidate_invalid_") for code in issue_codes
             )
+            if (
+                "vl_candidate_explicit_quantity_price_amount_mismatch" in issue_codes
+                and "vl_candidate_row_amount_hidden_do_not_infer" not in issue_codes
+            ):
+                has_non_promotable_issue = True
             can_partial_promote = (
                 "provider_candidate_not_available" not in reasons
                 and "structured_line_items_missing" not in reasons

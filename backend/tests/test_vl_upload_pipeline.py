@@ -494,6 +494,32 @@ def test_vl_upload_pipeline_suppresses_mismatched_amounts_at_final_assignment_bo
     assert "vl_amount_suppressed_due_to_arithmetic_mismatch" in safe_items[0]["review_flags"]
 
 
+def test_vl_upload_pipeline_suppresses_hidden_amount_columns_at_final_assignment_boundary():
+    line_items = [
+        {
+            "item_name": "Linear Guide Rail HGW20",
+            "quantity": 10,
+            "unit": "EA",
+            "unit_price": 45,
+            "supply_amount": 450,
+            "tax_amount": 0,
+            "line_total": 450,
+            "validation_warnings": ["row_amount_hidden_do_not_infer"],
+        }
+    ]
+
+    safe_items = DocumentProcessor()._line_items_for_extraction_method(
+        line_items,
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert safe_items[0]["unit_price"] == 45
+    assert "supply_amount" not in safe_items[0]
+    assert "tax_amount" not in safe_items[0]
+    assert "line_total" not in safe_items[0]
+    assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" in safe_items[0]["review_flags"]
+
+
 def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching():
     processor = DocumentProcessor()
     parsed = ParsedDocument(
@@ -836,6 +862,96 @@ def test_process_uses_partial_vl_primary_and_skips_ppocr_ingestion_for_review_ca
     assert summary["promotion_applied"] is True
     assert summary["promotion_mode"] == "partial"
     assert summary["partial_promotion_applied"] is True
+    assert summary["fallback_used"] is False
+
+
+def test_process_uses_official_table_without_text_and_skips_ppocr_ingestion(tmp_path):
+    path = tmp_path / "incoming-inspection.png"
+    path.write_bytes(b"fake image")
+    document = Document(
+        original_filename="incoming-inspection.png",
+        stored_file_path=str(path),
+        mime_type="image/png",
+        processing_status=ProcessingStatus.uploaded,
+        workflow_metadata={
+            "taxonomy": {
+                "document_profile": "quality_document",
+                "document_profiles": ["quality_document", "no_price_document"],
+            }
+        },
+    )
+    official_table = {
+        "table_type": "incoming_inspection",
+        "source": "paddleocrvl_official_table_html",
+        "columns": ["No", "품명", "Lot/Code", "입고수량", "검사항목", "판정", "비고"],
+        "rows": [
+            {
+                "no": 1,
+                "item_name": "스테인리스 브라젯",
+                "document_item_code": "BRK-SUS",
+                "received_quantity": 20,
+                "inspection_item": "외관/치수",
+                "result": "합격",
+                "note": "이상 없음",
+                "review_flags": ["paddleocrvl_official_table_review_required"],
+            },
+            {
+                "no": 2,
+                "item_name": "SUS 볼트",
+                "specification": "M5x20",
+                "document_item_code": "BOLT-M5X20",
+                "received_quantity": 120,
+                "inspection_item": "외관/치수",
+                "result": "합격",
+                "note": "치수 재확인",
+                "review_flags": ["paddleocrvl_official_table_review_required"],
+            },
+            {
+                "no": 3,
+                "item_name": "PCB Connector 12P",
+                "document_item_code": "CONN-12P",
+                "received_quantity": 20,
+                "inspection_item": "외관/치수",
+                "result": "합격",
+                "note": "이상 없음",
+                "review_flags": ["paddleocrvl_official_table_review_required"],
+            },
+        ],
+        "warnings": ["paddleocrvl_official_table_review_required", "inspection_report_no_amount_fields"],
+        "review_required": True,
+    }
+    processor = _processor(
+        FakeVLWorker(
+            {
+                "ok": True,
+                "provider": "paddleocr_vl_1_6_gguf",
+                "classification": "warn",
+                "text": "",
+                "tables": [official_table],
+                "validation": {"status": "warn", "ok": False},
+            }
+        )
+    )
+
+    class BrokenIngestion:
+        def ingest(self, *args, **kwargs):
+            raise AssertionError("PP-OCRv4 ingestion should be skipped for official table output")
+
+    processor.ingestion = BrokenIngestion()
+    processor._document_quality_for_source = lambda *args, **kwargs: (None, [])
+
+    result = processor.process(FakeSession(document), document)
+
+    assert result.extraction_method == "paddleocr_vl_1_6_gguf_primary_reader"
+    assert result.processing_status == ProcessingStatus.needs_review
+    assert result.document_type == DocumentType.inspection_report
+    assert len(result.line_items or []) == 3
+    assert result.line_items[0]["item_name"] == "스테인리스 브라젯"
+    assert result.line_items[0]["received_quantity"] == 20
+    assert result.line_items[1]["specification"] == "M5x20"
+    assert all("supply_amount" not in item and "line_total" not in item for item in result.line_items or [])
+    summary = result.workflow_metadata["vl_candidate_summary"]
+    assert summary["provider_available_candidate"] is True
     assert summary["fallback_used"] is False
 
 
