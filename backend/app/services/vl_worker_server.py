@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -720,17 +720,11 @@ def _official_parsing_blocks(output: Any) -> list[dict[str, Any]]:
 
 def _official_json_payload_candidates(item: Any) -> list[Any]:
     candidates: list[Any] = []
-    if isinstance(item, dict):
-        candidates.append(item)
-        if isinstance(item.get("json"), dict):
-            candidates.append(item["json"])
-        elif isinstance(item.get("json"), list):
-            candidates.append(item["json"])
-        if isinstance(item.get("res"), dict):
-            candidates.append({"res": item["res"]})
-    if candidates:
-        return candidates
-    for attr in ("json", "str"):
+
+    # PaddleOCRVLResult is dict-like, but the official structured payload lives
+    # under its `.json["res"]` property.  Read that first so the worker does not
+    # mistake the result wrapper itself for the final JSON payload.
+    for attr in ("json",):
         if not hasattr(item, attr):
             continue
         value = getattr(item, attr)
@@ -740,11 +734,30 @@ def _official_json_payload_candidates(item: Any) -> list[Any]:
             continue
         if isinstance(value, dict):
             candidates.append(value)
-            if attr == "json":
-                return candidates
         elif isinstance(value, list):
             candidates.append(value)
         elif isinstance(value, str) and value.strip().startswith(("{", "[")):
+            try:
+                candidates.append(json.loads(value))
+            except Exception:
+                pass
+    if isinstance(item, Mapping):
+        candidates.append(dict(item))
+        json_value = item.get("json")
+        if isinstance(json_value, (dict, list)):
+            candidates.append(json_value)
+        res_value = item.get("res")
+        if isinstance(res_value, dict):
+            candidates.append({"res": res_value})
+    for attr in ("str",):
+        if not hasattr(item, attr):
+            continue
+        value = getattr(item, attr)
+        try:
+            value = value() if callable(value) else value
+        except TypeError:
+            continue
+        if isinstance(value, str) and value.strip().startswith(("{", "[")):
             try:
                 candidates.append(json.loads(value))
             except Exception:
@@ -792,7 +805,7 @@ def _collect_official_parsing_blocks(payload: Any) -> list[dict[str, Any]]:
         for item in payload:
             blocks.extend(_collect_official_parsing_blocks(item))
         return blocks
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         return blocks
     parsing = payload.get("parsing_res_list")
     if isinstance(parsing, list):
