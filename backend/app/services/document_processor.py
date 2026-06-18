@@ -1018,6 +1018,7 @@ class DocumentProcessor:
             "vl_candidate_summary",
             "vl_preprocess_mode",
             "vl_preprocess_input",
+            "vl_preprocess_policy",
         ):
             if key in vl_metadata:
                 merged[key] = vl_metadata[key]
