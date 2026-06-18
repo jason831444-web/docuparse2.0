@@ -148,7 +148,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <div>
-              <CardTitle className="text-base">이번 주 납기 문서</CardTitle>
+              <CardTitle className="text-base">납기 캘린더</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">납기요청일/납기일을 우선해 표시합니다.</p>
             </div>
             <Button asChild variant="ghost" size="sm"><Link href="/calendar">전체 일정 <ArrowRight className="size-4" /></Link></Button>

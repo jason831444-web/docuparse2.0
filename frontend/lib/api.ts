@@ -1,6 +1,7 @@
 import type {
   ActivitySummary,
   AppNotification,
+  CalendarItemUpdate,
   DocumentCalendarItem,
   DocumentListResponse,
   DocumentRecord,
@@ -65,6 +66,8 @@ export const api = {
   categories: () => request<FolderSummary[]>("/documents/categories", { cache: "no-store" }),
   notifications: () => request<AppNotification[]>("/documents/notifications", { cache: "no-store" }),
   calendar: (params = new URLSearchParams()) => request<DocumentCalendarItem[]>(`/documents/calendar?${params.toString()}`, { cache: "no-store" }),
+  updateCalendarItem: (id: string, payload: CalendarItemUpdate) =>
+    request<DocumentRecord>(`/documents/${id}/calendar`, { method: "PATCH", body: JSON.stringify(payload) }),
   monthlyReport: (params: URLSearchParams) => request<MonthlyReport>(`/reports/monthly?${params.toString()}`, { cache: "no-store" }),
   createCategory: (payload: { label: string; parent?: string | null; category?: string | null }) =>
     request<FolderSummary>("/documents/categories", { method: "POST", body: JSON.stringify(payload) }),
@@ -203,10 +206,25 @@ function downloadBlob(blob: Blob, filename: string) {
   window.URL.revokeObjectURL(url);
 }
 
-function humanReadableApiError(detail: unknown) {
+export function humanReadableApiError(detail: unknown) {
   if (typeof detail === "string") return detail;
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return "요청에 실패했습니다";
   const record = detail as Record<string, unknown>;
+  const messageKo = typeof record.message_ko === "string" ? record.message_ko : null;
+  const actionKo = typeof record.action_ko === "string" ? record.action_ko : null;
+  const blockingDetails = Array.isArray(record.blocking_details) ? record.blocking_details : [];
+  const warningDetails = Array.isArray(record.warning_details) ? record.warning_details : [];
+  if (messageKo || blockingDetails.length) {
+    const readableBlocks = blockingDetails.map(readableApprovalDetail).filter(Boolean);
+    const readableWarnings = warningDetails.map(readableApprovalDetail).filter(Boolean);
+    const lines = [
+      messageKo || "아직 해결되지 않은 검토 항목이 있어 확정할 수 없습니다.",
+      ...readableBlocks.map((item) => `- ${item}`),
+      ...readableWarnings.map((item) => `- 참고: ${item}`),
+      actionKo || "문서 검토 영역에서 값을 수정한 뒤 ‘해결’을 누르거나, 업무상 문제 없으면 ‘무시’를 선택하세요.",
+    ];
+    return lines.join("\n");
+  }
   const message = typeof record.message === "string" ? record.message : null;
   const blocking = Array.isArray(record.blocking) ? record.blocking.map(String) : [];
   const warnings = Array.isArray(record.warnings) ? record.warnings.map(String) : [];
@@ -223,6 +241,15 @@ function humanReadableApiError(detail: unknown) {
   }
   if (message) return message;
   return JSON.stringify(detail);
+}
+
+function readableApprovalDetail(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const record = value as Record<string, unknown>;
+  const message = typeof record.message_ko === "string" ? record.message_ko : "";
+  const field = typeof record.field_label_ko === "string" ? record.field_label_ko : "";
+  const action = typeof record.action_ko === "string" ? record.action_ko : "";
+  return [message, field ? `(${field})` : "", action ? `조치: ${action}` : ""].filter(Boolean).join(" ");
 }
 
 function readableApprovalBlock(value: string) {

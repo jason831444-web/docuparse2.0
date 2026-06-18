@@ -411,6 +411,13 @@ export interface DocumentCalendarItem {
   action_url: string;
 }
 
+export interface CalendarItemUpdate {
+  date_role: string;
+  date: string;
+  original_date?: string | null;
+  label?: string | null;
+}
+
 export interface MonthlyReportSummary {
   total_documents: number;
   verified_documents: number;

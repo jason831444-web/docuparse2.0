@@ -25,6 +25,44 @@ The preferred operational path is to use the repo scripts from the RunPod pod:
 
 ```bash
 cd /workspace/docuparse-gpu-test/docuparse2.0
+scripts/runpod-bootstrap-vl-stack.sh
+```
+
+`runpod-bootstrap-vl-stack.sh` is the closest supported "git pull and recover"
+path for a restarted pod. It:
+
+- fetches and fast-forwards `main`;
+- creates `/workspace/docuparse-gpu-test/worker-venv` when it is missing;
+- installs the backend and PaddleOCR-VL worker dependencies into that venv;
+- verifies the official GGUF model and mmproj files;
+- optionally downloads the official PaddlePaddle bundle only when
+  `ALLOW_MODEL_DOWNLOAD=1` is set;
+- verifies `llama-server`, and can clone/build CUDA `llama.cpp` when the binary
+  is missing;
+- starts `llama-server` and `vl-worker-api` without duplicating existing PIDs;
+- runs the RunPod health check.
+
+That means the normal recovery command after a RunPod restart is:
+
+```bash
+cd /workspace/docuparse-gpu-test/docuparse2.0
+git pull --ff-only origin main
+scripts/runpod-bootstrap-vl-stack.sh
+```
+
+If the model directory is empty and you intentionally want the pod to download
+the official model bundle, run:
+
+```bash
+ALLOW_MODEL_DOWNLOAD=1 scripts/runpod-bootstrap-vl-stack.sh
+```
+
+The script never deletes models, logs, uploads, database volumes, or server
+files. It fails instead of using community GGUF artifacts.
+
+For manual checks after the stack is already running:
+
+```bash
 scripts/runpod-start-vl-stack.sh
 scripts/runpod-check-vl-stack.sh
 ```
@@ -43,7 +81,11 @@ It expects these default paths:
 - llama-server: `/opt/llama.cpp/build/bin/llama-server`
 
 You can override paths with environment variables such as `MODEL_DIR`,
-`DOCUPARSE_REPO`, `VENV_DIR`, `LLAMA_SERVER_BIN`, `LOG_DIR`, and `UPLOAD_DIR`.
+`DOCUPARSE_REPO`, `VENV_DIR`, `LLAMA_SERVER_BIN`, `LLAMA_CPP_DIR`, `LOG_DIR`,
+and `UPLOAD_DIR`. Set `INSTALL_PYTHON_DEPS=0` when the venv is already prepared
+and you only want to start/check processes. Set `ALLOW_LLAMA_CPP_BUILD=0` if you
+want bootstrap to fail rather than clone/build llama.cpp when the server binary
+is missing.
 
 To run a one-file inference smoke from the RunPod pod, pass `SMOKE_FILE`:
 
@@ -213,12 +255,14 @@ before all processes are ready. Do this sequence:
 1. SSH into RunPod.
 2. Check GPU availability with `nvidia-smi`.
 3. Run `scripts/runpod-start-vl-stack.sh`.
-4. Run `scripts/runpod-check-vl-stack.sh`.
-5. Confirm the DigitalOcean tunnel/forward is alive.
-6. On DigitalOcean, run `scripts/check-vl-worker.sh`.
-7. Upload one fixture through the normal UI/API path.
-8. Confirm RunPod logs show `POST /analyze-upload 200 OK`.
-9. Confirm document metadata includes `worker_transport=multipart_upload` and
+4. Or run `scripts/runpod-bootstrap-vl-stack.sh` to combine git sync, model
+   verification, start, and check.
+5. Run `scripts/runpod-check-vl-stack.sh`.
+6. Confirm the DigitalOcean tunnel/forward is alive.
+7. On DigitalOcean, run `scripts/check-vl-worker.sh`.
+8. Upload one fixture through the normal UI/API path.
+9. Confirm RunPod logs show `POST /analyze-upload 200 OK`.
+10. Confirm document metadata includes `worker_transport=multipart_upload` and
    `worker_location=remote`.
 
 RunPod start does not automatically guarantee that DigitalOcean is connected
@@ -233,13 +277,8 @@ template/start command can be configured with a variant of:
 ```bash
 set -euo pipefail
 cd /workspace/docuparse-gpu-test/docuparse2.0
-git fetch origin main
-git checkout main
 git pull --ff-only origin main
-test -f /workspace/docuparse_models/paddleocr_vl_1_6_gguf/PaddleOCR-VL-1.6-GGUF.gguf
-test -f /workspace/docuparse_models/paddleocr_vl_1_6_gguf/PaddleOCR-VL-1.6-GGUF-mmproj.gguf
-scripts/runpod-start-vl-stack.sh
-scripts/runpod-check-vl-stack.sh
+scripts/runpod-bootstrap-vl-stack.sh
 ```
 
 If a reverse tunnel is required, start it after the worker stack and record its

@@ -382,6 +382,8 @@ function LineItemField({
   infoIssues: ReturnType<typeof informationalReviewIssues>;
   onChange: (index: number, field: keyof ManufacturingLineItem, value: string) => void;
 }) {
+  const visibleInfoIssues = infoIssues.slice(0, 2);
+  const hiddenInfoCount = Math.max(0, infoIssues.length - visibleInfoIssues.length);
   return (
     <label className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
       {label}
@@ -398,11 +400,16 @@ function LineItemField({
               {numericLineItemFields.has(field) ? "확인 필요" : issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
             </Badge>
           ))}
-          {infoIssues.map((issue) => (
+          {visibleInfoIssues.map((issue) => (
             <Badge key={`${issue.code}-${issue.message_ko}`} variant="outline" className="bg-white text-[11px] text-slate-600">
               {issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
             </Badge>
           ))}
+          {hiddenInfoCount ? (
+            <Badge variant="outline" className="bg-white text-[11px] text-slate-500">
+              참고 {hiddenInfoCount}건 더보기
+            </Badge>
+          ) : null}
         </div>
       ) : low ? <p className="text-[11px] text-amber-700">확인 필요</p> : null}
     </label>

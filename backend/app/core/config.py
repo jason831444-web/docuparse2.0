@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     processing_mode: str = "inline"
     queue_backend: str = "local"
+    background_processing_enabled: bool = True
     document_processing_concurrency: int = Field(default=3, ge=1, le=16)
     ai_provider: str = "auto"
     ai_model: str = "gpt-4o-mini"

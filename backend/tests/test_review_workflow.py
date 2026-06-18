@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from app.models.document import Document, DocumentType, ProcessingStatus
 from app.services.export import document_to_json, documents_to_csv
-from app.services.review_workflow import approve_document, update_issue_status, validate_approval
+from app.services.review_workflow import approval_error_payload, approve_document, update_issue_status, validate_approval
 
 
 def _document(**kwargs) -> Document:
@@ -54,6 +54,31 @@ def test_approval_blocks_unresolved_critical_issue_until_resolved():
     assert approved.ok is True
     assert document.workflow_metadata["review"]["approved"] is True
     assert document.workflow_metadata["review"]["approval_note"] == "확인 완료"
+
+
+def test_approval_error_payload_is_user_facing_korean_without_raw_codes():
+    document = _document(workflow_metadata={
+        "taxonomy": {"document_profile": "priced_document", "document_profiles": ["priced_document"], "amount_required": True, "party_required": True},
+        "normalized_review_issues": [{
+            "code": "internal_item_ambiguous",
+            "message_ko": "1번째 품목의 내부 품목코드 후보를 선택해야 합니다.",
+            "field": "line_items.internal_item_code",
+            "item_index": 0,
+        }],
+    })
+
+    validation = approve_document(document)
+    payload = approval_error_payload(document, validation)
+
+    assert payload["message_ko"] == "아직 해결되지 않은 검토 항목이 있어 확정할 수 없습니다."
+    assert payload["blocking"] == ["1번째 품목의 내부 품목코드 후보를 선택해야 합니다."]
+    assert payload["blocking_details"][0]["field_label_ko"] == "내부 품목코드"
+    assert payload["blocking_details"][0]["item_label_ko"] == "1번째 품목"
+    assert "해결" in payload["action_ko"]
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "Approval blocked" not in serialized
+    assert "unresolved:" not in serialized
+    assert "internal_item_ambiguous" not in serialized
 
 
 def test_no_price_document_can_be_approved_without_total_or_currency():

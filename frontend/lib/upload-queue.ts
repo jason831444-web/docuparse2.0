@@ -1,4 +1,5 @@
 import type { DocumentRecord } from "@/types/document";
+import { ApiRequestError } from "@/lib/api";
 
 export const DEFAULT_UPLOAD_CONCURRENCY = 3;
 export const RECOMMENDED_MAX_UPLOAD_FILES = 20;
@@ -144,6 +145,21 @@ export function markUploadFailed(items: UploadQueueItem<UploadQueueFileLike>[], 
 }
 
 export function explainUploadError(error: unknown): string {
+  if (error instanceof ApiRequestError) {
+    const detailText = apiErrorDetailText(error.detail);
+    if (error.status === 413) {
+      return "파일 용량이 업로드 제한을 넘었습니다. 파일을 나누거나 해상도를 낮춘 뒤 다시 올리세요.";
+    }
+    if (error.status === 415) {
+      return "지원하지 않는 파일 형식입니다. PDF, 이미지, 엑셀/문서 파일인지 확인하세요.";
+    }
+    if (error.status >= 500) {
+      return detailText
+        ? `서버 처리 중 오류가 발생했습니다. 문서는 접수되지 않았을 수 있습니다. 잠시 후 다시 시도하세요. (${detailText})`
+        : "서버 처리 중 오류가 발생했습니다. 문서는 접수되지 않았을 수 있습니다. 잠시 후 다시 시도하세요.";
+    }
+    return detailText || error.message || "업로드 요청을 처리하지 못했습니다.";
+  }
   const message = error instanceof Error ? error.message : String(error || "");
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return "백엔드에 연결하지 못했습니다. 서버가 실행 중인지 확인한 뒤 다시 시도하세요.";
@@ -155,6 +171,16 @@ export function explainUploadError(error: unknown): string {
     return "새로고침 후에는 파일을 다시 선택해야 합니다.";
   }
   return message || "업로드에 실패했습니다";
+}
+
+function apiErrorDetailText(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return "";
+  const record = detail as Record<string, unknown>;
+  if (typeof record.message === "string") return record.message;
+  if (typeof record.detail === "string") return record.detail;
+  if (typeof record.error === "string") return record.error;
+  return "";
 }
 
 export function retryUploadItem(items: UploadQueueItem<UploadQueueFileLike>[], id: string) {

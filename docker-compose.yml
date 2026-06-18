@@ -30,8 +30,9 @@ services:
       BACKEND_BASE_URL: http://localhost:8001
       CORS_ORIGINS: '["http://localhost:3001"]'
       STORAGE_BACKEND: local
-      PROCESSING_MODE: inline
+      PROCESSING_MODE: queued
       QUEUE_BACKEND: local
+      BACKGROUND_PROCESSING_ENABLED: ${BACKGROUND_PROCESSING_ENABLED:-false}
       DOCUMENT_PROCESSING_CONCURRENCY: ${DOCUMENT_PROCESSING_CONCURRENCY:-3}
       AI_INTERPRETATION_ENABLED: ${AI_INTERPRETATION_ENABLED:-false}
       AI_INTERPRETATION_PROVIDER: ${AI_INTERPRETATION_PROVIDER:-llama_cpp}
@@ -84,6 +85,84 @@ services:
       PADDLE_DISABLE_SIGNAL_HANDLER: "1"
     ports:
       - "8001:8000"
+    volumes:
+      - uploaded_files:/app/uploads
+      - model_cache:/app/models
+      - ${PADDLEOCR_VL_GGUF_HOST_MODEL_DIR:-./models/paddleocr_vl_1_6_gguf}:/app/models/paddleocr_vl_1_6_gguf:ro
+      - ./models/gguf:/models/gguf:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      ocr-worker:
+        condition: service_started
+      backend-worker:
+        condition: service_started
+
+  backend-worker:
+    profiles:
+      - backend
+    build:
+      context: ./backend
+      args:
+        INSTALL_OCR_DEPS: ${INSTALL_OCR_DEPS:-true}
+        INSTALL_LLAMA_CPP_DEPS: ${INSTALL_LLAMA_CPP_DEPS:-true}
+        INSTALL_AI_DEPS: ${INSTALL_AI_DEPS:-false}
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://docuparse:docuparse@db:5432/docuparse
+      UPLOAD_DIR: /app/uploads
+      BACKEND_BASE_URL: http://localhost:8001
+      STORAGE_BACKEND: local
+      PROCESSING_MODE: queued
+      QUEUE_BACKEND: local
+      BACKGROUND_PROCESSING_ENABLED: "false"
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-1}
+      DOCUMENT_PROCESSING_CONCURRENCY: ${DOCUMENT_PROCESSING_CONCURRENCY:-3}
+      AI_INTERPRETATION_ENABLED: ${AI_INTERPRETATION_ENABLED:-false}
+      AI_INTERPRETATION_PROVIDER: ${AI_INTERPRETATION_PROVIDER:-llama_cpp}
+      AI_INTERPRETATION_MODEL: ${AI_INTERPRETATION_MODEL:-gguf-local}
+      AI_INTERPRETATION_FALLBACK_MODEL: ${AI_INTERPRETATION_FALLBACK_MODEL:-google/gemma-2-2b-it}
+      AI_INTERPRETATION_ENABLE_MODEL_FALLBACK: ${AI_INTERPRETATION_ENABLE_MODEL_FALLBACK:-true}
+      AI_INTERPRETATION_FORCE_SMALL_MODEL: ${AI_INTERPRETATION_FORCE_SMALL_MODEL:-false}
+      AI_INTERPRETATION_LOCAL_PREFER_SMALL_MODEL: ${AI_INTERPRETATION_LOCAL_PREFER_SMALL_MODEL:-false}
+      LLAMA_CPP_MODEL_PATH: /models/gguf/${LLAMA_CPP_MODEL_FILE:-gemma-3-4b-it-q4_0.gguf}
+      LLAMA_CPP_CONTEXT_WINDOW: ${LLAMA_CPP_CONTEXT_WINDOW:-4096}
+      LLAMA_CPP_THREADS: ${LLAMA_CPP_THREADS:-0}
+      LLAMA_CPP_GPU_LAYERS: ${LLAMA_CPP_GPU_LAYERS:-0}
+      LLAMA_CPP_MAX_TOKENS: ${LLAMA_CPP_MAX_TOKENS:-700}
+      LLAMA_CPP_TEMPERATURE: ${LLAMA_CPP_TEMPERATURE:-0.1}
+      AI_PRIMARY_PROVIDER: ${AI_PRIMARY_PROVIDER:-paddleocr_vl_1_6_gguf}
+      AI_SECONDARY_PROVIDER: heuristic_fallback
+      AI_ENABLE_SECOND_PASS: "false"
+      AI_SECOND_PASS_CONFIDENCE_THRESHOLD: "0.80"
+      AI_MODEL_DIR: /app/models
+      OCR_FALLBACK_PROVIDER: paddleocr_ppocrv4
+      ENABLE_PADDLEOCR_VL_GGUF: ${ENABLE_PADDLEOCR_VL_GGUF:-true}
+      PADDLEOCR_VL_GGUF_REPO_ID: ${PADDLEOCR_VL_GGUF_REPO_ID:-PaddlePaddle/PaddleOCR-VL-1.6-GGUF}
+      PADDLEOCR_VL_GGUF_MODEL_DIR: /app/models/paddleocr_vl_1_6_gguf
+      PADDLEOCR_VL_GGUF_MODEL_FILE: ${PADDLEOCR_VL_GGUF_MODEL_FILE:-PaddleOCR-VL-1.6-GGUF.gguf}
+      PADDLEOCR_VL_GGUF_MMPROJ_FILE: ${PADDLEOCR_VL_GGUF_MMPROJ_FILE:-PaddleOCR-VL-1.6-GGUF-mmproj.gguf}
+      PADDLEOCR_VL_GGUF_SERVER_URL: ${PADDLEOCR_VL_GGUF_SERVER_URL:-http://vl-worker-gguf:8080/v1}
+      PADDLEOCR_VL_GGUF_WORKER_URL: ${PADDLEOCR_VL_GGUF_WORKER_URL:-http://vl-worker-api:8020}
+      PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS: ${PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS:-240}
+      PADDLEOCR_VL_GGUF_MAX_PAGES: ${PADDLEOCR_VL_GGUF_MAX_PAGES:-1}
+      PADDLEOCR_VL_GGUF_CONCURRENCY: ${PADDLEOCR_VL_GGUF_CONCURRENCY:-1}
+      PADDLEOCR_VL_GGUF_SMOKE_PASSED: ${PADDLEOCR_VL_GGUF_SMOKE_PASSED:-true}
+      PADDLEOCR_VL_GGUF_PRIMARY_READER_ENABLED: ${PADDLEOCR_VL_GGUF_PRIMARY_READER_ENABLED:-true}
+      PADDLEOCR_VL_GGUF_UPLOAD_PIPELINE_ENABLED: ${PADDLEOCR_VL_GGUF_UPLOAD_PIPELINE_ENABLED:-true}
+      PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED: ${PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED:-false}
+      ENABLE_PADDLEOCR_VL: ${ENABLE_PADDLEOCR_VL:-false}
+      PADDLEOCR_TIMEOUT_SECONDS: ${PADDLEOCR_TIMEOUT_SECONDS:-600}
+      OCR_WORKER_URL: ${OCR_WORKER_URL:-http://ocr-worker:8010}
+      PREFER_OCR_WORKER: ${PREFER_OCR_WORKER:-true}
+      OCR_WORKER_TIMEOUT_SECONDS: ${OCR_WORKER_TIMEOUT_SECONDS:-300}
+      LOCAL_PADDLEOCR_ENABLED: ${LOCAL_PADDLEOCR_ENABLED:-false}
+      FLAGS_use_onednn: "0"
+      FLAGS_use_mkldnn: "0"
+      FLAGS_enable_pir_api: "0"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      PADDLE_DISABLE_SIGNAL_HANDLER: "1"
     volumes:
       - uploaded_files:/app/uploads
       - model_cache:/app/models

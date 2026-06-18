@@ -37,8 +37,9 @@ def test_settings_default_to_gguf_candidate_with_full_vl_disabled():
 
 def test_document_processing_concurrency_can_be_configured(tmp_path: Path):
     env_file = tmp_path / ".env"
-    env_file.write_text("DOCUMENT_PROCESSING_CONCURRENCY=2\n")
+    env_file.write_text("DOCUMENT_PROCESSING_CONCURRENCY=2\nBACKGROUND_PROCESSING_ENABLED=false\n")
 
     settings = Settings(_env_file=env_file)
 
     assert settings.document_processing_concurrency == 2
+    assert settings.background_processing_enabled is False

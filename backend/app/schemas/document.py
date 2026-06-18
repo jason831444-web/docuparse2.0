@@ -35,6 +35,13 @@ class DocumentUpdate(DocumentBase):
     is_favorite: bool | None = None
 
 
+class CalendarItemUpdate(BaseModel):
+    date_role: str = Field(max_length=80)
+    date: date
+    original_date: date | None = None
+    label: str | None = Field(default=None, max_length=80)
+
+
 class DocumentRead(DocumentBase):
     id: UUID
     original_filename: str

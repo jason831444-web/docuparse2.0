@@ -10,11 +10,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Qu
 from sqlalchemy import String, and_, asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models.document import CategoryFolder, Document, DocumentType, ProcessingStatus
 from app.schemas.document import (
     ActivitySummary,
     BulkDocumentRequest,
+    CalendarItemUpdate,
     CategoryFolderCreate,
     DocumentCalendarItem,
     DocumentListResponse,
@@ -34,7 +36,7 @@ from app.services.queue_service import get_document_queue
 from app.services.storage import get_storage_service
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 from app.services.document_processor import DocumentProcessor
-from app.services.review_workflow import approve_document, reopen_document, review_metadata, update_issue_status
+from app.services.review_workflow import approval_error_payload, approve_document, reopen_document, review_metadata, update_issue_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -100,7 +102,8 @@ def upload_document(
     db.commit()
     db.refresh(document)
     document = get_document_queue().enqueue(db, document, process_inline=False)
-    background_tasks.add_task(_process_document_in_background, document.id)
+    if get_settings().background_processing_enabled:
+        background_tasks.add_task(_process_document_in_background, document.id)
     return _to_read(document)
 
 
@@ -262,6 +265,53 @@ def list_calendar_items(
             ))
     items.sort(key=lambda item: (abs(item.days_from_today) if item.days_from_today < 0 else item.days_from_today, item.date))
     return items[:limit]
+
+
+@router.patch("/{document_id}/calendar", response_model=DocumentRead)
+def update_document_calendar_item(document_id: UUID, payload: CalendarItemUpdate, db: Session = Depends(get_db)) -> DocumentRead:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    role = payload.date_role.strip().lower()
+    if role == "issue_date":
+        document.issue_date = payload.date
+        document.extracted_date = payload.date
+    elif role == "due_date":
+        document.due_date = payload.date
+    elif role == "key_date":
+        original = payload.original_date
+        next_value = payload.date.isoformat()
+        existing = [str(item) for item in (document.key_dates or [])]
+        replaced = False
+        key_dates: list[str] = []
+        for item in existing:
+            if original and original.isoformat() in item and not replaced:
+                key_dates.append(next_value)
+                replaced = True
+            else:
+                key_dates.append(item)
+        if not replaced:
+            key_dates.append(next_value)
+        document.key_dates = key_dates
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported calendar date role.")
+
+    metadata = dict(document.workflow_metadata or {})
+    overrides = metadata.get("calendar_overrides")
+    if not isinstance(overrides, list):
+        overrides = []
+    overrides.append({
+        "date_role": role,
+        "date": payload.date.isoformat(),
+        "original_date": payload.original_date.isoformat() if payload.original_date else None,
+        "label": payload.label,
+    })
+    metadata["calendar_overrides"] = overrides[-20:]
+    document.workflow_metadata = sanitize_for_postgres(metadata)
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return _to_read(document)
 
 
 @router.get("/categories", response_model=list[FolderSummary])
@@ -490,7 +540,7 @@ def confirm_document(document_id: UUID, payload: ReviewApprovalRequest | None = 
     if not validation.ok:
         db.add(document)
         db.commit()
-        raise HTTPException(status_code=409, detail={"message": "Approval blocked by unresolved review issues.", **validation.to_dict()})
+        raise HTTPException(status_code=409, detail=approval_error_payload(document, validation))
     document.review_required = False
     document.processing_status = ProcessingStatus.confirmed
     db.add(document)

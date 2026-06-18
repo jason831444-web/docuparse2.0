@@ -5,7 +5,9 @@ import Link from "next/link";
 import { CalendarDays, Clock3, TriangleAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, isReviewActionable, preferredCalendarItems, primaryCategoryLabel } from "@/lib/utils";
 import type { DocumentCalendarItem } from "@/types/document";
@@ -20,10 +22,35 @@ function toneFor(item: DocumentCalendarItem) {
 export default function CalendarPage() {
   const [items, setItems] = useState<DocumentCalendarItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadCalendar = () => {
+    setLoading(true);
+    api.calendar().then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
+  };
 
   useEffect(() => {
-    api.calendar().then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
+    loadCalendar();
   }, []);
+
+  const saveCalendarItem = async (item: DocumentCalendarItem, nextDate: string) => {
+    setSavingId(item.id);
+    setError(null);
+    try {
+      await api.updateCalendarItem(item.document_id, {
+        date_role: item.date_role,
+        date: nextDate,
+        original_date: item.date,
+        label: item.date_label,
+      });
+      await api.calendar().then(setItems);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "일정을 저장하지 못했습니다.");
+    } finally {
+      setSavingId(null);
+    }
+  };
 
   const grouped = useMemo(() => {
     return preferredCalendarItems(items).reduce<Record<string, DocumentCalendarItem[]>>((groups, item) => {
@@ -47,6 +74,7 @@ export default function CalendarPage() {
         </div>
         <Badge variant="outline">{items.length}개 일정</Badge>
       </div>
+      {error ? <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</div> : null}
 
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         <Card>
@@ -55,7 +83,7 @@ export default function CalendarPage() {
             <Clock3 className="size-5 text-primary" />
           </CardHeader>
           <CardContent className="space-y-3">
-            {upcoming.length ? upcoming.map((item) => <CalendarRow key={item.id} item={item} />) : <p className="text-sm text-muted-foreground">다가오는 일정이 없습니다.</p>}
+            {upcoming.length ? upcoming.map((item) => <CalendarRow key={item.id} item={item} saving={savingId === item.id} onSave={saveCalendarItem} />) : <p className="text-sm text-muted-foreground">다가오는 일정이 없습니다.</p>}
           </CardContent>
         </Card>
         <Card>
@@ -64,7 +92,7 @@ export default function CalendarPage() {
             <TriangleAlert className="size-5 text-amber-600" />
           </CardHeader>
           <CardContent className="space-y-3">
-            {overdue.length ? overdue.map((item) => <CalendarRow key={item.id} item={item} />) : <p className="text-sm text-muted-foreground">지난 일정이 없습니다.</p>}
+            {overdue.length ? overdue.map((item) => <CalendarRow key={item.id} item={item} saving={savingId === item.id} onSave={saveCalendarItem} />) : <p className="text-sm text-muted-foreground">지난 일정이 없습니다.</p>}
           </CardContent>
         </Card>
       </div>
@@ -79,7 +107,7 @@ export default function CalendarPage() {
                 <CardTitle>{month}</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-3">
-                {monthItems.map((item) => <CalendarRow key={item.id} item={item} />)}
+                {monthItems.map((item) => <CalendarRow key={item.id} item={item} saving={savingId === item.id} onSave={saveCalendarItem} />)}
               </CardContent>
             </Card>
           ))
@@ -93,13 +121,34 @@ export default function CalendarPage() {
   );
 }
 
-function CalendarRow({ item }: { item: DocumentCalendarItem }) {
+function CalendarRow({
+  item,
+  saving,
+  onSave,
+}: {
+  item: DocumentCalendarItem;
+  saving: boolean;
+  onSave: (item: DocumentCalendarItem, nextDate: string) => Promise<void>;
+}) {
   const schedule = getCalendarItemScheduleDate(item);
+  const [editing, setEditing] = useState(false);
+  const [draftDate, setDraftDate] = useState(schedule.date);
+  useEffect(() => {
+    setDraftDate(schedule.date);
+  }, [schedule.date]);
   return (
-    <Link href={item.action_url} className="grid gap-3 rounded-lg border bg-white p-4 transition hover:border-primary/30 hover:shadow-sm md:grid-cols-[140px_1fr_auto] md:items-center">
+    <div className="grid gap-3 rounded-lg border bg-white p-4 transition hover:border-primary/30 hover:shadow-sm md:grid-cols-[140px_1fr_auto] md:items-center">
       <div className="flex items-center gap-2 text-sm font-medium">
         <CalendarDays className="size-4 text-primary" />
-        {formatDate(schedule.date)}
+        {editing ? (
+          <Input
+            aria-label={`${formatCalendarItemTitle(item)} 일정 날짜`}
+            type="date"
+            className="h-9"
+            value={draftDate}
+            onChange={(event) => setDraftDate(event.target.value)}
+          />
+        ) : formatDate(schedule.date)}
       </div>
       <div className="min-w-0">
         <p className="truncate font-medium">{formatCalendarItemTitle(item)}</p>
@@ -110,7 +159,26 @@ function CalendarRow({ item }: { item: DocumentCalendarItem }) {
         <Badge variant="outline">{schedule.label}</Badge>
         {schedule.fallback ? <Badge variant="outline">fallback</Badge> : null}
         {isReviewActionable(item) ? <Badge className="bg-amber-100 text-amber-800">검토 필요</Badge> : null}
+        {editing ? (
+          <>
+            <Button type="button" size="sm" disabled={saving || !draftDate} onClick={() => onSave(item, draftDate).then(() => setEditing(false))}>
+              저장
+            </Button>
+            <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => { setDraftDate(schedule.date); setEditing(false); }}>
+              취소
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>
+              날짜 수정
+            </Button>
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href={item.action_url}>문서 보기</Link>
+            </Button>
+          </>
+        )}
       </div>
-    </Link>
+    </div>
   );
 }

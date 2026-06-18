@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { FolderSummary } from "@/types/document";
 
+type FolderTreeNode = FolderSummary & { children: FolderSummary[] };
+
 export default function CategoriesPage() {
   const [folders, setFolders] = useState<FolderSummary[]>([]);
   const [label, setLabel] = useState("");
@@ -60,6 +62,7 @@ export default function CategoriesPage() {
     .filter((folder) => folder.count > 0)
     .sort((a, b) => b.count - a.count || b.needs_review - a.needs_review || a.label.localeCompare(b.label));
   const emptyCustomFolders = folders.filter((folder) => folder.custom && folder.count === 0);
+  const folderTree = buildFolderTree(folders);
 
   return (
     <main className="shell py-8">
@@ -68,7 +71,7 @@ export default function CategoriesPage() {
           <p className="text-sm font-medium uppercase tracking-normal text-muted-foreground">문서 유형 분류</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-normal">제조업 문서 유형별 분류</h1>
           <p className="mt-2 text-muted-foreground">
-            발주서, 견적서, 거래명세서, 납품서 등 AI가 분류한 업무 문서 유형과 검토 상태를 확인합니다.
+            발주서, 견적서, 거래명세서, 납품서 등 AI가 분류한 업무 문서 유형과 회사별 하위 폴더를 트리 구조로 확인합니다.
           </p>
         </div>
         <div className="rounded-lg border bg-white px-4 py-3 text-sm text-muted-foreground">
@@ -121,7 +124,7 @@ export default function CategoriesPage() {
         <CardContent className="grid gap-4 p-5 lg:grid-cols-[1.2fr_1fr_auto]">
           <div>
             <p className="text-sm font-medium">문서 유형 만들기</p>
-            <p className="mt-1 text-sm text-muted-foreground">업무에 필요한 분류를 미리 만들고, 사용하지 않으면 나중에 삭제할 수 있습니다.</p>
+            <p className="mt-1 text-sm text-muted-foreground">거래처명 같은 상위 폴더를 만들고 그 아래에 발주서, 납품서, 세금계산서 같은 하위 폴더를 둘 수 있습니다.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:col-span-1">
             <Input placeholder="새 문서 유형" value={label} onChange={(event) => setLabel(event.target.value)} />
@@ -137,7 +140,39 @@ export default function CategoriesPage() {
         </CardContent>
       </Card>
 
-      {activeFolders.length ? (
+      {folderTree.length ? (
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">폴더 트리</h2>
+            <p className="text-sm text-muted-foreground">상위 폴더 안에서 다시 문서 유형별로 나눠 볼 수 있습니다</p>
+          </div>
+          <div className="grid gap-4">
+            {folderTree.map((folder) => (
+              <div key={folder.value} className="rounded-xl border bg-slate-50/70 p-3">
+                <FolderCard
+                  folder={folder}
+                  href={`/categories/${encodeURIComponent(folder.value)}`}
+                  onDelete={folder.custom && folder.count === 0 ? () => deleteFolder(folder) : undefined}
+                />
+                {folder.children.length ? (
+                  <div className="mt-3 grid gap-3 border-l-2 border-slate-200 pl-4 md:grid-cols-2 xl:grid-cols-3">
+                    {folder.children.map((child) => (
+                      <FolderCard
+                        key={child.value}
+                        folder={child}
+                        href={`/categories/${encodeURIComponent(child.value)}`}
+                        onDelete={child.custom && child.count === 0 ? () => deleteFolder(child) : undefined}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {activeFolders.length && !folderTree.length ? (
         <section>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">사용 중인 문서 유형</h2>
@@ -180,4 +215,17 @@ export default function CategoriesPage() {
       ) : null}
     </main>
   );
+}
+
+function buildFolderTree(folders: FolderSummary[]): FolderTreeNode[] {
+  const byValue = new Map(folders.map((folder) => [folder.value, folder]));
+  const roots: FolderTreeNode[] = [];
+  for (const folder of folders) {
+    if (folder.parent && byValue.has(folder.parent)) continue;
+    const children = folders
+      .filter((candidate) => candidate.parent === folder.value || candidate.value.startsWith(`${folder.value}>`))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    roots.push({ ...folder, children });
+  }
+  return roots.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
