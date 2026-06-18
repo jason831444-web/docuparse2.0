@@ -861,17 +861,19 @@ def test_vl_candidate_parser_structures_handwritten_transaction_statement_rows()
     assert "vl_candidate_handwritten_vl_candidate" in candidate["issue_codes"]
 
 
-def test_vl_candidate_parser_does_not_promote_settlement_summary_lines_as_items():
+def test_vl_candidate_parser_keeps_non_manufacturing_settlement_review_only():
     candidate = VLCandidateParser().parse_text(
         "\n".join(
             [
-                "일일 정산",
+                "일정산",
+                "루팡 POS 메인포스",
                 "날짜: 26.6.18",
                 "김밥 120 3000",
                 "라면 80 4500",
                 "실 판매금액 968,400",
                 "판매 총액 968,400",
-                "+ 판입금액 0",
+                "+ 반입금액 0",
+                "현금합계 22,900 + 시제",
                 "+ 온라인결제 240,000",
             ]
         ),
@@ -880,10 +882,8 @@ def test_vl_candidate_parser_does_not_promote_settlement_summary_lines_as_items(
     )
 
     assert candidate is not None
-    names = [item["item_name"] for item in candidate["line_items"]]
-    assert "김밥" in names
-    assert "라면" in names
-    assert all("판매" not in name and "온라인결제" not in name and "판입금액" not in name for name in names)
+    assert candidate["line_item_count"] == 0
+    assert "vl_candidate_non_manufacturing_settlement_review_only" in candidate["issue_codes"]
 
 
 def test_vl_candidate_parser_structures_handwritten_no_price_delivery_rows_without_amounts():

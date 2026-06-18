@@ -121,6 +121,61 @@ def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields(
     assert document.line_items[0]["quantity"] == 100
 
 
+def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp_path):
+    text = """
+    자재 이동 요청서
+    문서번호 MV-2026-0010
+    요청일 2026.06.18
+    No 품목 규격 수량 단위 이동사유
+    1 S45C PIN 8X60 200 EA 2라인 긴급 투입
+    2 AL6061 환봉 10파이 50 EA 가공 대기
+    3 절삭유 4L 6 CAN 공용 소모품
+    """
+    worker = FakeVLWorker(
+        {
+            "ok": True,
+            "provider": "paddleocr_vl_1_6_gguf",
+            "classification": "pass",
+            "text": text,
+            "validation": {"status": "pass", "ok": True},
+        }
+    )
+    processor = _processor(worker)
+    processed_path = tmp_path / "doc010-vl-standard.png"
+    processed_path.write_bytes(b"processed")
+
+    def fake_prepare_standard_vl_input(image_path, output_dir):
+        return {
+            "variant_name": "full_page_document_clarity",
+            "original_path": str(image_path),
+            "processed_path": str(processed_path),
+            "operations": ["full_page_perspective_rectified", "full_page_upscale_2.6x"],
+            "warnings": ["no_inner_crop_applied_preserve_full_document", "vl_standard_preprocess_input"],
+        }
+
+    processor.image_preprocessor.prepare_standard_vl_input = fake_prepare_standard_vl_input
+    document = _document(
+        original_filename="DOC-010_internal_transfer_blurry_uncropped_photo.webp",
+        stored_file_path="/tmp/DOC-010_internal_transfer_blurry_uncropped_photo.webp",
+        mime_type="image/webp",
+        document_type=DocumentType.general_document,
+    )
+
+    metadata = processor._vl_primary_reader_metadata(
+        Path(document.stored_file_path),
+        document,
+        document.workflow_metadata,
+    )
+
+    assert worker.calls == [(processed_path, "DOC-010_internal_transfer_blurry_uncropped_photo.webp")]
+    assert metadata is not None
+    assert metadata["vl_preprocess_mode"] == "standard_single_pass"
+    assert metadata["vl_preprocess_input"]["variant_name"] == "full_page_document_clarity"
+    assert metadata["vl_provider_metadata"]["input_variant"]["variant_name"] == "full_page_document_clarity"
+    assert metadata["vl_candidate_summary"]["parsed_line_item_count"] == 3
+    assert "vl_candidate_preprocessed_retry_requires_review" not in metadata["vl_candidate_summary"]["issue_codes"]
+
+
 def test_vl_upload_pipeline_partially_promotes_blank_quantity_candidate():
     text = """
     견적서

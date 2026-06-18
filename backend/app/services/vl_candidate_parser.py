@@ -44,6 +44,8 @@ class VLCandidateParser:
         ):
             parsed.line_items = handwritten_items
         parsed.line_items = [self._normalize_manufacturing_vl_line_item(item) for item in parsed.line_items or []]
+        if self._looks_like_non_manufacturing_settlement_document(cleaned):
+            parsed.line_items = []
         issues = self._issues(parsed, cleaned, manual_visual_check or {}, validation or {})
         return {
             "source": "vl_candidate_parser",
@@ -103,6 +105,10 @@ class VLCandidateParser:
             "봉제": "봉재",
             "발사위": "절삭유",
             "절상유": "절삭유",
+            "판매 층액": "판매총액",
+            "판매 층역": "판매총액",
+            "실 판매금액": "실판매금액",
+            "실 판매금액": "실판매금액",
             "图号": "품목",
             "図号": "품목",
             "品号": "품목",
@@ -577,9 +583,12 @@ class VLCandidateParser:
         normalized = re.sub(r"\s+", "", text)
         if re.search(
             r"^(?:제목|날짜|일자|업체|거래처|받는곳|현장|담당|비고|메모|서명|납기|총|합계|공급가액|세액|"
-            r"품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류|청구금액|차감합계|조정합계|판매총액|실판매금액|판입금액|"
-            r"온라인결제|카드결제|현금결제|입금액|결제금액)",
+            r"품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류|청구금액|차감합계|조정합계|"
+            r"판매총액|판매금액|실판매금액|판입금액|반입금액|반입금액|현금합계|카드합계|온라인합계|결제합계|"
+            r"온라인결제|카드결제|현금결제|입금액|결제금액|단품할인|취소금액|봉사료|면세금액|과세금액|"
+            r"VAT|부가세|시제)",
             normalized,
+            flags=re.IGNORECASE,
         ):
             return True
         if text in {"간이 검사 기록", "거래명세서", "납품서", "발주 메모", "입고 확인", "자재 리스트"}:
@@ -752,6 +761,15 @@ class VLCandidateParser:
         money_document = doc_type in {"purchase_order", "quotation", "transaction_statement", "invoice"}
         no_price_document = doc_type in {"delivery_note", "inspection_report", "general_document", "memo"}
 
+        if self._looks_like_non_manufacturing_settlement_document(text):
+            issues.append(
+                {
+                    "code": "vl_candidate_non_manufacturing_settlement_review_only",
+                    "severity": "warn",
+                    "message": "POS or payment-settlement style output is outside the manufacturing line-item schema; keep it for review instead of promoting summary rows.",
+                }
+            )
+
         for field_name, value in (
             ("subtotal", parsed.subtotal),
             ("tax", parsed.tax),
@@ -915,6 +933,35 @@ class VLCandidateParser:
                 }
             )
         return issues
+
+    def _looks_like_non_manufacturing_settlement_document(self, text: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if not normalized:
+            return False
+        settlement_hits = sum(
+            1
+            for pattern in (
+                r"일정산",
+                r"POS|포스",
+                r"매출정산|판매정산",
+                r"실판매금액|판매총액|판매금액",
+                r"현금합계|카드합계|온라인합계|결제합계",
+                r"현금결제|카드결제|온라인결제",
+                r"단품할인|취소금액|봉사료|면세금액|과세금액",
+                r"시제|반입금액|입금액",
+                r"영수증|승인번호|카드사|매장",
+            )
+            if re.search(pattern, normalized, flags=re.IGNORECASE)
+        )
+        manufacturing_hits = sum(
+            1
+            for pattern in (
+                r"발주서|납품서|거래명세서|세금계산서|입고검사|자재이동|검사기록|반품|크레딧",
+                r"품목코드|내부품목코드|공급가액|세액|합계금액|규격|수량|단가",
+            )
+            if re.search(pattern, normalized, flags=re.IGNORECASE)
+        )
+        return settlement_hits >= 2 and manufacturing_hits == 0
 
     def _has_strong_return_credit_signal(self, text: str) -> bool:
         first_lines = "\n".join(line.strip() for line in str(text or "").splitlines()[:10])

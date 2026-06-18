@@ -85,99 +85,75 @@ class ImagePreprocessor:
             quality_after=after.to_dict(),
         )
 
-    def generate_vl_retry_variants(
-        self,
-        image_path: str | Path,
-        output_dir: str | Path,
-        *,
-        max_variants: int = 3,
-    ) -> list[dict[str, Any]]:
-        """Create full-page, no-inner-crop variants for VL retry.
+    def prepare_standard_vl_input(self, image_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
+        """Create one strong full-page input for VL inference.
 
-        These variants may deskew/rectify the whole page and improve contrast,
-        but they never crop to a table or upper region. Manufacturing documents
-        often carry notes, signatures, and extra rows below the table; losing
-        them would be worse than a conservative review result.
+        This is intentionally not a retry heuristic.  For image uploads we
+        always give VL the same readability-normalized full-page image once:
+        perspective-rectify the visible paper when possible, upscale, normalize
+        shadows, improve local contrast, denoise, and sharpen.  It never crops
+        to a table or discards lower-page notes.
         """
 
         path = Path(image_path)
         if path.suffix.casefold() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
-            return []
+            return {
+                "variant_name": "original_file",
+                "original_path": str(path),
+                "processed_path": None,
+                "operations": ["standard_vl_preprocess_skipped_non_image"],
+                "warnings": [],
+            }
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
-        variants: list[dict[str, Any]] = []
         try:
-            before = self.analyzer.analyze_page_image(path)
             with Image.open(path) as opened:
                 image = opened.convert("RGB")
             page = self._perspective_rectify_full_page(image)
             if page is None:
                 page = image
-                base_operations = ["full_page_preserved"]
+                operations = ["full_page_preserved"]
             else:
-                base_operations = ["full_page_perspective_rectified"]
-            for name, scale, contrast_cutoff, sharp_radius, sharp_percent, cv_mode in (
-                ("full_page_readability", 2.2, 1, 1.4, 145, None),
-                ("full_page_document_clarity", 2.6, 0, 1.6, 170, "document_clarity"),
-                ("full_page_high_contrast", 2.4, 0, 1.2, 130, "high_contrast"),
-            ):
-                if len(variants) >= max_variants:
-                    break
-                processed = page
-                operations = list(base_operations)
-                if scale > 1:
-                    processed = processed.resize(
-                        (int(processed.width * scale), int(processed.height * scale)),
-                        Image.Resampling.LANCZOS,
-                    )
-                    operations.append(f"full_page_upscale_{scale:g}x")
-                if cv_mode:
-                    enhanced, cv_operations = self._enhance_full_page_for_vl(processed, mode=cv_mode)
-                    if enhanced is not None:
-                        processed = enhanced
-                        operations.extend(cv_operations)
-                    else:
-                        processed = ImageOps.autocontrast(processed, cutoff=contrast_cutoff)
-                        operations.append("autocontrast")
-                else:
-                    processed = ImageOps.autocontrast(processed, cutoff=contrast_cutoff)
-                    operations.append("autocontrast")
-                processed = processed.filter(
-                    ImageFilter.UnsharpMask(radius=sharp_radius, percent=sharp_percent, threshold=3)
-                )
-                operations.append("unsharp_mask")
-                processed_path = output / f"{path.stem}-{name}.png"
-                processed.save(processed_path)
-                try:
-                    after = self.analyzer.analyze_page_image(processed_path).to_dict()
-                except Exception:
-                    after = None
-                variants.append(
-                    {
-                        "variant_name": name,
-                        "original_path": str(path),
-                        "processed_path": str(processed_path),
-                        "operations": operations,
-                        "warnings": [
-                            "no_inner_crop_applied_preserve_full_document",
-                            "vl_retry_candidate_only",
-                        ],
-                        "quality_before": before.to_dict(),
-                        "quality_after": after,
-                    }
-                )
+                operations = ["full_page_perspective_rectified"]
+
+            scale = 2.6
+            processed = page.resize(
+                (int(page.width * scale), int(page.height * scale)),
+                Image.Resampling.LANCZOS,
+            )
+            operations.append(f"full_page_upscale_{scale:g}x")
+            enhanced, cv_operations = self._enhance_full_page_for_vl(processed, mode="document_clarity")
+            if enhanced is not None:
+                processed = enhanced
+                operations.extend(cv_operations)
+            else:
+                processed = ImageOps.autocontrast(processed, cutoff=0)
+                operations.append("autocontrast")
+            processed = processed.filter(
+                ImageFilter.UnsharpMask(radius=1.6, percent=170, threshold=3)
+            )
+            operations.append("unsharp_mask")
+            processed_path = output / f"{path.stem}-vl-standard.png"
+            processed.save(processed_path)
+            return {
+                "variant_name": "full_page_document_clarity",
+                "original_path": str(path),
+                "processed_path": str(processed_path),
+                "operations": operations,
+                "warnings": [
+                    "no_inner_crop_applied_preserve_full_document",
+                    "vl_standard_preprocess_input",
+                ],
+            }
         except Exception as exc:
-            return [
-                {
-                    "variant_name": "full_page_retry_unavailable",
-                    "original_path": str(path),
-                    "processed_path": None,
-                    "operations": [],
-                    "warnings": ["vl_retry_preprocess_failed"],
-                    "error": str(exc),
-                }
-            ]
-        return variants
+            return {
+                "variant_name": "standard_vl_preprocess_unavailable",
+                "original_path": str(path),
+                "processed_path": None,
+                "operations": [],
+                "warnings": ["vl_standard_preprocess_failed"],
+                "error": str(exc),
+            }
 
     def _perspective_rectify_full_page(self, image: Image.Image) -> Image.Image | None:
         try:

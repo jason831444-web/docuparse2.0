@@ -113,7 +113,7 @@ def test_preprocessor_does_not_overwrite_original_and_preserves_crop_risk(tmp_pa
         assert Path(result.processed_path) != source
 
 
-def test_vl_retry_variants_preserve_full_page_without_inner_crop(tmp_path):
+def test_standard_vl_input_preserves_full_page_without_inner_crop(tmp_path):
     image = Image.new("RGB", (1200, 1600), (50, 48, 45))
     draw = ImageDraw.Draw(image)
     draw.polygon([(180, 120), (1040, 180), (1080, 1450), (120, 1390)], fill=(242, 242, 242))
@@ -124,18 +124,16 @@ def test_vl_retry_variants_preserve_full_page_without_inner_crop(tmp_path):
     image.save(source)
     before_bytes = source.read_bytes()
 
-    variants = ImagePreprocessor().generate_vl_retry_variants(source, tmp_path / "variants", max_variants=1)
+    variant = ImagePreprocessor().prepare_standard_vl_input(source, tmp_path / "variants")
 
     assert source.read_bytes() == before_bytes
-    assert variants
-    variant = variants[0]
     assert variant["processed_path"]
     assert Path(variant["processed_path"]).exists()
     assert "no_inner_crop_applied_preserve_full_document" in variant["warnings"]
     assert not any("crop" in op for op in variant["operations"])
 
 
-def test_vl_retry_variants_include_full_page_clarity_enhancement(tmp_path):
+def test_standard_vl_input_uses_full_page_clarity_enhancement(tmp_path):
     image = Image.new("RGB", (900, 1300), (70, 66, 62))
     draw = ImageDraw.Draw(image)
     draw.polygon([(130, 80), (790, 140), (820, 1180), (95, 1130)], fill=(214, 211, 204))
@@ -152,16 +150,12 @@ def test_vl_retry_variants_include_full_page_clarity_enhancement(tmp_path):
     source = tmp_path / "blurred-transfer-photo.jpg"
     image.filter(ImageFilter.GaussianBlur(radius=1.5)).save(source)
 
-    variants = ImagePreprocessor().generate_vl_retry_variants(source, tmp_path / "variants", max_variants=3)
+    variant = ImagePreprocessor().prepare_standard_vl_input(source, tmp_path / "variants")
 
-    assert [variant["variant_name"] for variant in variants] == [
-        "full_page_readability",
-        "full_page_document_clarity",
-        "full_page_high_contrast",
-    ]
-    all_operations = {operation for variant in variants for operation in variant["operations"]}
-    assert "full_page_shadow_normalization" in all_operations
-    assert "full_page_local_contrast" in all_operations
-    assert "full_page_background_normalization" in all_operations
-    assert "full_page_high_contrast_clahe" in all_operations
-    assert not any("crop" in operation for operation in all_operations)
+    assert variant["variant_name"] == "full_page_document_clarity"
+    operations = set(variant["operations"])
+    assert "full_page_shadow_normalization" in operations
+    assert "full_page_local_contrast" in operations
+    assert "full_page_denoise" in operations
+    assert "full_page_deblur_sharpen" in operations
+    assert not any("crop" in operation for operation in operations)

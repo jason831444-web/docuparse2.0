@@ -351,92 +351,32 @@ class DocumentProcessor:
     ) -> dict | None:
         if not self.vl_worker.enabled():
             return None
-        result = self.vl_worker.analyze(stored_path, original_filename=document.original_filename)
+        input_path = stored_path
+        input_variant = self.image_preprocessor.prepare_standard_vl_input(
+            stored_path,
+            self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id),
+        )
+        if input_variant.get("processed_path"):
+            input_path = Path(str(input_variant["processed_path"]))
+        result = self.vl_worker.analyze(input_path, original_filename=document.original_filename)
+        if input_variant.get("processed_path"):
+            result["input_variant"] = input_variant
         metadata = self._vl_primary_reader_metadata_from_result(result, document, workflow_metadata)
         text = result.get("text") or result.get("text_preview")
         if not isinstance(text, str):
             text = ""
-        original_attempt = {
+        metadata["vl_preprocess_mode"] = "standard_single_pass"
+        metadata["vl_preprocess_input"] = {
+            "variant_name": input_variant.get("variant_name"),
+            "operations": list(input_variant.get("operations") or []),
+            "warnings": list(input_variant.get("warnings") or []),
+            "processed_path_present": bool(input_variant.get("processed_path")),
+            "error": input_variant.get("error"),
+        }
+        return {
             "metadata": metadata,
             "text": text,
             "promoted": bool((metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
-        }
-        if original_attempt["promoted"] or not self._should_try_vl_full_page_retry(stored_path, metadata):
-            return original_attempt
-
-        retry_summaries: list[dict[str, Any]] = []
-        retry_output_dir = self.settings.upload_dir / "vl_preprocess_variants" / str(document.id)
-        for variant in self.image_preprocessor.generate_vl_retry_variants(stored_path, retry_output_dir):
-            processed_path = variant.get("processed_path")
-            if not processed_path:
-                retry_summaries.append(self._vl_retry_summary(variant, None, None))
-                continue
-            try:
-                retry_result = self.vl_worker.analyze(Path(processed_path), original_filename=document.original_filename)
-                retry_result["input_variant"] = variant
-                retry_metadata = self._vl_primary_reader_metadata_from_result(retry_result, document, workflow_metadata)
-                retry_text = retry_result.get("text") or retry_result.get("text_preview")
-                if not isinstance(retry_text, str):
-                    retry_text = ""
-                retry_attempt = {
-                    "metadata": retry_metadata,
-                    "text": retry_text,
-                    "promoted": bool((retry_metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
-                }
-                retry_summaries.append(self._vl_retry_summary(variant, retry_result, retry_metadata))
-                if retry_attempt["promoted"]:
-                    retry_metadata["vl_preprocess_retry_used"] = True
-                    retry_metadata["vl_preprocess_retry_attempts"] = retry_summaries
-                    return retry_attempt
-            except Exception as exc:
-                retry_summaries.append(self._vl_retry_summary(variant, {"error": str(exc)}, None))
-        if retry_summaries:
-            metadata["vl_preprocess_retry_used"] = False
-            metadata["vl_preprocess_retry_attempts"] = retry_summaries
-        return original_attempt
-
-    def _should_try_vl_full_page_retry(self, stored_path: Path, metadata: dict) -> bool:
-        if stored_path.suffix.casefold() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
-            return False
-        summary = metadata.get("vl_candidate_summary") if isinstance(metadata.get("vl_candidate_summary"), dict) else {}
-        if summary.get("promotion_applied"):
-            return False
-        reason_codes = set(summary.get("issue_codes") or [])
-        gate_reasons = set(summary.get("gate_reasons") or [])
-        if reason_codes & {
-            "vl_candidate_output_corruption",
-            "vl_candidate_foreign_script_item_noise",
-            "vl_candidate_missing_required_value",
-            "vl_candidate_row_count_mismatch",
-        }:
-            return True
-        if gate_reasons & {"structured_line_items_missing", "vl_candidate_has_review_issues"}:
-            return True
-        try:
-            quality = self.ingestion.document_quality.analyze_page_image(stored_path)
-            return bool(quality.is_blurry or quality.is_skewed or quality.likely_scan_type in {"photo", "fax_like"})
-        except Exception:
-            return False
-
-    def _vl_retry_summary(
-        self,
-        variant: dict[str, Any],
-        result: dict[str, Any] | None,
-        metadata: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        summary = metadata.get("vl_candidate_summary") if isinstance(metadata, dict) else {}
-        provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata, dict) else {}
-        return {
-            "variant_name": variant.get("variant_name"),
-            "operations": list(variant.get("operations") or []),
-            "warnings": list(variant.get("warnings") or []),
-            "processed_path_present": bool(variant.get("processed_path")),
-            "ok": bool((result or {}).get("ok")),
-            "elapsed_ms": (result or {}).get("elapsed_ms"),
-            "gate_decision": summary.get("gate_decision"),
-            "promotion_applied": bool(summary.get("promotion_applied")),
-            "issue_codes": list(summary.get("issue_codes") or []),
-            "fallback_reason": summary.get("fallback_reason") or provider_metadata.get("fallback_reason") or (result or {}).get("error"),
         }
 
     def _vl_primary_normalized_document(
@@ -825,17 +765,6 @@ class DocumentProcessor:
             "inference_time_ms": result.get("elapsed_ms"),
             "structured_candidate": structured,
         }
-        if input_variant and "vl_retry_candidate_only" in (input_variant.get("warnings") or []):
-            retry_review_code = "vl_candidate_preprocessed_retry_requires_review"
-            for target in (candidate, structured):
-                codes = list(target.get("issue_codes") or [])
-                if retry_review_code not in codes:
-                    codes.append(retry_review_code)
-                target["issue_codes"] = codes
-                flags = list(target.get("review_flags") or [])
-                if retry_review_code not in flags:
-                    flags.append(retry_review_code)
-                target["review_flags"] = flags
         original_workflow_metadata = document.workflow_metadata
         document.workflow_metadata = workflow_metadata
         try:
@@ -887,8 +816,8 @@ class DocumentProcessor:
             "vl_provider_metadata",
             "vl_candidates",
             "vl_candidate_summary",
-            "vl_preprocess_retry_used",
-            "vl_preprocess_retry_attempts",
+            "vl_preprocess_mode",
+            "vl_preprocess_input",
         ):
             if key in vl_metadata:
                 merged[key] = vl_metadata[key]
