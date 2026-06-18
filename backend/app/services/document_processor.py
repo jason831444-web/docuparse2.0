@@ -366,234 +366,34 @@ class DocumentProcessor:
     ) -> dict | None:
         if not self.vl_worker.enabled():
             return None
+        input_path = stored_path
         input_variant = self.image_preprocessor.prepare_standard_vl_input(
             stored_path,
             self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id),
         )
-        original_variant = self._vl_original_input_variant(stored_path)
-        original_result = self.vl_worker.analyze(stored_path, original_filename=document.original_filename)
-        original_result["input_variant"] = original_variant
-        original_candidate = self._vl_input_candidate_result(
-            name="original",
-            result=original_result,
-            input_variant=original_variant,
-        )
-        candidates = [original_candidate]
-        if self._should_evaluate_preprocessed_vl_candidate(stored_path, input_variant, original_candidate):
-            processed_path = Path(str(input_variant["processed_path"]))
-            processed_result = self.vl_worker.analyze(processed_path, original_filename=document.original_filename)
-            processed_result["input_variant"] = input_variant
-            candidates.append(
-                self._vl_input_candidate_result(
-                    name="standard_preprocessed",
-                    result=processed_result,
-                    input_variant=input_variant,
-                )
-            )
-        selected_candidate, selection_reason = self._select_vl_input_candidate(candidates)
-        result = dict(selected_candidate["result"])
-        selected_input_variant = selected_candidate.get("input_variant") if isinstance(selected_candidate.get("input_variant"), dict) else {}
-        result["input_variant"] = selected_input_variant
+        if input_variant.get("processed_path"):
+            input_path = Path(str(input_variant["processed_path"]))
+        result = self.vl_worker.analyze(input_path, original_filename=document.original_filename)
+        if input_variant.get("processed_path"):
+            result["input_variant"] = input_variant
         metadata = self._vl_primary_reader_metadata_from_result(result, document, workflow_metadata)
         text = result.get("text") or result.get("text_preview")
         if not isinstance(text, str):
             text = ""
-        comparison_metadata = self._vl_input_candidate_comparison_metadata(
-            candidates,
-            selected_candidate.get("name") or "original",
-            selection_reason,
-        )
-        metadata["vl_preprocess_mode"] = "candidate_comparison" if len(candidates) > 1 else "original_single_pass"
+        metadata["vl_preprocess_mode"] = "standard_single_pass"
         metadata["vl_preprocess_input"] = {
-            "variant_name": selected_input_variant.get("variant_name"),
-            "operations": list(selected_input_variant.get("operations") or []),
-            "warnings": list(selected_input_variant.get("warnings") or []),
-            "processed_path_present": bool(selected_input_variant.get("processed_path")),
-            "error": selected_input_variant.get("error"),
+            "variant_name": input_variant.get("variant_name"),
+            "operations": list(input_variant.get("operations") or []),
+            "warnings": list(input_variant.get("warnings") or []),
+            "processed_path_present": bool(input_variant.get("processed_path")),
+            "error": input_variant.get("error"),
         }
-        metadata["vl_input_candidate_comparison"] = comparison_metadata
-        if isinstance(metadata.get("vl_provider_metadata"), dict):
-            metadata["vl_provider_metadata"]["input_candidate_comparison"] = comparison_metadata
         has_structured_candidate = bool(self._vl_primary_structured_candidate({"metadata": metadata}))
         return {
             "metadata": metadata,
             "text": text,
             "promoted": bool((metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
             "has_structured_candidate": has_structured_candidate,
-        }
-
-    def _vl_original_input_variant(self, stored_path: Path) -> dict[str, Any]:
-        return {
-            "variant_name": "original",
-            "original_path": str(stored_path),
-            "processed_path": None,
-            "operations": ["original_vl_input"],
-            "warnings": [],
-        }
-
-    def _should_evaluate_preprocessed_vl_candidate(
-        self,
-        stored_path: Path,
-        input_variant: dict,
-        original_candidate: dict,
-    ) -> bool:
-        processed_path = input_variant.get("processed_path")
-        if not processed_path:
-            return False
-        suffix = stored_path.suffix.casefold().lstrip(".")
-        if suffix not in {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"}:
-            return False
-        metrics = original_candidate.get("metrics") if isinstance(original_candidate.get("metrics"), dict) else {}
-        table_types = set(metrics.get("table_types") or [])
-        if "incoming_inspection" in table_types:
-            return True
-        if int(metrics.get("table_count") or 0) <= 0:
-            return True
-        if float(metrics.get("quality_score") or 0.0) < 0.82:
-            return True
-        warnings = set(input_variant.get("warnings") or [])
-        quality_signals = {
-            "vl_standard_preprocess_input",
-            "document_image_blurry",
-            "document_low_contrast",
-            "document_page_skewed",
-            "photo_source_review_required",
-        }
-        return bool(warnings.intersection(quality_signals))
-
-    def _vl_input_candidate_result(self, *, name: str, result: dict, input_variant: dict) -> dict[str, Any]:
-        metrics = self._vl_input_candidate_metrics(result)
-        metrics["name"] = name
-        metrics["variant_name"] = input_variant.get("variant_name")
-        metrics["processed_path_present"] = bool(input_variant.get("processed_path"))
-        metrics["operations"] = list(input_variant.get("operations") or [])
-        metrics["warnings"] = list(dict.fromkeys((metrics.get("warnings") or []) + list(input_variant.get("warnings") or [])))
-        return {
-            "name": name,
-            "result": result,
-            "input_variant": input_variant,
-            "metrics": metrics,
-        }
-
-    def _vl_input_candidate_metrics(self, result: dict) -> dict[str, Any]:
-        tables = result.get("tables") if isinstance(result.get("tables"), list) else []
-        quality_rows: list[dict[str, Any]] = []
-        table_types: list[str] = []
-        warnings: list[str] = []
-        unsafe_amount_risk = False
-        for table in tables:
-            if not isinstance(table, dict):
-                continue
-            if table.get("table_type"):
-                table_types.append(str(table.get("table_type")))
-            warnings.extend(str(warning) for warning in (table.get("warnings") or []) if warning)
-            if table.get("amount_fields_policy") == "hidden_amount_generated":
-                unsafe_amount_risk = True
-            if isinstance(table.get("official_table_quality"), dict):
-                quality_rows.append(table["official_table_quality"])
-        if not quality_rows:
-            return {
-                "quality_score": 0.0,
-                "table_count": len(tables),
-                "expected_column_coverage": 0.0,
-                "empty_cell_ratio": 1.0,
-                "row_count": 0,
-                "table_types": sorted(set(table_types)),
-                "warnings": sorted(set(warnings)),
-                "unsafe_amount_risk": unsafe_amount_risk,
-            }
-        best = max(
-            quality_rows,
-            key=lambda quality: (
-                float(quality.get("quality_score") or 0.0),
-                int(quality.get("row_count") or 0),
-                -float(quality.get("empty_cell_ratio") if quality.get("empty_cell_ratio") is not None else 1.0),
-            ),
-        )
-        return {
-            "quality_score": float(best.get("quality_score") or 0.0),
-            "table_count": len(tables),
-            "expected_column_coverage": float(best.get("expected_column_coverage") or 0.0),
-            "empty_cell_ratio": float(best.get("empty_cell_ratio") if best.get("empty_cell_ratio") is not None else 1.0),
-            "row_count": sum(int(quality.get("row_count") or 0) for quality in quality_rows),
-            "best_table_type": best.get("table_type"),
-            "table_types": sorted(set(table_types)),
-            "warnings": sorted(set(warnings)),
-            "unsafe_amount_risk": unsafe_amount_risk,
-        }
-
-    def _select_vl_input_candidate(self, candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
-        selected = candidates[0]
-        reason = "single_candidate"
-        for candidate in candidates[1:]:
-            comparison = self._compare_vl_input_candidates(candidate, selected)
-            if comparison > 0:
-                reason = self._vl_input_candidate_selection_reason(candidate, selected)
-                selected = candidate
-        if selected is not candidates[0] and reason == "single_candidate":
-            reason = "higher_quality_score"
-        elif len(candidates) > 1 and selected is candidates[0] and reason == "single_candidate":
-            reason = self._vl_input_candidate_selection_reason(selected, candidates[1])
-        return selected, reason
-
-    def _compare_vl_input_candidates(self, candidate: dict, current: dict) -> int:
-        candidate_metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
-        current_metrics = current.get("metrics") if isinstance(current.get("metrics"), dict) else {}
-        candidate_tuple = (
-            float(candidate_metrics.get("quality_score") or 0.0),
-            int(candidate_metrics.get("row_count") or 0),
-            -float(candidate_metrics.get("empty_cell_ratio") if candidate_metrics.get("empty_cell_ratio") is not None else 1.0),
-            1 if candidate.get("name") == "original" else 0,
-        )
-        current_tuple = (
-            float(current_metrics.get("quality_score") or 0.0),
-            int(current_metrics.get("row_count") or 0),
-            -float(current_metrics.get("empty_cell_ratio") if current_metrics.get("empty_cell_ratio") is not None else 1.0),
-            1 if current.get("name") == "original" else 0,
-        )
-        return (candidate_tuple > current_tuple) - (candidate_tuple < current_tuple)
-
-    def _vl_input_candidate_selection_reason(self, candidate: dict, current: dict) -> str:
-        candidate_metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
-        current_metrics = current.get("metrics") if isinstance(current.get("metrics"), dict) else {}
-        if float(candidate_metrics.get("quality_score") or 0.0) > float(current_metrics.get("quality_score") or 0.0):
-            return "higher_quality_score"
-        if int(candidate_metrics.get("row_count") or 0) > int(current_metrics.get("row_count") or 0):
-            return "more_table_rows_tie_breaker"
-        candidate_empty = float(candidate_metrics.get("empty_cell_ratio") if candidate_metrics.get("empty_cell_ratio") is not None else 1.0)
-        current_empty = float(current_metrics.get("empty_cell_ratio") if current_metrics.get("empty_cell_ratio") is not None else 1.0)
-        if candidate_empty < current_empty:
-            return "lower_empty_cell_ratio_tie_breaker"
-        return "original_tie_breaker"
-
-    def _vl_input_candidate_comparison_metadata(
-        self,
-        candidates: list[dict[str, Any]],
-        selected_candidate: str,
-        selection_reason: str,
-    ) -> dict[str, Any]:
-        return {
-            "version": 1,
-            "enabled": len(candidates) > 1,
-            "selected_candidate": selected_candidate,
-            "selection_reason": selection_reason,
-            "policy": "model_official_table_quality_only_then_rows_then_empty_ratio_then_original",
-            "candidates": [
-                {
-                    "name": candidate.get("name"),
-                    "variant_name": (candidate.get("metrics") or {}).get("variant_name"),
-                    "quality_score": round(float((candidate.get("metrics") or {}).get("quality_score") or 0.0), 4),
-                    "table_count": int((candidate.get("metrics") or {}).get("table_count") or 0),
-                    "expected_column_coverage": round(float((candidate.get("metrics") or {}).get("expected_column_coverage") or 0.0), 4),
-                    "empty_cell_ratio": round(float((candidate.get("metrics") or {}).get("empty_cell_ratio") if (candidate.get("metrics") or {}).get("empty_cell_ratio") is not None else 1.0), 4),
-                    "row_count": int((candidate.get("metrics") or {}).get("row_count") or 0),
-                    "table_types": list((candidate.get("metrics") or {}).get("table_types") or []),
-                    "processed_path_present": bool((candidate.get("metrics") or {}).get("processed_path_present")),
-                    "unsafe_amount_risk": bool((candidate.get("metrics") or {}).get("unsafe_amount_risk")),
-                    "warnings": list((candidate.get("metrics") or {}).get("warnings") or []),
-                }
-                for candidate in candidates
-            ],
         }
 
     def _vl_primary_normalized_document(
@@ -1086,7 +886,6 @@ class DocumentProcessor:
             "vl_candidate_summary",
             "vl_preprocess_mode",
             "vl_preprocess_input",
-            "vl_input_candidate_comparison",
         ):
             if key in vl_metadata:
                 merged[key] = vl_metadata[key]
