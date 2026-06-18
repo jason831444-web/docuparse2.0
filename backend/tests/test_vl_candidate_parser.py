@@ -488,6 +488,119 @@ def test_vl_candidate_parser_preserves_visible_commercial_invoice_amount_as_line
     assert "row_amount_hidden_do_not_infer" not in first.get("validation_warnings", [])
 
 
+def test_vl_candidate_parser_preserves_code_first_priced_purchase_order_rows():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "발주서",
+                "문서번호 PO-2026-0001",
+                "No 품목코드 품명 규격 수량 단가 공급가액 세액 합계",
+                "1 HB-AX-102 S45C PIN 8X60 120 350 42,000 4,200 46,200",
+                "2 HB-BT-520 SUS 볼트 M5X20 300 90 27,000 2,700 29,700",
+                "3 HB-WH-014 평와서 M5 500 35 17,500 1,750 19,250",
+                "공급가액 86,500 세액 8,650 합계 95,150",
+            ]
+        ),
+        filename="purchase-order-code-first.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"]
+    assert first["document_item_code"] == "HB-AX-102"
+    assert first["item_name"] == "S45C PIN"
+    assert first["specification"] == "8x60"
+    assert first["quantity"] == 120
+    assert first["unit_price"] == 350
+    assert first["supply_amount"] == 42000
+    assert second["item_name"] == "SUS 볼트"
+    assert second["quantity"] == 300
+    assert third["item_name"] == "평와서"
+    assert third["line_total"] == 19250
+
+
+def test_vl_candidate_parser_accepts_supply_header_ocr_variant_without_line_total_column():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "세금계산서",
+                "문서번호 INV-2026-0002",
+                "발일 품목 규격 수량 단가 공급기록 세액",
+                "06/12 PCB Connector 12P 200 1,250 250,000 25,000",
+                "06/12 Cable Harness 500mm 80 2,800 224,000 22,400",
+                "06/12 AL6061 환봉 10파이 30 8,500 255,000 25,500",
+                "공급가액 합계 729,000 세액 합계 72,900 청구금액 801,900",
+            ]
+        ),
+        filename="tax-invoice-supply-record-header.png",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 3
+    first = candidate["line_items"][0]
+    assert first["item_name"] == "PCB Connector"
+    assert first["specification"] == "12P"
+    assert first["quantity"] == 200
+    assert first["unit_price"] == 1250
+    assert first["supply_amount"] == 250000
+    assert first["tax_amount"] == 25000
+    assert "line_total" not in first
+    assert "line_total_column_not_visible" in first["validation_warnings"]
+    assert "vl_candidate_invalid_line_total" not in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_preserves_textual_spec_no_price_delivery_rows():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "납품서",
+                "문서번호 DN-2026-0003",
+                "※ 단가 미기재 납품서-수량 검수용",
+                "No 품목명 규격 수량 단위 비고",
+                "1 S45C PIN 8X60 500 EA 입고대기",
+                "2 SUS 볼트 M5X20 1,000 EA 정상",
+                "3 평와서 M5 2,000 EA 정상",
+                "4 포장박스 중형 40 BOX 반품 2박스 제외",
+            ]
+        ),
+        filename="delivery-note-no-price-text-spec.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 4
+    last = candidate["line_items"][-1]
+    assert last["item_name"] == "포장박스"
+    assert last["specification"] == "중형"
+    assert last["quantity"] == 40
+    assert last["unit"] == "BOX"
+    assert "unit_price" not in last
+    assert "supply_amount" not in last
+
+
+def test_vl_candidate_parser_flags_generated_foreign_schedule_noise_as_output_corruption():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "자재 이동 요청서",
+                "MR-2026-0010",
+                "序号 时间 状态",
+                *[f"{index} 2026.06.{17 + index:02d} 正常" for index in range(1, 9)],
+                "No 番号 デリ 今替 단위 이용사용",
+                "1 S45C PIN BX60 200 EA 가공대기",
+                "2 AL6061 컴퓨 10000 50 EA 가공대기",
+            ]
+        ),
+        filename="internal-transfer-corrupted-vl.webp",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_output_corruption" in candidate["issue_codes"]
+
+
 def test_text_layer_parser_can_supply_fax_header_fields_for_vl_reconciliation():
     parsed = DocumentParser().parse(
         "\n".join(

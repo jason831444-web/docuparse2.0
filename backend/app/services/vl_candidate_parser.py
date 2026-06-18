@@ -911,19 +911,53 @@ class VLCandidateParser:
         )
 
     def _source_quality_issues(self, text: str) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        if self._looks_like_vl_output_corruption(text):
+            issues.append(
+                {
+                    "code": "vl_candidate_output_corruption",
+                    "severity": "fail",
+                    "message": "VL output contains generated schedule/status noise or foreign table artifacts; do not promote this candidate.",
+                }
+            )
         if not re.search(
             r"(저품질|낮은\s*신뢰|confidence\s*(?:낮|low)|table\s*confidence|distort|왜곡|poor\s*scan)",
             text or "",
             flags=re.IGNORECASE,
         ):
-            return []
-        return [
+            return issues
+        issues.append(
             {
                 "code": "vl_candidate_untrusted_source_quality",
                 "severity": "warn",
                 "message": "VL output contains low-confidence or distorted-source signals; require review before business-data export.",
             }
-        ]
+        )
+        return issues
+
+    def _looks_like_vl_output_corruption(self, text: str) -> bool:
+        lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+        joined = "\n".join(lines)
+        if not lines:
+            return False
+        schedule_noise_rows = sum(
+            1
+            for line in lines
+            if re.fullmatch(r"\d{1,3}\s+20\d{2}[./-]\d{1,2}[./-]\d{1,2}\s+(?:正常|ok|normal)", line, flags=re.IGNORECASE)
+        )
+        foreign_header_noise = bool(
+            re.search(r"(序号|番号|状態|状态|时间|今替|デリ)", joined)
+            and re.search(r"(품목|자재|이동|납품|검사|발주|거래|세금계산서)", joined)
+        )
+        if schedule_noise_rows >= 5 and foreign_header_noise:
+            return True
+        if schedule_noise_rows >= 10:
+            return True
+        foreign_noise_tokens = len(re.findall(r"[一-龥ぁ-んァ-ン]+", joined))
+        korean_tokens = len(re.findall(r"[가-힣]+", joined))
+        if foreign_header_noise and foreign_noise_tokens >= max(4, korean_tokens // 2):
+            return True
+        return False
 
     def _line_item_warning_issues(self, parsed: ParsedDocument) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []

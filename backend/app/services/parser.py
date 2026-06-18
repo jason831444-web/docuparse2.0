@@ -925,7 +925,7 @@ class DocumentParser:
             return False
         if not re.search(r"(단가|unit\s*price)", text, flags=re.IGNORECASE):
             return False
-        if not re.search(r"(공급가액|공급액|supply|subtotal|amount)", text, flags=re.IGNORECASE):
+        if not re.search(r"(공급가액|공급액|공급기록|공급금액|supply|subtotal|amount)", text, flags=re.IGNORECASE):
             return False
         if not re.search(r"(세액|부가세|tax|vat)", text, flags=re.IGNORECASE):
             return False
@@ -985,6 +985,9 @@ class DocumentParser:
         if self._looks_like_line_item_header_text(text):
             return None
         text = self._strip_duplicate_trailing_amount(text)
+        code_first_item = self._vl_inline_code_first_priced_item_from_row(text)
+        if code_first_item:
+            return code_first_item
         if self._vl_inline_no_price_context(doc_type) and not self._looks_like_priced_vl_inline_row(text):
             no_price_item = self._vl_inline_no_price_item_from_row(text, doc_type)
             if no_price_item:
@@ -1216,6 +1219,41 @@ class DocumentParser:
             item["validation_warnings"] = sorted(set(warnings))
         return {key: value for key, value in item.items() if value not in (None, "", [])}
 
+    def _vl_inline_code_first_priced_item_from_row(self, text: str) -> dict | None:
+        match = re.match(
+            r"^\d+\s+(?P<code>[A-Z]{1,8}(?:[-_][A-Z0-9]+){1,4})\s+"
+            r"(?P<body>.+?)\s+"
+            r"(?P<quantity>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<unit_price>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<supply_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<tax_amount>[-+]?\d[\d,]*(?:\.\d+)?)\s+"
+            r"(?P<line_total>[-+]?\d[\d,]*(?:\.\d+)?)\s*$",
+            str(text or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        body = match.group("body").strip()
+        if not re.search(r"[A-Za-z가-힣]", body):
+            return None
+        item_name, _, specification = self._split_vl_inline_item_identity(body)
+        if not item_name:
+            return None
+        item_code = self._clean_code_value(match.group("code"))
+        item: dict = {
+            "item_name": item_name,
+            "item_code": item_code,
+            "document_item_code": item_code,
+            "source_item_code": item_code,
+            "specification": specification,
+            "quantity": match.group("quantity"),
+            "unit_price": match.group("unit_price"),
+            "supply_amount": match.group("supply_amount"),
+            "tax_amount": match.group("tax_amount"),
+            "line_total": match.group("line_total"),
+        }
+        return {key: value for key, value in item.items() if value not in (None, "", [])}
+
     def _vl_inline_no_price_context(self, doc_type: DocumentType | None) -> bool:
         return doc_type in {
             DocumentType.delivery_note,
@@ -1341,6 +1379,35 @@ class DocumentParser:
                 if match.group("unit"):
                     item["unit"] = match.group("unit")
                 return item
+            generic_no_price_match = re.match(
+                r"^\d+\s+(?P<body>.+?)\s+(?P<quantity>[-+]?\d[\d,]*)\s+"
+                r"(?P<unit>EA|PCS?|BOX|CAN|SET|ROLL|PACK|PK|개|장|본|봉|박스|캔|통|식|대|매|세트)"
+                r"(?:\s+(?P<remarks>.*))?$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if generic_no_price_match:
+                item_name, item_code, specification = self._split_vl_inline_item_identity(generic_no_price_match.group("body"))
+                if item_name and not specification:
+                    size_match = re.match(r"^(?P<name>.+?)\s+(?P<spec>소형|중형|대형|특대|대|중|소)$", item_name)
+                    if size_match:
+                        item_name = self._clean_value(size_match.group("name"))
+                        specification = size_match.group("spec")
+                if item_name:
+                    item = {
+                        "item_name": item_name,
+                        "specification": specification,
+                        "quantity": generic_no_price_match.group("quantity"),
+                        "requested_quantity": generic_no_price_match.group("quantity"),
+                        "unit": generic_no_price_match.group("unit").upper()
+                        if generic_no_price_match.group("unit").isalpha()
+                        else generic_no_price_match.group("unit"),
+                    }
+                    if item_code:
+                        item["document_item_code"] = item_code
+                    if generic_no_price_match.group("remarks"):
+                        item["remarks"] = self._clean_value(generic_no_price_match.group("remarks"))
+                    return {key: value for key, value in item.items() if value not in (None, "", [])}
             transfer_match = re.match(
                 r"^\d+\s+(?P<body>.+?)\s+(?P<code>[A-Z][A-Z0-9-]*-[A-Z0-9-]+(?:x\d+)?)(?P<spec>\d+x\d+(?:x\d+)?)?\s+"
                 r"(?P<quantity>[-+]?\d[\d,]*)\s+(?P<unit>[A-Za-z가-힣]{1,8})\s*$",

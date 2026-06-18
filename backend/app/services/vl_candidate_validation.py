@@ -21,6 +21,7 @@ class VLCandidateValidationGate:
         "vl_candidate_manual_hallucination",
         "vl_candidate_document_number_mismatch",
         "vl_candidate_parser_failed",
+        "vl_candidate_output_corruption",
         "no_price_candidate_amount_conflict",
     }
 
@@ -53,6 +54,7 @@ class VLCandidateValidationGate:
         "vl_candidate_return_credit_type_uncertain",
         "vl_candidate_internal_transfer_type_uncertain",
         "vl_candidate_total_row_amount_conflict",
+        "vl_candidate_output_corruption",
         "vl_candidate_invalid_line_total",
         "vl_candidate_invalid_tax_greater_than_supply",
         "vl_candidate_invalid_tax_greater_than_total",
