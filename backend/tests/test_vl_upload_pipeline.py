@@ -33,6 +33,17 @@ class FakeVLWorker:
         return dict(self.payload)
 
 
+class SequenceVLWorker(FakeVLWorker):
+    def __init__(self, payloads: list[dict], *, enabled: bool = True) -> None:
+        super().__init__({}, enabled=enabled)
+        self.payloads = payloads
+
+    def analyze(self, file_path: Path, *, original_filename: str = "") -> dict:
+        self.calls.append((file_path, original_filename))
+        index = min(len(self.calls) - 1, len(self.payloads) - 1)
+        return dict(self.payloads[index])
+
+
 class FakeSession:
     def __init__(self, document: Document) -> None:
         self.document = document
@@ -195,7 +206,7 @@ def test_vl_upload_pipeline_promotes_visible_official_table_amounts():
     assert first["line_total"] == 275000
 
 
-def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp_path):
+def test_vl_upload_pipeline_compares_original_and_preprocessed_image_candidates(tmp_path):
     text = """
     자재 이동 요청서
     문서번호 MV-2026-0010
@@ -205,15 +216,57 @@ def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp
     2 AL6061 환봉 10파이 50 EA 가공 대기
     3 절삭유 4L 6 CAN 공용 소모품
     """
-    worker = FakeVLWorker(
-        {
+    original_payload = {
+        "ok": True,
+        "provider": "paddleocr_vl_1_6_gguf",
+        "classification": "pass",
+        "text": "자재 이동 요청서\n문서번호 MV-2026-0010",
+        "validation": {"status": "pass", "ok": True},
+        "tables": [
+            {
+                "table_type": "incoming_inspection",
+                "source": "paddleocrvl_official_table_html",
+                "columns": ["품목"],
+                "rows": [{"item_name": "S45C PIN"}],
+                "official_table_quality": {
+                    "quality_score": 0.45,
+                    "table_count": 1,
+                    "row_count": 1,
+                    "empty_cell_ratio": 0.5,
+                    "expected_column_coverage": 0.25,
+                    "table_type": "incoming_inspection",
+                },
+            }
+        ],
+    }
+    preprocessed_payload = {
             "ok": True,
             "provider": "paddleocr_vl_1_6_gguf",
             "classification": "pass",
             "text": text,
             "validation": {"status": "pass", "ok": True},
-        }
-    )
+            "tables": [
+                {
+                    "table_type": "line_items",
+                    "source": "paddleocrvl_official_table_html",
+                    "columns": ["품목", "규격", "수량", "단위", "비고"],
+                    "rows": [
+                        {"item_name": "S45C PIN", "specification": "8X60", "quantity": 200, "unit": "EA", "note": "2라인 긴급 투입"},
+                        {"item_name": "AL6061 환봉", "specification": "10파이", "quantity": 50, "unit": "EA", "note": "가공 대기"},
+                        {"item_name": "절삭유", "specification": "4L", "quantity": 6, "unit": "CAN", "note": "공용 소모품"},
+                    ],
+                    "official_table_quality": {
+                        "quality_score": 0.93,
+                        "table_count": 1,
+                        "row_count": 3,
+                        "empty_cell_ratio": 0.0,
+                        "expected_column_coverage": 1.0,
+                        "table_type": "line_items",
+                    },
+                }
+            ],
+    }
+    worker = SequenceVLWorker([original_payload, preprocessed_payload])
     processor = _processor(worker)
     processed_path = tmp_path / "doc010-vl-standard.png"
     processed_path.write_bytes(b"processed")
@@ -241,11 +294,20 @@ def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp
         document.workflow_metadata,
     )
 
-    assert worker.calls == [(processed_path, "DOC-010_internal_transfer_blurry_uncropped_photo.webp")]
+    assert worker.calls == [
+        (Path("/tmp/DOC-010_internal_transfer_blurry_uncropped_photo.webp"), "DOC-010_internal_transfer_blurry_uncropped_photo.webp"),
+        (processed_path, "DOC-010_internal_transfer_blurry_uncropped_photo.webp"),
+    ]
     assert metadata is not None
-    assert metadata["vl_preprocess_mode"] == "standard_single_pass"
+    assert metadata["vl_preprocess_mode"] == "candidate_comparison"
     assert metadata["vl_preprocess_input"]["variant_name"] == "full_page_document_clarity"
+    comparison = metadata["vl_input_candidate_comparison"]
+    assert comparison["selected_candidate"] == "standard_preprocessed"
+    assert comparison["selection_reason"] == "higher_quality_score"
+    assert comparison["candidates"][0]["quality_score"] == 0.45
+    assert comparison["candidates"][1]["quality_score"] == 0.93
     assert metadata["vl_provider_metadata"]["input_variant"]["variant_name"] == "full_page_document_clarity"
+    assert metadata["vl_provider_metadata"]["input_candidate_comparison"]["selected_candidate"] == "standard_preprocessed"
     assert metadata["vl_candidate_summary"]["parsed_line_item_count"] == 3
     assert "vl_candidate_preprocessed_retry_requires_review" not in metadata["vl_candidate_summary"]["issue_codes"]
 
