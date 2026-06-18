@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import inspect
+import json
 import logging
+import mimetypes
 import re
 import threading
 import time
@@ -10,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, UploadFile
 from pydantic import BaseModel
+import requests
 
 from app.core.config import get_settings
 from app.scripts.smoke_paddleocr_vl_gguf import build_docuparse_vl_candidate_metadata, extract_text, validate_output_text
@@ -56,6 +61,49 @@ VLM_STRUCTURED_OUTPUT_SCHEMA: dict[str, Any] = {
     ],
 }
 
+VLM_TABLE_EXTRACTION_PROMPT = """You are Docparse's manufacturing document VLM table extractor.
+
+Read the provided document image visually. Return ONLY valid JSON, no markdown.
+
+Required JSON shape:
+{
+  "raw_text": "verbatim readable text you can see",
+  "document_type": "inspection_report | delivery_note | purchase_order | quotation | invoice | transaction_statement | internal_transfer | return_credit | unknown",
+  "tables": [
+    {
+      "table_type": "incoming_inspection | line_items | unknown",
+      "review_required": true,
+      "columns": ["..."],
+      "rows": [
+        {
+          "no": null,
+          "item_name": null,
+          "lot_code": null,
+          "document_item_code": null,
+          "specification": null,
+          "received_quantity": null,
+          "accepted_quantity": null,
+          "defective_quantity": null,
+          "inspection_item": null,
+          "result": null,
+          "note": null
+        }
+      ],
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}
+
+Rules:
+- If the document is an incoming inspection / inspection report, extract the visible table as table_type "incoming_inspection".
+- Keep unseen values null. Do not infer hidden, cropped, or unreadable cells.
+- For inspection reports, do not create amount, unit_price, supply_amount, tax_amount, line_total, subtotal, total, or currency.
+- Keep the output review_required=true when handwriting, blur, row boundary uncertainty, or OCR ambiguity exists.
+- Flag O/0, 주/(주), 유동/유통, 검사/경사 and similar uncertainty in warnings/review flags.
+- Do not merge header, footer, stamp, or summary text into item rows.
+"""
+
 
 class VLAnalyzeRequest(BaseModel):
     file_path: str
@@ -101,6 +149,8 @@ def health() -> dict[str, Any]:
         "concurrency": settings.paddleocr_vl_gguf_concurrency,
         "max_pages": settings.paddleocr_vl_gguf_max_pages,
         "n_predict": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+        "schema_prompt_enabled": getattr(settings, "paddleocr_vl_gguf_schema_prompt_enabled", True),
+        "direct_schema_prompt_enabled": getattr(settings, "paddleocr_vl_gguf_direct_schema_prompt_enabled", True),
         "worker_transport": "multipart_upload",
         "last_error": _last_error,
         "last_request_at": _last_request_at,
@@ -187,13 +237,28 @@ def _analyze_path(
             raise FileNotFoundError(f"file_path_not_found: {path}")
         image_path = _prepare_input_image(path)
         settings = get_settings()
-        with _inference_lock:
-            output = _get_pipeline().predict(
-                str(image_path),
-                max_new_tokens=getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
-            )
-        text = extract_text(output)
+        schema_metadata: dict[str, Any] = {"enabled": bool(getattr(settings, "paddleocr_vl_gguf_schema_prompt_enabled", False))}
+        schema_payload: dict[str, Any] | None = None
+        tables: list[dict[str, Any]] = []
+        output: Any
+        if schema_metadata["enabled"]:
+            schema_payload, schema_metadata = _run_schema_prompt_inference(image_path, settings)
+        if schema_payload:
+            text = str(schema_payload.get("raw_text") or "")
+            tables = _tables_from_schema_payload(schema_payload)
+            output = [{"text": text, "structured_json": schema_payload}]
+        else:
+            with _inference_lock:
+                output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
+            text = extract_text(output)
+            schema_json = _schema_json_from_output(output)
+            if schema_json:
+                schema_metadata.update({"used": True, "transport": "paddleocr_predict_prompt"})
+                text = str(schema_json.get("raw_text") or text)
+                tables = _tables_from_schema_payload(schema_json)
         validation = validate_output_text(text, [])
+        if not tables:
+            tables = _extract_structured_tables(text, output, original_filename=original_filename or path.name)
         if validation.get("ok"):
             _last_error = None
             _last_success_at = _utc_now_iso()
@@ -205,7 +270,8 @@ def _analyze_path(
                 "render": {"image_path": str(image_path)},
                 "text_preview": text[:5000],
                 "structured_schema": VLM_STRUCTURED_OUTPUT_SCHEMA,
-                "tables": _extract_structured_tables(text, output, original_filename=original_filename or path.name),
+                "schema_prompt": schema_metadata,
+                "tables": tables,
                 "provider_available_candidate": bool(validation.get("ok")),
                 "provider_available_decision_reason": "vl_worker_output_readable" if validation.get("ok") else "vl_worker_output_invalid",
             }
@@ -250,6 +316,7 @@ def _base_report(
         "worker_provider": "vl_worker_api",
         "model_name": "PaddleOCR-VL-1.6-GGUF",
         "n_predict": getattr(get_settings(), "paddleocr_vl_gguf_n_predict", 512),
+        "schema_prompt_enabled": getattr(get_settings(), "paddleocr_vl_gguf_schema_prompt_enabled", True),
         "remote_upload": transport_metadata or {},
         "manual_visual_check": {
             "sample": str(path),
@@ -302,6 +369,199 @@ def _render_first_page(path: Path) -> Path:
         pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
         pixmap.save(output_path)
     return output_path
+
+
+def _run_schema_prompt_inference(image_path: Path, settings: Any) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    metadata: dict[str, Any] = {
+        "enabled": True,
+        "attempted": False,
+        "used": False,
+        "transport": None,
+        "error": None,
+    }
+    if getattr(settings, "paddleocr_vl_gguf_direct_schema_prompt_enabled", False):
+        metadata["attempted"] = True
+        payload, error = _run_direct_llama_schema_prompt(image_path, settings)
+        if payload:
+            metadata.update({"used": True, "transport": "llama_server_chat_completions"})
+            return payload, metadata
+        metadata["error"] = error
+    return None, metadata
+
+
+def _run_direct_llama_schema_prompt(image_path: Path, settings: Any) -> tuple[dict[str, Any] | None, str | None]:
+    server_url = str(getattr(settings, "paddleocr_vl_gguf_server_url", "") or "").rstrip("/")
+    if not server_url:
+        return None, "missing_llama_server_url"
+    endpoint = f"{server_url}/chat/completions"
+    image_url = _image_data_url(image_path)
+    body = {
+        "model": getattr(settings, "paddleocr_vl_gguf_model_file", "PaddleOCR-VL-1.6-GGUF.gguf"),
+        "temperature": 0,
+        "max_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VLM_TABLE_EXTRACTION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+    }
+    try:
+        response = requests.post(
+            endpoint,
+            json=body,
+            timeout=max(30.0, float(getattr(settings, "paddleocr_vl_gguf_timeout_seconds", 240.0))),
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        parsed = _parse_json_object(content)
+        if not parsed:
+            return None, "schema_prompt_response_not_json"
+        return parsed, None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _predict_with_optional_paddle_schema_prompt(image_path: Path, settings: Any) -> Any:
+    pipeline = _get_pipeline()
+    kwargs: dict[str, Any] = {"max_new_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512)}
+    if getattr(settings, "paddleocr_vl_gguf_schema_prompt_enabled", False):
+        signature = inspect.signature(pipeline.predict)
+        prompt_key = next(
+            (
+                key
+                for key in ("prompt", "instruction", "query", "task_prompt")
+                if key in signature.parameters
+            ),
+            None,
+        )
+        if prompt_key:
+            kwargs[prompt_key] = VLM_TABLE_EXTRACTION_PROMPT
+    return pipeline.predict(str(image_path), **kwargs)
+
+
+def _schema_json_from_output(output: Any) -> dict[str, Any] | None:
+    candidates: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            structured = value.get("structured_json")
+            if isinstance(structured, dict):
+                candidates.append(json.dumps(structured, ensure_ascii=False))
+            for key in ("json", "structured_output", "text", "content", "markdown"):
+                content = value.get(key)
+                if isinstance(content, str):
+                    candidates.append(content)
+                elif isinstance(content, dict):
+                    candidates.append(json.dumps(content, ensure_ascii=False))
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+        elif isinstance(value, str):
+            candidates.append(value)
+
+    walk(output)
+    for candidate in candidates:
+        parsed = _parse_json_object(candidate)
+        if parsed and isinstance(parsed.get("tables"), list):
+            return parsed
+    return None
+
+
+def _parse_json_object(content: str) -> dict[str, Any] | None:
+    text = str(content or "").strip()
+    if not text:
+        return None
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _image_data_url(image_path: Path) -> str:
+    mime_type = mimetypes.guess_type(str(image_path))[0] or "image/png"
+    data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{data}"
+
+
+def _tables_from_schema_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    tables: list[dict[str, Any]] = []
+    for table in payload.get("tables") or []:
+        if not isinstance(table, dict):
+            continue
+        table_type = str(table.get("table_type") or "unknown").strip() or "unknown"
+        rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+        normalized_rows = (
+            [_normalize_schema_inspection_row(row) for row in rows if isinstance(row, dict)]
+            if table_type == "incoming_inspection"
+            else [dict(row) for row in rows if isinstance(row, dict)]
+        )
+        normalized_rows = [row for row in normalized_rows if row]
+        if not normalized_rows:
+            continue
+        warnings = sorted(set([*(table.get("warnings") or []), "vl_schema_prompt_table_review_required"]))
+        if table_type == "incoming_inspection":
+            warnings = sorted(set([*warnings, "inspection_report_no_amount_fields"]))
+        tables.append(
+            {
+                "table_type": table_type,
+                "source": "vl_schema_prompt",
+                "schema_version": VLM_STRUCTURED_OUTPUT_SCHEMA["version"],
+                "columns": table.get("columns") or VLM_STRUCTURED_OUTPUT_SCHEMA["table_types"].get(table_type, {}).get("columns", []),
+                "rows": normalized_rows,
+                "warnings": warnings,
+                "review_required": True,
+                "amount_fields_policy": "null_for_inspection_report" if table_type == "incoming_inspection" else table.get("amount_fields_policy"),
+            }
+        )
+    return tables
+
+
+def _normalize_schema_inspection_row(row: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for field in ("no", "received_quantity", "accepted_quantity", "defective_quantity"):
+        value = row.get(field)
+        if value not in (None, ""):
+            normalized[field] = _int_text(str(value))
+    for field in (
+        "item_name",
+        "lot_code",
+        "document_item_code",
+        "specification",
+        "inspection_item",
+        "result",
+        "note",
+    ):
+        value = _clean_cell(str(row.get(field) or ""))
+        if value:
+            normalized[field] = value
+    if "result" in normalized:
+        normalized["result"] = re.sub(r"조건부\s*합격|조건부합격", "조건부 합격", normalized["result"]).strip()
+    for amount_field in ("unit_price", "supply_amount", "tax_amount", "line_total", "subtotal", "total", "currency"):
+        normalized.pop(amount_field, None)
+    flags = list(row.get("review_flags") or [])
+    flags.extend(_inspection_uncertainty_warnings(" ".join(str(value) for value in row.values()), normalized))
+    flags.append("vl_schema_prompt_inspection_review_required")
+    normalized["review_flags"] = sorted(set(flag for flag in flags if flag))
+    return normalized if normalized.get("item_name") else {}
 
 
 def _extract_structured_tables(text: str, output: Any, *, original_filename: str = "") -> list[dict[str, Any]]:
