@@ -1,5 +1,4 @@
 import type { DocumentRecord } from "@/types/document";
-import { ApiRequestError } from "@/lib/api";
 
 export const DEFAULT_UPLOAD_CONCURRENCY = 3;
 export const RECOMMENDED_MAX_UPLOAD_FILES = 20;
@@ -131,6 +130,15 @@ export function mergeDocumentStatusesIntoQueue(
   });
 }
 
+export function removeUploadQueueItemsForDocumentIds(
+  items: UploadQueueItem<UploadQueueFileLike>[],
+  documentIds: Iterable<string>,
+) {
+  const deletedIds = new Set(documentIds);
+  if (!deletedIds.size) return items;
+  return items.filter((item) => !item.documentId || !deletedIds.has(item.documentId));
+}
+
 export function uploadQueueStatusFromDocument(document: Pick<DocumentRecord, "processing_status">): UploadQueueStatus {
   if (document.processing_status === "uploaded") return "accepted";
   if (document.processing_status === "queued") return "queued";
@@ -145,7 +153,7 @@ export function markUploadFailed(items: UploadQueueItem<UploadQueueFileLike>[], 
 }
 
 export function explainUploadError(error: unknown): string {
-  if (error instanceof ApiRequestError) {
+  if (isApiRequestErrorLike(error)) {
     const detailText = apiErrorDetailText(error.detail);
     if (error.status === 413) {
       return "파일 용량이 업로드 제한을 넘었습니다. 파일을 나누거나 해상도를 낮춘 뒤 다시 올리세요.";
@@ -173,6 +181,15 @@ export function explainUploadError(error: unknown): string {
   return message || "업로드에 실패했습니다";
 }
 
+function isApiRequestErrorLike(error: unknown): error is { status: number; detail: unknown; message?: string } {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && typeof (error as { status?: unknown }).status === "number"
+    && "detail" in error
+  );
+}
+
 function apiErrorDetailText(detail: unknown): string {
   if (typeof detail === "string") return detail;
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return "";
@@ -191,8 +208,8 @@ export function removeQueuedUploadItem(items: UploadQueueItem<UploadQueueFileLik
   return items.filter((item) => !(item.id === id && ["selected", "waiting_upload", "needs_reselect", "interrupted"].includes(item.status)));
 }
 
-export function clearUploadQueue(items: UploadQueueItem<UploadQueueFileLike>[]) {
-  return items.filter((item) => ["accepting", "accepted", "queued", "processing"].includes(item.status));
+export function clearUploadQueue() {
+  return [];
 }
 
 export function serializeUploadQueue(items: UploadQueueItem<UploadQueueFileLike>[], now = Date.now()): SerializedUploadQueue {

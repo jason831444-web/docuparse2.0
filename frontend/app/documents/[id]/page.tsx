@@ -874,12 +874,12 @@ export default function DocumentDetailPage() {
         </Card>
       ) : null}
 
-      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:h-[calc(100vh-7rem)] xl:grid-cols-[minmax(420px,1fr)_minmax(520px,0.95fr)] xl:items-stretch xl:overflow-hidden">
-        <section className="xl:h-full xl:min-h-0">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:grid-cols-[minmax(420px,1fr)_minmax(520px,0.95fr)] xl:items-start">
+        <section className="xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)] xl:min-h-0">
           <OriginalPreviewCard document={document} isImage={isImage} />
         </section>
 
-        <section className="flex min-w-0 flex-col gap-6 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pb-6 xl:pr-2">
+        <section className="flex min-w-0 flex-col gap-6 xl:min-h-0 xl:pb-6">
           <div className="flex flex-wrap gap-2">
             {detailTabs.map((tab) => (
               <button

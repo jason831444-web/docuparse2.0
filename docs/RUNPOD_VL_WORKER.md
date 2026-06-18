@@ -142,6 +142,61 @@ not stop or terminate the RunPod pod. By default it leaves any reverse tunnel
 alone; set `STOP_TUNNEL=1` only when you intentionally want to stop the tunnel
 PID recorded in `/workspace/docuparse-gpu-test/logs/reverse_upload_tunnel.pid`.
 
+## RunPod Reverse Tunnel
+
+When the RunPod pod cannot expose `vl-worker-api` directly, keep the
+DigitalOcean-visible endpoint stable by opening a reverse SSH tunnel from
+RunPod back to DigitalOcean:
+
+```text
+RunPod 127.0.0.1:8020 -> DigitalOcean 127.0.0.1:18020
+```
+
+Use the repo scripts from inside the RunPod pod:
+
+```bash
+cd /workspace/docuparse-gpu-test/docuparse2.0
+scripts/runpod-start-reverse-tunnel.sh
+scripts/runpod-check-reverse-tunnel.sh
+```
+
+Defaults:
+
+- DigitalOcean SSH host: `104.236.18.111`
+- DigitalOcean SSH user: `root`
+- DigitalOcean tunnel key: `/root/.ssh/docuparse_do_reverse_tunnel`
+- DigitalOcean bind: `127.0.0.1:18020`
+- RunPod worker target: `127.0.0.1:8020`
+- PID file: `/workspace/docuparse-gpu-test/logs/reverse_upload_tunnel.pid`
+- log file: `/workspace/docuparse-gpu-test/logs/reverse_upload_tunnel.log`
+
+The start script first checks the local RunPod worker `/health`, refuses to run
+without the tunnel key, and avoids duplicate SSH tunnels when the PID file points
+to a live process. Override values with environment variables such as
+`DO_TUNNEL_HOST`, `DO_TUNNEL_KEY`, `DO_TUNNEL_REMOTE_PORT`,
+`RUNPOD_WORKER_PORT`, `RUNPOD_REVERSE_TUNNEL_PID_FILE`, and
+`RUNPOD_REVERSE_TUNNEL_LOG_FILE`.
+
+Stop only the tunnel process recorded in the PID file:
+
+```bash
+scripts/runpod-stop-reverse-tunnel.sh
+```
+
+The stop script does not use `pkill -f`, does not stop `llama-server`, does not
+stop `vl-worker-api`, and never deletes models, uploads, or logs.
+
+After the reverse tunnel is running, verify the full DigitalOcean-facing path:
+
+```bash
+ssh docuparse-server
+cd /root/docuparse2.0
+scripts/check-vl-worker.sh http://172.18.0.1:18024
+```
+
+The backend-visible URL remains `http://172.18.0.1:18024`; the reverse tunnel is
+only one leg of that path.
+
 ## DigitalOcean Connection
 
 Expose the RunPod worker to the DigitalOcean backend with a network tunnel or
@@ -254,15 +309,24 @@ before all processes are ready. Do this sequence:
 
 1. SSH into RunPod.
 2. Check GPU availability with `nvidia-smi`.
-3. Run `scripts/runpod-start-vl-stack.sh`.
-4. Or run `scripts/runpod-bootstrap-vl-stack.sh` to combine git sync, model
-   verification, start, and check.
-5. Run `scripts/runpod-check-vl-stack.sh`.
-6. Confirm the DigitalOcean tunnel/forward is alive.
-7. On DigitalOcean, run `scripts/check-vl-worker.sh`.
-8. Upload one fixture through the normal UI/API path.
-9. Confirm RunPod logs show `POST /analyze-upload 200 OK`.
-10. Confirm document metadata includes `worker_transport=multipart_upload` and
+3. Go to the repo: `cd /workspace/docuparse-gpu-test/docuparse2.0`.
+4. Confirm the official model files exist:
+   `ls -lh /workspace/docuparse_models/paddleocr_vl_1_6_gguf`.
+5. Sync code: `git pull --ff-only origin main`.
+6. Run `scripts/runpod-bootstrap-vl-stack.sh` to combine git sync, model
+   verification, process start, and health checks.
+7. Or run `scripts/runpod-start-vl-stack.sh` followed by
+   `scripts/runpod-check-vl-stack.sh` when dependencies are already prepared.
+8. Start the reverse tunnel:
+   `scripts/runpod-start-reverse-tunnel.sh`.
+9. Check the reverse tunnel:
+   `scripts/runpod-check-reverse-tunnel.sh`.
+10. On DigitalOcean, run
+   `scripts/check-vl-worker.sh http://172.18.0.1:18024`.
+11. Upload one fixture through the normal UI/API path, for example
+   `MFG-003_delivery_no_price_uncropped.jpg`.
+12. Confirm RunPod logs show `POST /analyze-upload 200 OK`.
+13. Confirm document metadata includes `worker_transport=multipart_upload` and
    `worker_location=remote`.
 
 RunPod start does not automatically guarantee that DigitalOcean is connected

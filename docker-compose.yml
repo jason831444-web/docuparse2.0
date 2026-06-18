@@ -173,6 +173,12 @@ services:
         condition: service_healthy
       ocr-worker:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
   ocr-worker:
     profiles:

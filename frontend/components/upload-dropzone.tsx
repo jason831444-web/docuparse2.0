@@ -6,7 +6,7 @@ import { AlertCircle, CheckCircle2, Clock3, FileUp, Loader2, RotateCcw, X } from
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
+import { ApiRequestError, api } from "@/lib/api";
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
   RECOMMENDED_MAX_UPLOAD_FILES,
@@ -18,6 +18,7 @@ import {
   markUploadStarted,
   mergeDocumentStatusesIntoQueue,
   nextQueuedUploadIds,
+  removeUploadQueueItemsForDocumentIds,
   removeQueuedUploadItem,
   restoreUploadQueue,
   retryUploadItem,
@@ -28,6 +29,7 @@ import {
   type UploadQueueFileLike,
 } from "@/lib/upload-queue";
 import { cn } from "@/lib/utils";
+import type { DocumentRecord } from "@/types/document";
 
 const acceptedTypes = [
   "image/jpeg",
@@ -128,17 +130,27 @@ export function UploadDropzone() {
   useEffect(() => {
     if (!hydrated) return;
     const trackedIds = queue
-      .filter((item) => ["accepted", "queued", "processing"].includes(item.status) && item.documentId)
+      .filter((item) => item.documentId)
       .map((item) => item.documentId as string);
     if (!trackedIds.length) return;
     let cancelled = false;
     const refresh = async () => {
       try {
-        const params = new URLSearchParams({ page_size: "100", sort_by: "updated_at", order: "desc" });
-        const response = await api.list(params);
+        const results = await Promise.allSettled(trackedIds.map((id) => api.get(id)));
         if (cancelled) return;
-        const tracked = response.items.filter((document) => trackedIds.includes(document.id));
-        setQueue((current) => mergeDocumentStatusesIntoQueue(current, tracked));
+        const documents: DocumentRecord[] = [];
+        const deletedIds: string[] = [];
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index];
+          if (result.status === "fulfilled") {
+            documents.push(result.value);
+          } else if (result.reason instanceof ApiRequestError && result.reason.status === 404) {
+            deletedIds.push(trackedIds[index]);
+          } else {
+            return;
+          }
+        }
+        setQueue((current) => removeUploadQueueItemsForDocumentIds(mergeDocumentStatusesIntoQueue(current, documents), deletedIds));
       } catch {
         // Keep the queue visible; the next interval will retry.
       }
@@ -238,7 +250,15 @@ export function UploadDropzone() {
             </div>
             <div className="flex items-center gap-3">
               <span className="text-xs text-muted-foreground">처리 중 {activeCount} / {DEFAULT_UPLOAD_CONCURRENCY}</span>
-              <Button size="sm" variant="ghost" onClick={() => setQueue((current) => clearUploadQueue(current))}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  activeIds.current.clear();
+                  setQueue(() => clearUploadQueue());
+                  toast.success("업로드 대기열을 비웠습니다");
+                }}
+              >
                 대기열 모두 지우기
               </Button>
             </div>

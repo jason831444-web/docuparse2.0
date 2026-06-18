@@ -12,6 +12,7 @@ import {
   markUploadStarted,
   mergeDocumentStatusesIntoQueue,
   nextQueuedUploadIds,
+  removeUploadQueueItemsForDocumentIds,
   restoreUploadQueue,
   retryUploadItem,
   runningUploadCount,
@@ -111,13 +112,14 @@ assert.equal(stale.length, 0);
 assert.match(explainUploadError(new Error("Failed to fetch")), /백엔드에 연결하지 못했습니다/);
 assert.match(explainUploadError(new Error("The operation was aborted")), /중단/);
 
-const clearable = clearUploadQueue([
-  { ...queue[0], status: "done" },
-  { ...queue[1], status: "needs_reselect" },
-  { ...queue[2], status: "interrupted" },
-  { ...queue[3], status: "processing" },
-  { ...queue[4], status: "accepting" },
-]);
-assert.deepEqual(clearable.map((item) => item.status), ["processing", "accepting"]);
+const clearable = clearUploadQueue();
+assert.deepEqual(clearable.map((item) => item.status), []);
+
+const afterDeletedDocument = removeUploadQueueItemsForDocumentIds([
+  { ...queue[0], status: "done", documentId: "doc-deleted" },
+  { ...queue[1], status: "processing", documentId: "doc-kept" },
+  { ...queue[2], status: "waiting_upload", documentId: null },
+], ["doc-deleted"]);
+assert.deepEqual(afterDeletedDocument.map((item) => item.documentId), ["doc-kept", null]);
 
 console.log("upload queue tests passed");
