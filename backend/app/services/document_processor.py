@@ -523,7 +523,7 @@ class DocumentProcessor:
             if attr == "currency" and self._vl_structured_candidate_is_amountless(structured):
                 continue
             value = candidate_doc.get(key)
-            if value not in (None, "", []):
+            if value not in (None, "", []) and self._should_apply_vl_scalar_field(getattr(parsed, attr, None), value):
                 setattr(parsed, attr, value)
         issue_date = self._vl_date(candidate_doc.get("issue_date"))
         due_date = self._vl_date(candidate_doc.get("due_date"))
@@ -829,7 +829,7 @@ class DocumentProcessor:
             if attr == "currency" and self._vl_structured_candidate_is_amountless(structured):
                 continue
             value = candidate_doc.get(key)
-            if value not in (None, "", []):
+            if value not in (None, "", []) and self._should_apply_vl_scalar_field(getattr(document, attr, None), value):
                 setattr(document, attr, sanitize_for_postgres(value))
         issue_date = self._vl_date(candidate_doc.get("issue_date"))
         due_date = self._vl_date(candidate_doc.get("due_date"))
@@ -848,6 +848,29 @@ class DocumentProcessor:
         if line_items:
             document.line_items = sanitize_for_postgres(self._safe_vl_promoted_line_items(line_items))
             document.low_confidence_fields = []
+
+    def _should_apply_vl_scalar_field(self, existing: Any, candidate: Any) -> bool:
+        if candidate in (None, "", []):
+            return False
+        if existing in (None, "", []):
+            return True
+        existing_text = str(existing).strip()
+        candidate_text = str(candidate).strip()
+        if not existing_text:
+            return True
+        if not candidate_text:
+            return False
+        if existing_text == candidate_text:
+            return True
+        if self.parser._looks_like_line_item_header_text(candidate_text):
+            return False
+        if re.search(
+            r"(vendor\s+sku|unit\s+price|amount|qty|spec|품목|규격|수량|단가|공급가액|세액|합계)",
+            candidate_text,
+            flags=re.IGNORECASE,
+        ):
+            return False
+        return False
         field_sources = dict(document.field_sources or {})
         for field in ("document_number", "vendor_name", "customer_name", "issue_date", "due_date", "currency", "subtotal", "tax", "extracted_amount", "line_items"):
             field_sources[field] = "paddleocr_vl_1_6_gguf"

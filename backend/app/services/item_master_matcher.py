@@ -461,12 +461,30 @@ class ItemMasterMatcher:
             return
         item["source_specification"] = item.get("source_specification") or source_spec
         item["matched_master_spec"] = master_spec
-        item.pop("specification", None)
+        preserve_visible_spec = self._should_preserve_visible_spec_despite_master_conflict(item)
+        if preserve_visible_spec:
+            item["specification_review_required"] = True
+        else:
+            item.pop("specification", None)
+            item["specification_review_required"] = True
+            item["specification_suppressed_reason"] = "item_master_conflict"
         for field in ("review_flags", "validation_warnings"):
             values = list(item.get(field) or [])
             if "specification_conflict_with_item_master" not in values:
                 values.append("specification_conflict_with_item_master")
             item[field] = values
+
+    def _should_preserve_visible_spec_despite_master_conflict(self, item: dict[str, Any]) -> bool:
+        if any(item.get(field) not in (None, "", []) for field in ("received_quantity", "accepted_quantity", "defective_quantity", "inspection_result")):
+            return True
+        if item.get("no_price_document") is True and any(item.get(field) not in (None, "", []) for field in ("quantity", "requested_quantity", "delivered_quantity")):
+            return True
+        provenance = item.get("field_provenance")
+        if isinstance(provenance, dict):
+            spec_provenance = provenance.get("specification") or provenance.get("spec")
+            if isinstance(spec_provenance, dict) and spec_provenance.get("visible") is True:
+                return True
+        return False
 
     def _looks_like_real_code(self, value: object) -> bool:
         text = str(value or "").strip()

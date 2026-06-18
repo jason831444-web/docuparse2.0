@@ -39,7 +39,7 @@ class VLCandidateParser:
         parsed.line_items = self._line_items_for_visible_columns_only(cleaned, doc_type, parsed.line_items)
         handwritten_items = self._extract_handwritten_freeform_items(cleaned, parsed.document_type)
         if (
-            not self._has_explicit_table_header(cleaned)
+            not self._has_explicit_table_header(cleaned, parsed.document_type)
             and self._should_prefer_handwritten_items(handwritten_items, parsed.line_items)
         ):
             parsed.line_items = handwritten_items
@@ -328,14 +328,48 @@ class VLCandidateParser:
         header_like_fallbacks = sum(1 for name in fallback_names if self._looks_like_table_header(name))
         if header_like_fallbacks:
             return True
+        fallback_score = self._structured_line_item_score(fallback_items)
+        handwritten_score = self._structured_line_item_score(handwritten_items)
+        if fallback_score >= handwritten_score and fallback_score >= max(3, len(fallback_items) * 2):
+            return False
         if len(handwritten_names - fallback_names) >= max(1, len(fallback_names)):
             return True
         return len(handwritten_items) > len(fallback_items)
 
-    def _has_explicit_table_header(self, text: str) -> bool:
+    def _structured_line_item_score(self, items: list[dict[str, Any]]) -> int:
+        score = 0
+        structured_fields = (
+            "document_item_code",
+            "item_code",
+            "specification",
+            "quantity",
+            "unit",
+            "unit_price",
+            "supply_amount",
+            "tax_amount",
+            "line_total",
+            "received_quantity",
+            "accepted_quantity",
+            "rejected_quantity",
+            "inspection_result",
+        )
+        for item in items or []:
+            if not item.get("item_name"):
+                continue
+            score += 1
+            for field in structured_fields:
+                if item.get(field) not in (None, "", []):
+                    score += 1
+        return score
+
+    def _has_explicit_table_header(self, text: str, doc_type: Any | None = None) -> bool:
+        lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+        for line in lines:
+            if self.parser._looks_like_vl_inline_table_header(line, doc_type):
+                return True
         return bool(
             re.search(
-                r"(?:^|\n)[^\n]*(?:품목명|품명|반품품목|Item\s+Description|Description|"
+                r"(?:^|\n)[^\n]*(?:품목|품목명|품명|반품품목|Item\s+Description|Description|"
                 r"품목\s*코드|문서품목코드|Vendor\s+SKU)[^\n]*(?:수량|Qty|Quantity|단가|공급가액|합계|세액|"
                 r"입고수량|합격수량|불량수량)",
                 text or "",
@@ -462,7 +496,7 @@ class VLCandidateParser:
         normalized = re.sub(r"\s+", "", text)
         if re.search(
             r"^(?:제목|날짜|일자|업체|거래처|받는곳|현장|담당|비고|메모|서명|납기|총|합계|공급가액|세액|"
-            r"품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류|판매총액|실판매금액|판입금액|"
+            r"품명|품목명|검사수량|치수|표면|외관|수량확인|합격|보류|청구금액|차감합계|조정합계|판매총액|실판매금액|판입금액|"
             r"온라인결제|카드결제|현금결제|입금액|결제금액)",
             normalized,
         ):

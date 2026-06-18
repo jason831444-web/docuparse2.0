@@ -803,6 +803,268 @@ def test_vl_candidate_parser_structures_handwritten_no_price_delivery_rows_witho
         assert "handwritten_amount_missing_or_not_applicable" in item["validation_warnings"]
 
 
+def test_vl_candidate_parser_keeps_structured_table_over_handwritten_fallback_for_tax_invoice():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "세금계산서",
+                "계산서번호 INV-2026-0002",
+                "품목 규격 수량 단가 공급가액 세액 합계금액",
+                "06/12 PCB Connector 12P 200 1,250 250,000 25,000 275,000",
+                "06/12 Cable Harness 500mm 80 2,800 224,000 22,400 246,400",
+                "06/12 AL6061 환봉 10파이 30 8,500 255,000 25,500 280,500",
+                "청구금액 801,900",
+            ]
+        ),
+        filename="tax-invoice-uncropped.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 3
+    names = [item["item_name"] for item in candidate["line_items"]]
+    assert names == ["PCB Connector", "Cable Harness", "AL6061 환봉 10파이"]
+    assert not any("청구금액" in name for name in names)
+    first = candidate["line_items"][0]
+    assert first["quantity"] == 200
+    assert first["unit_price"] == 1250
+    assert first["supply_amount"] == 250000
+    assert first["tax_amount"] == 25000
+    assert first["line_total"] == 275000
+    assert "handwritten_vl_candidate" not in first.get("validation_warnings", [])
+
+
+def test_vl_candidate_parser_keeps_structured_option_quote_rows():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "태광테크",
+                "견적서",
+                "견적번호 QT-2026-0005",
+                "수신 대성정공",
+                "품목 규격 수량 단가 공급가액 세액 합계금액",
+                "A 산업용 센서 SN-240 10 38,000 380,000 38,000 418,000",
+                "B 컨트롤 박스 CB-9 2 210,000 420,000 42,000 462,000",
+                "총액 880,000",
+            ]
+        ),
+        filename="quotation-uncropped.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["vendor_name"] == "태광테크"
+    assert candidate["document"]["customer_name"] == "대성정공"
+    assert candidate["line_item_count"] == 2
+    first, second = candidate["line_items"]
+    assert first["item_name"] == "A 산업용 센서"
+    assert first["document_item_code"] == "SN-240"
+    assert first["quantity"] == 10
+    assert first["line_total"] == 418000
+    assert second["item_name"] == "B 컨트롤 박스"
+    assert second["quantity"] == 2
+    assert second["line_total"] == 462000
+    assert not any("handwritten_vl_candidate" in item.get("validation_warnings", []) for item in candidate["line_items"])
+
+
+def test_vl_candidate_parser_keeps_return_credit_rows_and_suppresses_summary_row():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "반품/크레딧 메모",
+                "문서번호 RCM-2026-0009",
+                "품목 규격 수량 단가 공급가액 세액 합계금액",
+                "스프링 와셔 M6 2 14,500 -29,000 -2,900 -31,900",
+                "반품 운송비 - 1 5,000 -5,000 -500 -5,500",
+                "조정 합계 -34,100",
+            ]
+        ),
+        filename="return-credit.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 2
+    names = [item["item_name"] for item in candidate["line_items"]]
+    assert names == ["스프링 와셔", "반품 운송비"]
+    assert not any("조정" in name or "합계" in name for name in names)
+    assert candidate["line_items"][0]["line_total"] == -31900
+    assert candidate["line_items"][1]["line_total"] == -5500
+
+
+def test_vl_candidate_parser_structures_internal_transfer_rows_with_internal_codes():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "자재 이동 요청서",
+                "문서번호 MV-2026-0010",
+                "No 품목 내부품목코드 규격 요청수량 단위 비고",
+                "1 S45C PIN P-PIN-S45C-08X60 8x60 200 EA 2공장 요청",
+                "2 AL6061 환봉 M-BAR-AL6061-10MM-3000 10파이 50 EA 가공 대기",
+                "3 케이블 타이 E-CABLE-TIE 100mm 6 CAN 2층 요청",
+            ]
+        ),
+        filename="internal-transfer.pdf",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_number"] == "MV-2026-0010"
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"]
+    assert first["item_name"] == "S45C PIN"
+    assert first["document_item_code"] == "P-PIN-S45C-08X60"
+    assert first["quantity"] == 200
+    assert first["requested_quantity"] == 200
+    assert second["item_name"] == "AL6061 환봉"
+    assert second["document_item_code"] == "M-BAR-AL6061-10MM-3000"
+    assert second["specification"] == "10파이"
+    assert second["quantity"] == 50
+    assert third["item_name"] == "케이블 타이"
+    assert third["document_item_code"] == "E-CABLE-TIE"
+    assert third["quantity"] == 6
+    assert not any("unit_price" in item or "supply_amount" in item for item in candidate["line_items"])
+
+
+def test_vl_candidate_parser_structures_internal_transfer_rows_without_internal_codes():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "자재 이동 요청서",
+                "문서번호",
+                "MV-2026-0010",
+                "No 품목 규격 수량 단위 이동사유",
+                "1 S45C PIN 8X60 200 EA 2라인 긴급 투입",
+                "2 AL6061 환봉 10파이 50 EA 가공 대기",
+                "3 절삭유 4L 6 CAN 공용 소모품",
+                "※ 내부 이동 문서로 금액/세액 없음. 수량 확인 후 처리.",
+            ]
+        ),
+        filename="internal-transfer-no-code.webp",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_number"] == "MV-2026-0010"
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"]
+    assert first["item_name"] == "S45C PIN"
+    assert first["specification"] == "8x60"
+    assert first["quantity"] == 200
+    assert second["item_name"] == "AL6061 환봉"
+    assert "document_item_code" not in second
+    assert second["specification"] == "10파이"
+    assert second["quantity"] == 50
+    assert third["item_name"] == "절삭유"
+    assert third["specification"] == "4L"
+    assert third["quantity"] == 6
+    assert third["unit"] == "CAN"
+    assert not any("unit_price" in item or "supply_amount" in item for item in candidate["line_items"])
+
+
+def test_vl_candidate_parser_normalizes_document_number_with_ocr_space_inside_suffix():
+    parsed = DocumentParser().parse(
+        "\n".join(
+            [
+                "COMMERCIAL INVOICE",
+                "문서번호",
+                "INV-US-GEN- OO4",
+                "공급업체",
+                "Global Motion Parts LLC",
+            ]
+        ),
+        "hidden-amount.pdf",
+    )
+
+    assert parsed.document_number == "INV-US-GEN-004"
+
+
+def test_vl_candidate_parser_parses_tax_invoice_rows_without_visible_line_total():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "세금계산서",
+                "문서번호 INV-2026-0002",
+                "작성일자 2026.06.12",
+                "공급자 동해산업",
+                "공급받는자 대성정공",
+                "월일 품목 규격 수량 단가 공급가액 세액",
+                "06/12 PCB Connector 12P 200 1,250 250,000 25,000",
+                "06/12 Cable Harness 500mm 80 2,800 224,000 22,400",
+                "06/12 AL6061 환봉 10파이 30 8,500 255,000 25,500",
+                "공급가액 합계 729,000",
+                "세액 합계 72,900",
+                "청구금액 801,900",
+            ]
+        ),
+        filename="tax-invoice-visible-tax-only.png",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "invoice"
+    assert candidate["document"]["document_number"] == "INV-2026-0002"
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"]
+    assert first["item_name"] == "PCB Connector"
+    assert first["specification"] == "12P"
+    assert first["quantity"] == 200
+    assert first["unit_price"] == 1250
+    assert first["supply_amount"] == 250000
+    assert first["tax_amount"] == 25000
+    assert "line_total" not in first
+    assert "line_total_column_not_visible" in first["validation_warnings"]
+    assert second["item_name"] == "Cable Harness"
+    assert second["specification"] == "500mm"
+    assert third["item_name"] == "AL6061 환봉 10파이"
+    assert third["quantity"] == 30
+    assert "vl_candidate_invalid_line_total" not in candidate["issue_codes"]
+
+
+def test_vl_candidate_parser_parses_inspection_rows_without_lot_column():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "대성정공품질팀",
+                "입고 검사 기록서",
+                "문서번호 IOC-2026-0007",
+                "검사일 2026.06.15",
+                "협력사 한빛정밀",
+                "검사자 박지훈",
+                "No 품목 규격 입고수량 합격 불량 판정 비고",
+                "1 베어링 하우징 BH-220 80 78 2 조건부합격 표면 흠집",
+                "2 S45C PIN 8X60 300 300 0 합격",
+                "3 SUS 볼트 M5X20 500 497 3 재검 나사산 확인",
+                "검사 의견: 불량 수량은 별도 격리 후 협력사 통보. 금액 항목 없음.",
+            ]
+        ),
+        filename="incoming-inspection-visible.png",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "inspection_report"
+    assert candidate["document"]["document_number"] == "IOC-2026-0007"
+    assert candidate["document"]["vendor_name"] == "한빛정밀"
+    assert candidate["document"]["customer_name"] == "대성정공품질팀"
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"]
+    assert first["item_name"] == "베어링 하우징"
+    assert first["specification"] == "BH-220"
+    assert first["received_quantity"] == 80
+    assert first["accepted_quantity"] == 78
+    assert first["rejected_quantity"] == 2
+    assert first["inspection_result"] == "조건부합격"
+    assert second["item_name"] == "S45C PIN"
+    assert second["specification"] == "8x60"
+    assert second["received_quantity"] == 300
+    assert second["rejected_quantity"] == 0
+    assert third["item_name"] == "SUS 볼트"
+    assert third["specification"] == "M5x20"
+    assert third["inspection_result"] == "재검"
+    assert all("unit_price" not in item and "line_total" not in item for item in candidate["line_items"])
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {

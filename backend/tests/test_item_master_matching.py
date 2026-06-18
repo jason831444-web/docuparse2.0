@@ -137,6 +137,46 @@ def test_item_master_matching_uses_code_prefix_with_explicit_thickness_to_resolv
     assert matched["item_master_candidates"][0]["prefix_code_match"] is True
 
 
+def test_item_master_matching_preserves_visible_inspection_spec_when_master_differs():
+    masters = [
+        SimpleNamespace(
+            id=uuid4(),
+            internal_item_code="INSP-BH-200",
+            item_name="베어링 하우징",
+            normalized_item_name=normalize_item_text("베어링 하우징"),
+            spec="STD-999",
+            unit="EA",
+            standard_price=None,
+            active=True,
+            aliases=[],
+        )
+    ]
+
+    matched = ItemMasterMatcher().match_line_items_against_masters(
+        [
+            {
+                "item_name": "베어링 하우징",
+                "item_code": "INSP-BH-200",
+                "specification": "BH-220",
+                "quantity": 80,
+                "received_quantity": 80,
+                "accepted_quantity": 78,
+                "defective_quantity": 2,
+                "inspection_result": "조건부합격",
+                "unit": "EA",
+            }
+        ],
+        masters,
+    )[0]
+
+    assert matched["internal_item_code"] == "INSP-BH-200"
+    assert matched["specification"] == "BH-220"
+    assert matched["source_specification"] == "BH-220"
+    assert matched["matched_master_spec"] == "STD-999"
+    assert matched["specification_review_required"] is True
+    assert "specification_conflict_with_item_master" in matched["review_flags"]
+
+
 def test_ambiguous_sus_items_include_m001_candidate_without_forcing_code():
     _, _, document = _parsed_document("09_item_matching_ambiguous.txt")
     matcher = ItemMasterMatcher()

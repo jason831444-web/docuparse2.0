@@ -301,6 +301,45 @@ def test_vl_structured_candidate_does_not_overwrite_distinct_invoice_issue_date_
     assert parsed.due_date == date(2026, 12, 3)
 
 
+def test_vl_structured_candidate_does_not_overwrite_parser_header_fields_with_table_header_noise():
+    processor = DocumentProcessor()
+    parsed = ParsedDocument(
+        document_type=DocumentType.invoice,
+        document_number="INV-US-GEN-004",
+        vendor_name="Global Motion Parts LLC",
+        customer_name="NeoFactory Korea",
+        currency="USD",
+        line_items=[],
+    )
+    structured = {
+        "document": {
+            "document_type": "invoice",
+            "document_number": None,
+            "vendor_name": "SKU Spec Qty Unit Unit Price A",
+            "customer_name": None,
+            "currency": "USD",
+        },
+        "line_items": [
+            {
+                "item_name": "Linear Guide Rail HGW20",
+                "document_item_code": "HGW20-1000",
+                "quantity": 10,
+                "unit": "EA",
+                "unit_price": 45,
+                "validation_warnings": ["missing_line_amount"],
+            }
+        ],
+    }
+
+    processor._apply_vl_structured_candidate_to_parsed(parsed, structured)
+
+    assert parsed.document_number == "INV-US-GEN-004"
+    assert parsed.vendor_name == "Global Motion Parts LLC"
+    assert parsed.customer_name == "NeoFactory Korea"
+    assert parsed.currency == "USD"
+    assert parsed.line_items[0]["item_name"] == "Linear Guide Rail HGW20"
+
+
 def test_vl_upload_pipeline_does_not_promote_negative_document_level_amounts():
     document = _document(document_type=DocumentType.general_document)
     structured = {
