@@ -26,6 +26,17 @@ AMOUNT_FIELDS = ("unit_price", "supply_amount", "tax_amount", "line_total", "sub
 LINE_AMOUNT_FIELDS = ("unit_price", "supply_amount", "tax_amount", "line_total")
 SUMMARY_ROW_RE = ("총액", "합계", "subtotal", "total", "tax", "vat", "공급가액", "세액")
 SUPPORTED_SAMPLE_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+DANGEROUS_CONTAMINATION_FAILURE_CODES = {
+    "no_price_document_amount_blocker",
+    "no_price_line_amount_created",
+    "row_amount_hidden_do_not_infer",
+    "blank_quantity_preservation_failed",
+    "exchange_rate_not_total",
+    "summary_total_not_line_item",
+    "header_row_not_line_item",
+    "vendor_sku_not_item_row",
+    "review_candidate_leaked_to_export",
+}
 
 
 def main() -> None:
@@ -84,6 +95,7 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
         if error:
             comparison["status"] = "FAIL"
             comparison["failures"].append({"code": "upload_or_processing_failed", "message": error})
+        dangerous_failures = dangerous_contamination_failures(comparison["failures"])
         row = {
             "filename": sample_path.name,
             "expected_file": expected_path.name if expected_path.exists() else "expected_metadata.jsonl",
@@ -93,7 +105,8 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
             "status": comparison["status"],
             "failures": comparison["failures"],
             "warnings": comparison["warnings"],
-            "dangerous_contamination": bool(comparison["failures"]),
+            "dangerous_contamination": bool(dangerous_failures),
+            "dangerous_contamination_failures": dangerous_failures,
             "summary": summarize_document(actual, export_json, payload.get("provider_metadata") or {}),
             "manual_visual_check": {
                 "pdf_opened_and_visually_checked": True,
@@ -255,6 +268,25 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         **counts,
         "dangerous_contamination_count": sum(1 for row in rows if row.get("dangerous_contamination")),
     }
+
+
+def dangerous_contamination_failures(failures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return only failures that represent unsafe confirmed/export data.
+
+    Regression failures can include missing visible fields, header mismatches, or
+    upload errors. Those are important, but they are not dangerous contamination
+    unless a value that should remain absent/review-only entered confirmed line
+    items, document amount fields, or export output. Metadata/provenance strings
+    such as ``field_sources.tax = "heuristic_fallback"`` must not count here.
+    """
+    dangerous: list[dict[str, Any]] = []
+    for failure in failures:
+        if not isinstance(failure, dict):
+            continue
+        code = str(failure.get("code") or "")
+        if code in DANGEROUS_CONTAMINATION_FAILURE_CODES:
+            dangerous.append(failure)
+    return dangerous
 
 
 def render_markdown(report: dict[str, Any]) -> str:

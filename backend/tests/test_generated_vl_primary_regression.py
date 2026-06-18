@@ -220,6 +220,35 @@ def test_compare_warns_when_visible_field_missing_without_dangerous_contaminatio
     assert "visible_field_missing" in {issue["code"] for issue in result["warnings"]}
 
 
+def test_dangerous_contamination_ignores_metadata_only_failures():
+    failures = [
+        {
+            "code": "document_number_missing",
+            "field_sources": {"tax": "heuristic_fallback"},
+            "message": "Document number is missing but no amount was confirmed.",
+        },
+        {
+            "code": "visible_field_missing",
+            "field": "quantity",
+            "actual_value": None,
+        },
+    ]
+
+    assert regression.dangerous_contamination_failures(failures) == []
+
+
+def test_dangerous_contamination_counts_confirmed_no_price_amounts():
+    failures = [
+        {
+            "code": "no_price_line_amount_created",
+            "line_index": 1,
+            "actual_value": {"supply_amount": 120000},
+        }
+    ]
+
+    assert regression.dangerous_contamination_failures(failures) == failures
+
+
 def test_compare_matches_rows_by_internal_item_code_when_document_code_is_ocr_truncated():
     expected = {
         "no_price_document": True,

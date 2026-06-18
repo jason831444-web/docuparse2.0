@@ -136,6 +136,118 @@ function InfoGrid({ items }: { items: Array<[string, string | null | undefined]>
   );
 }
 
+function officialTableLabel(value: unknown): string {
+  const key = String(value || "").trim();
+  return {
+    incoming_inspection: "입고검사 표",
+    inspection_report: "검사성적서 표",
+    delivery_note: "납품서 표",
+    purchase_order: "발주서 표",
+    quotation: "견적서 표",
+    transaction_statement: "거래명세서 표",
+    invoice: "인보이스/세금계산서 표",
+  }[key] ?? (key ? titleCaseLabel(key) : "표 구조");
+}
+
+function officialTableEntries(document: DocumentRecord): Array<Record<string, unknown>> {
+  const metadata = readRecord(document.workflow_metadata);
+  const candidates = Array.isArray(metadata.vl_candidates) ? metadata.vl_candidates : [];
+  const tables: Array<Record<string, unknown>> = [];
+  for (const candidate of candidates) {
+    const candidateRecord = readRecord(candidate);
+    const candidateTables = Array.isArray(candidateRecord.tables) ? candidateRecord.tables : [];
+    for (const table of candidateTables) {
+      const tableRecord = readRecord(table);
+      if (tableRecord.source === "paddleocrvl_official_table_html") {
+        tables.push(tableRecord);
+      }
+    }
+    const structuredCandidate = readRecord(candidateRecord.structured_candidate);
+    const compactTables = Array.isArray(structuredCandidate.tables) ? structuredCandidate.tables : [];
+    for (const table of compactTables) {
+      const tableRecord = readRecord(table);
+      if (tableRecord.source === "paddleocrvl_official_table_html") {
+        tables.push(tableRecord);
+      }
+    }
+  }
+  const seen = new Set<string>();
+  return tables.filter((table) => {
+    const key = JSON.stringify([
+      table.table_type,
+      table.source,
+      table.row_count,
+      readRecord(table.provenance).block_bbox ?? table.block_bbox,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function officialTableRowCount(table: Record<string, unknown>): number {
+  if (typeof table.row_count === "number") return table.row_count;
+  return Array.isArray(table.rows) ? table.rows.length : 0;
+}
+
+function OfficialTableSourceCard({ document }: { document: DocumentRecord }) {
+  const tables = officialTableEntries(document);
+  if (!tables.length) return null;
+  const rowCount = tables.reduce((sum, table) => sum + officialTableRowCount(table), 0);
+  const tableTypes = Array.from(new Set(tables.map((table) => officialTableLabel(table.table_type))));
+  return (
+    <Card className="border-blue-200 bg-blue-50/40">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <FileText className="size-5 text-primary" />
+          공식 표 추출 근거
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="rounded-lg border border-blue-200 bg-white p-4 text-sm text-blue-950">
+          <p className="font-semibold">PaddleOCR-VL 공식 표 추출</p>
+          <p className="mt-1 text-blue-900">원본 표 구조를 기반으로 행과 열을 분리했습니다.</p>
+          <p className="mt-1 text-xs text-blue-800">확정값 아님 · 원본 검토 후 확정</p>
+        </div>
+        <InfoGrid
+          items={[
+            ["표 개수", `${tables.length}개`],
+            ["행 개수", rowCount ? `${rowCount}개` : null],
+            ["표 유형", tableTypes.join(", ")],
+          ]}
+        />
+        <div className="flex flex-wrap gap-2">
+          {tables.map((table, index) => (
+            <Badge key={`${table.table_type ?? "table"}-${index}`} variant="outline" className="bg-white text-blue-900">
+              {officialTableLabel(table.table_type)} · {officialTableRowCount(table)}행
+            </Badge>
+          ))}
+        </div>
+        <details className="rounded-lg border bg-white p-3 text-sm">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">공식 표 추출 상세</summary>
+          <div className="mt-3 grid gap-2">
+            {tables.map((table, index) => {
+              const provenance = readRecord(table.provenance);
+              const blockBbox = provenance.block_bbox ?? table.block_bbox;
+              const polygon = provenance.polygon ?? table.polygon;
+              return (
+                <div key={`${table.source}-${index}`} className="grid gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <span>source key: {String(table.source)}</span>
+                  <span>table type: {String(table.table_type ?? "-")}</span>
+                  <span>rows: {officialTableRowCount(table)}</span>
+                  {Array.isArray(table.columns) ? <span>columns: {table.columns.map(String).join(", ")}</span> : null}
+                  {Array.isArray(blockBbox) ? <span>block bbox: {blockBbox.map(String).join(", ")}</span> : null}
+                  {Array.isArray(polygon) ? <span>polygon points: {polygon.length}</span> : null}
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      </CardContent>
+    </Card>
+  );
+}
+
 function TaxonomyPolicyCard({ document }: { document: DocumentRecord }) {
   const taxonomy = documentTaxonomy(document);
   const subtype = documentSubtypeLabel(taxonomy.document_subtype);
@@ -980,6 +1092,7 @@ export default function DocumentDetailPage() {
 
           <TaxonomyPolicyCard document={document} />
           <QualityDiagnosisCard document={document} />
+          <OfficialTableSourceCard document={document} />
           <WorkflowPanel document={document} />
           <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
             <CardHeader>
