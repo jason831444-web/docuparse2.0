@@ -41,10 +41,17 @@ class VLCandidateParser:
         if table_items and self._should_prefer_vlm_table_items(table_items, parsed.line_items, parsed.document_type):
             parsed.document_type = DocumentType.inspection_report
             parsed.line_items = table_items
+        inspection_text_items = self._inspection_items_from_visible_text(cleaned, doc_type)
+        if self._should_prefer_vlm_table_items(inspection_text_items, parsed.line_items, parsed.document_type):
+            parsed.document_type = DocumentType.inspection_report
+            parsed.line_items = inspection_text_items
         parsed.line_items = self._line_items_for_visible_columns_only(cleaned, doc_type, parsed.line_items)
         if table_items and self._should_prefer_vlm_table_items(table_items, parsed.line_items, parsed.document_type):
             parsed.document_type = DocumentType.inspection_report
             parsed.line_items = table_items
+        if self._should_prefer_vlm_table_items(inspection_text_items, parsed.line_items, parsed.document_type):
+            parsed.document_type = DocumentType.inspection_report
+            parsed.line_items = inspection_text_items
         handwritten_items = self._extract_handwritten_freeform_items(cleaned, parsed.document_type)
         if (
             not self._has_explicit_table_header(cleaned, parsed.document_type)
@@ -93,6 +100,131 @@ class VLCandidateParser:
                     items.append(item)
         return self.parser._dedupe_line_items(items)[:40]
 
+    def _inspection_items_from_visible_text(self, text: str, doc_type: Any | None) -> list[dict[str, Any]]:
+        doc_value = doc_type.value if isinstance(doc_type, DocumentType) else str(doc_type or "")
+        if doc_value != "inspection_report" and not re.search(
+            r"(입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection)",
+            text or "",
+            flags=re.IGNORECASE,
+        ):
+            return []
+        items: list[dict[str, Any]] = []
+        for line in (text or "").splitlines():
+            row = self._inspection_row_from_visible_text_line(line)
+            if not row:
+                continue
+            item = self._inspection_item_from_vlm_table_row(row, {"table_type": "incoming_inspection", "warnings": []})
+            if item:
+                items.append(item)
+        return self.parser._dedupe_line_items(items)[:40]
+
+    def _inspection_row_from_visible_text_line(self, line: str) -> dict[str, Any] | None:
+        tokens = [token for token in str(line or "").split() if token]
+        if len(tokens) < 5 or not re.fullmatch(r"\d{1,3}", tokens[0]):
+            return None
+        quantity_indexes = [
+            index for index, token in enumerate(tokens[1:], start=1)
+            if re.fullmatch(r"\d{1,6}(?:,\d{3})?", token)
+        ]
+        if not quantity_indexes:
+            return None
+        quantity_index = quantity_indexes[0]
+        prefix_tokens = tokens[1:quantity_index]
+        if not prefix_tokens:
+            return None
+        tail_start = quantity_index + 1
+        accepted = None
+        defective = None
+        if (
+            tail_start + 1 < len(tokens)
+            and re.fullmatch(r"\d{1,6}(?:,\d{3})?", tokens[tail_start])
+            and re.fullmatch(r"\d{1,6}(?:,\d{3})?", tokens[tail_start + 1])
+        ):
+            accepted = self._normalize_structured_quantity(tokens[tail_start])
+            defective = self._normalize_structured_quantity(tokens[tail_start + 1])
+            tail_start += 2
+        identity = self._split_inspection_identity_from_text(" ".join(prefix_tokens))
+        if not identity.get("item_name"):
+            return None
+        inspection_item, result, note = self._split_inspection_tail_from_text(" ".join(tokens[tail_start:]))
+        row: dict[str, Any] = {
+            "no": self._normalize_structured_quantity(tokens[0]),
+            "item_name": identity.get("item_name"),
+            "received_quantity": self._normalize_structured_quantity(tokens[quantity_index]),
+            "review_flags": ["vl_text_inspection_row_review_required"],
+        }
+        for key in ("specification", "lot_code", "document_item_code"):
+            if identity.get(key):
+                row[key] = identity[key]
+        if accepted is not None:
+            row["accepted_quantity"] = accepted
+        if defective is not None:
+            row["defective_quantity"] = defective
+        if inspection_item:
+            row["inspection_item"] = inspection_item
+        if result:
+            row["result"] = result
+        if note:
+            row["note"] = note
+        return row
+
+    def _split_inspection_identity_from_text(self, prefix: str) -> dict[str, str | None]:
+        tokens = [token for token in str(prefix or "").split() if token]
+        lot_code: str | None = None
+        document_item_code: str | None = None
+        filtered: list[str] = []
+        for token in tokens:
+            if re.fullmatch(r"(?:LOT|L)[-_]?[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*", token, flags=re.IGNORECASE):
+                lot_code = token
+                continue
+            if re.fullmatch(
+                r"(?:[A-Z]{1,6}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T|P)|[A-Z]{1,5}-\d+",
+                token,
+                flags=re.IGNORECASE,
+            ):
+                filtered.append(token)
+                continue
+            if re.fullmatch(
+                r"(?:IQC|QC|INS)[-_]?[A-Za-z0-9]+|[A-Z]{2,8}(?:[-_][A-Z0-9]{2,8})+",
+                token,
+                flags=re.IGNORECASE,
+            ):
+                document_item_code = token
+                continue
+            filtered.append(token)
+        spec_index: int | None = None
+        for index, token in enumerate(filtered):
+            if re.fullmatch(
+                r"(?:[A-Z]{1,6}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T|P)|[A-Z]{1,5}-\d+",
+                token,
+                flags=re.IGNORECASE,
+            ):
+                spec_index = index
+        if spec_index is None:
+            item_name = " ".join(filtered).strip()
+            specification = None
+        else:
+            item_name = " ".join(filtered[:spec_index]).strip()
+            specification = " ".join(filtered[spec_index:]).strip()
+        return {
+            "item_name": item_name or None,
+            "specification": specification or None,
+            "lot_code": lot_code,
+            "document_item_code": document_item_code,
+        }
+
+    def _split_inspection_tail_from_text(self, tail: str) -> tuple[str | None, str | None, str | None]:
+        text = str(tail or "").strip()
+        if not text:
+            return None, None, None
+        result_match = re.search(r"(조건부\s*합격|조건부합격|불합격|재검|보류|합격)", text)
+        if not result_match:
+            return text, None, None
+        result = re.sub(r"조건부\s*합격|조건부합격", "조건부 합격", result_match.group(1)).strip()
+        inspection_item = text[: result_match.start()].strip(" -:：")
+        note = text[result_match.end() :].strip(" -:：")
+        return inspection_item or None, result or None, note or None
+
     def _inspection_item_from_vlm_table_row(self, row: Any, table: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(row, dict):
             return None
@@ -128,6 +260,8 @@ class VLCandidateParser:
         ):
             value = self._clean_structured_cell(row.get(source))
             if value not in (None, "", []):
+                if target == "inspection_result":
+                    value = re.sub(r"조건부\s*합격|조건부합격", "조건부 합격", str(value)).strip()
                 item[target] = value
         for source, target in (
             ("received_quantity", "received_quantity"),
@@ -241,6 +375,7 @@ class VLCandidateParser:
             "스프렁와샤": "스프링와샤",
             "스프링와야": "스프링와샤",
             "브라컷": "브라켓",
+            "브라젯": "브라켓",
             "봉제": "봉재",
             "발사위": "절삭유",
             "절상유": "절삭유",

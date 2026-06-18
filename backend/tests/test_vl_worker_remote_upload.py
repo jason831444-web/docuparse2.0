@@ -302,6 +302,43 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     assert rows[1]["item_name"] == "S45C PIN"
 
 
+def test_vl_worker_structures_incoming_inspection_rows_with_received_quantity_only():
+    tables = vl_worker_server._extract_structured_tables(
+        "\n".join(
+            [
+                "입고 검사 기록서",
+                "문서번호: DOC-001",
+                "No 품명 Lot/Code 입고수량 검사항목 판정 비고",
+                "1 스테인리스 브라젯 BRK-SUS 20 외관/치수 합격 이상 없음",
+                "2 SUS 볼트 M5x20 BOLT-M5X20 120 외관/치수 합격 치수 재확인",
+                "3 PCB Connector 12P CONN-12P 20 외관/치수 합격 이상 없음",
+                "검사 기록서는 금액이 없는 품질 확인 문서입니다.",
+            ]
+        ),
+        [],
+        original_filename="incoming-inspection-photo.jpg",
+    )
+
+    assert tables
+    assert tables[0]["table_type"] == "incoming_inspection"
+    rows = tables[0]["rows"]
+    assert len(rows) == 3
+    assert rows[0]["item_name"] == "스테인리스 브라젯"
+    assert rows[0]["document_item_code"] == "BRK-SUS"
+    assert rows[0]["received_quantity"] == 20
+    assert rows[0]["inspection_item"] == "외관/치수"
+    assert rows[0]["result"] == "합격"
+    assert rows[0]["note"] == "이상 없음"
+    assert rows[1]["item_name"] == "SUS 볼트"
+    assert rows[1]["specification"] == "M5x20"
+    assert rows[1]["document_item_code"] == "BOLT-M5X20"
+    assert rows[1]["received_quantity"] == 120
+    assert rows[2]["item_name"] == "PCB Connector"
+    assert rows[2]["specification"] == "12P"
+    assert rows[2]["document_item_code"] == "CONN-12P"
+    assert rows[2]["received_quantity"] == 20
+
+
 def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch, tmp_path: Path):
     calls: list[dict] = []
     monkeypatch.setattr(

@@ -400,6 +400,48 @@ def test_vl_candidate_parser_parses_inspection_rows_with_decision_column_without
     assert "vl_candidate_return_credit_type_uncertain" not in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_parses_inspection_rows_with_received_quantity_only():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "입고 검사 기록서",
+                "문서번호: DOC-001",
+                "Incoming Inspection Report",
+                "공급자 상호: (주)신우정밀",
+                "공급받는자 상호: (주)삼광유통",
+                "작성일: 2026.06.02",
+                "No 품명 Lot/Code 입고수량 검사항목 판정 비고",
+                "1 스테인리스 브라젯 BRK-SUS 20 외관/치수 합격 이상 없음",
+                "2 SUS 볼트 M5x20 BOLT-M5X20 120 외관/치수 합격 치수 재확인",
+                "3 PCB Connector 12P CONN-12P 20 외관/치수 합격 이상 없음",
+                "검사 기록서는 금액이 없는 품질 확인 문서입니다.",
+            ]
+        ),
+        filename="incoming-inspection-photo.jpg",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "inspection_report"
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"]
+    assert first["item_name"] == "스테인리스 브라켓"
+    assert first["document_item_code"] == "BRK-SUS"
+    assert first["received_quantity"] == 20
+    assert first["quantity"] == 20
+    assert first["inspection_item"] == "외관/치수"
+    assert first["inspection_result"] == "합격"
+    assert first["remarks"] == "이상 없음"
+    assert second["item_name"] == "SUS 볼트"
+    assert second["specification"] == "M5x20"
+    assert second["document_item_code"] == "BOLT-M5X20"
+    assert second["received_quantity"] == 120
+    assert third["item_name"] == "PCB Connector"
+    assert third["specification"] == "12P"
+    assert third["document_item_code"] == "CONN-12P"
+    assert all("unit_price" not in item and "line_total" not in item for item in candidate["line_items"])
+
+
 def test_vl_candidate_parser_uses_worker_structured_inspection_tables_as_review_candidates():
     candidate = VLCandidateParser().parse_text(
         "\n".join(
@@ -454,7 +496,7 @@ def test_vl_candidate_parser_uses_worker_structured_inspection_tables_as_review_
     assert first["accepted_quantity"] == 78
     assert first["defective_quantity"] == 2
     assert first["rejected_quantity"] == 2
-    assert first["inspection_result"] == "조건부합격"
+    assert first["inspection_result"] == "조건부 합격"
     assert first["remarks"] == "표면 흠집"
     assert "unit_price" not in first
     assert "line_total" not in first
@@ -1231,13 +1273,13 @@ def test_vl_candidate_parser_parses_inspection_rows_without_lot_column():
     assert first["received_quantity"] == 80
     assert first["accepted_quantity"] == 78
     assert first["rejected_quantity"] == 2
-    assert first["inspection_result"] == "조건부합격"
+    assert first["inspection_result"] == "조건부 합격"
     assert second["item_name"] == "S45C PIN"
-    assert second["specification"] == "8x60"
+    assert second["specification"] == "8X60"
     assert second["received_quantity"] == 300
     assert second["rejected_quantity"] == 0
     assert third["item_name"] == "SUS 볼트"
-    assert third["specification"] == "M5x20"
+    assert third["specification"] == "M5X20"
     assert third["inspection_result"] == "재검"
     assert all("unit_price" not in item and "line_total" not in item for item in candidate["line_items"])
 

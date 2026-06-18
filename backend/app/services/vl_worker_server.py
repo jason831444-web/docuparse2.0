@@ -683,41 +683,72 @@ def _inspection_header_or_note(line: str) -> bool:
 
 
 def _parse_incoming_inspection_line(line: str) -> dict[str, Any] | None:
-    match = re.match(
-        r"^(?P<no>\d{1,3})\s+"
-        r"(?P<prefix>.+?)\s+"
-        r"(?P<received>\d{1,6}(?:,\d{3})?)\s+"
-        r"(?P<accepted>\d{1,6}(?:,\d{3})?)\s+"
-        r"(?P<defective>\d{1,6}(?:,\d{3})?)"
-        r"(?:\s+(?P<tail>.*))?$",
-        line,
-    )
-    if not match:
+    parsed = _split_inspection_row_cells(line)
+    if not parsed:
         return None
-    item_name, specification, lot_code, document_item_code = _split_inspection_identity(match.group("prefix"))
+    item_name, specification, lot_code, document_item_code = _split_inspection_identity(parsed["prefix"])
     if not item_name:
         return None
-    tail = (match.group("tail") or "").strip()
-    result, note = _split_inspection_tail(tail)
+    inspection_item, result, note = _split_inspection_tail(parsed.get("tail") or "")
     row: dict[str, Any] = {
-        "no": _int_text(match.group("no")),
+        "no": parsed["no"],
         "item_name": item_name,
-        "received_quantity": _int_text(match.group("received")),
-        "accepted_quantity": _int_text(match.group("accepted")),
-        "defective_quantity": _int_text(match.group("defective")),
+        "received_quantity": parsed["received_quantity"],
         "review_flags": ["vl_table_structured_inspection_review_required"],
     }
+    if parsed.get("accepted_quantity") is not None:
+        row["accepted_quantity"] = parsed["accepted_quantity"]
+    if parsed.get("defective_quantity") is not None:
+        row["defective_quantity"] = parsed["defective_quantity"]
     if specification:
         row["specification"] = specification
     if lot_code:
         row["lot_code"] = lot_code
     if document_item_code:
         row["document_item_code"] = document_item_code
+    if inspection_item:
+        row["inspection_item"] = inspection_item
     if result:
         row["result"] = result
     if note:
         row["note"] = note
     return row
+
+
+def _split_inspection_row_cells(line: str) -> dict[str, Any] | None:
+    tokens = [token for token in str(line or "").split() if token]
+    if len(tokens) < 5 or not re.fullmatch(r"\d{1,3}", tokens[0]):
+        return None
+    quantity_indexes = [
+        index for index, token in enumerate(tokens[1:], start=1)
+        if re.fullmatch(r"\d{1,6}(?:,\d{3})?", token)
+    ]
+    if not quantity_indexes:
+        return None
+    quantity_index = quantity_indexes[0]
+    prefix_tokens = tokens[1:quantity_index]
+    if not prefix_tokens:
+        return None
+    received = _int_text(tokens[quantity_index])
+    accepted: int | None = None
+    defective: int | None = None
+    tail_start = quantity_index + 1
+    if (
+        tail_start + 1 < len(tokens)
+        and re.fullmatch(r"\d{1,6}(?:,\d{3})?", tokens[tail_start])
+        and re.fullmatch(r"\d{1,6}(?:,\d{3})?", tokens[tail_start + 1])
+    ):
+        accepted = _int_text(tokens[tail_start])
+        defective = _int_text(tokens[tail_start + 1])
+        tail_start += 2
+    return {
+        "no": _int_text(tokens[0]),
+        "prefix": " ".join(prefix_tokens),
+        "received_quantity": received,
+        "accepted_quantity": accepted,
+        "defective_quantity": defective,
+        "tail": " ".join(tokens[tail_start:]).strip(),
+    }
 
 
 def _split_inspection_identity(prefix: str) -> tuple[str | None, str | None, str | None, str | None]:
@@ -731,14 +762,25 @@ def _split_inspection_identity(prefix: str) -> tuple[str | None, str | None, str
         if re.fullmatch(r"(?:LOT|L)[-_]?[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*", token, flags=re.IGNORECASE):
             lot_code = token
             continue
-        if re.fullmatch(r"(?:IQC|QC|INS)[-_]?[A-Za-z0-9]+", token, flags=re.IGNORECASE):
+        if re.fullmatch(
+            r"(?:[A-Z]{1,6}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T|P)|[A-Z]{1,5}-\d+",
+            token,
+            flags=re.IGNORECASE,
+        ):
+            filtered.append(token)
+            continue
+        if re.fullmatch(
+            r"(?:IQC|QC|INS)[-_]?[A-Za-z0-9]+|[A-Z]{2,8}(?:[-_][A-Z0-9]{2,8})+",
+            token,
+            flags=re.IGNORECASE,
+        ):
             document_item_code = token
             continue
         filtered.append(token)
     spec_index: int | None = None
     for index, token in enumerate(filtered):
         if re.fullmatch(
-            r"(?:[A-Z]{1,6}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T)|[A-Z]{1,5}-\d+",
+            r"(?:[A-Z]{1,6}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T|P)|[A-Z]{1,5}-\d+",
             token,
             flags=re.IGNORECASE,
         ):
@@ -753,15 +795,19 @@ def _split_inspection_identity(prefix: str) -> tuple[str | None, str | None, str
     )
 
 
-def _split_inspection_tail(tail: str) -> tuple[str | None, str | None]:
+def _split_inspection_tail(tail: str) -> tuple[str | None, str | None, str | None]:
     if not tail:
-        return None, None
+        return None, None, None
     result_match = re.search(r"(조건부\s*합격|조건부합격|불합격|재검|보류|합격)", tail)
     result = None
+    inspection_item = tail
     if result_match:
         result = re.sub(r"조건부\s*합격", "조건부 합격", result_match.group(1)).strip()
-    note = re.sub(r"(조건부\s*합격|조건부합격|불합격|재검|보류|합격)", "", tail).strip(" -:：")
-    return result, note or None
+        inspection_item = tail[: result_match.start()].strip(" -:：")
+        note = tail[result_match.end() :].strip(" -:：")
+    else:
+        note = None
+    return inspection_item or None, result, note or None
 
 
 def _inspection_uncertainty_warnings(line: str, row: dict[str, Any]) -> list[str]:
