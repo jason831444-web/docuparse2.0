@@ -366,21 +366,17 @@ class DocumentProcessor:
     ) -> dict | None:
         if not self.vl_worker.enabled():
             return None
+        input_variant = self._select_vl_input_variant(stored_path, document)
         input_path = stored_path
-        input_variant = self.image_preprocessor.prepare_standard_vl_input(
-            stored_path,
-            self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id),
-        )
         if input_variant.get("processed_path"):
             input_path = Path(str(input_variant["processed_path"]))
         result = self.vl_worker.analyze(input_path, original_filename=document.original_filename)
-        if input_variant.get("processed_path"):
-            result["input_variant"] = input_variant
+        result["input_variant"] = input_variant
         metadata = self._vl_primary_reader_metadata_from_result(result, document, workflow_metadata)
         text = result.get("text") or result.get("text_preview")
         if not isinstance(text, str):
             text = ""
-        metadata["vl_preprocess_mode"] = "standard_single_pass"
+        metadata["vl_preprocess_mode"] = input_variant.get("variant_name") or "original_file"
         metadata["vl_preprocess_input"] = {
             "variant_name": input_variant.get("variant_name"),
             "operations": list(input_variant.get("operations") or []),
@@ -388,6 +384,8 @@ class DocumentProcessor:
             "processed_path_present": bool(input_variant.get("processed_path")),
             "error": input_variant.get("error"),
         }
+        if isinstance(input_variant.get("vl_preprocess_policy"), dict):
+            metadata["vl_preprocess_policy"] = input_variant["vl_preprocess_policy"]
         has_structured_candidate = bool(self._vl_primary_structured_candidate({"metadata": metadata}))
         return {
             "metadata": metadata,
@@ -395,6 +393,140 @@ class DocumentProcessor:
             "promoted": bool((metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
             "has_structured_candidate": has_structured_candidate,
         }
+
+    def _select_vl_input_variant(self, stored_path: Path, document: Document) -> dict[str, Any]:
+        suffix = stored_path.suffix.casefold()
+        image_suffixes = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+        available_candidates = ["original"]
+        policy: dict[str, Any] = {
+            "selected_mode": "original",
+            "reason": "default_original_vl_input",
+            "available_candidates": available_candidates,
+            "hidden_cropped_guardrail": False,
+            "current_standard": {
+                "available": suffix in image_suffixes,
+                "used": False,
+                "skip_reason": "legacy_debug_only_not_used_by_default",
+            },
+        }
+
+        if suffix == ".pdf":
+            policy.update({
+                "selected_mode": "pdf_render_only",
+                "reason": "pdf_uses_worker_render_only",
+                "available_candidates": ["pdf_render_only"],
+            })
+            return self._original_vl_input_variant(stored_path, policy, operations=["pdf_render_only_worker_input"])
+
+        if suffix not in image_suffixes:
+            policy.update({
+                "reason": "non_image_original_file",
+                "available_candidates": ["original_file"],
+            })
+            return self._original_vl_input_variant(stored_path, policy, operations=["original_file"])
+
+        available_candidates.append("contrast_only")
+        quality = self._safe_quality_for_vl_input(stored_path)
+        if quality:
+            policy["quality_summary"] = self._vl_preprocess_quality_summary(quality)
+
+        hidden_or_cropped = bool(
+            quality
+            and (
+                quality.get("possible_right_column_crop")
+                or (quality.get("hidden_or_cropped_columns") or [])
+            )
+        )
+        if hidden_or_cropped:
+            policy.update({
+                "selected_mode": "original",
+                "reason": "hidden_or_cropped_column_risk_original_required",
+                "hidden_cropped_guardrail": True,
+            })
+            return self._original_vl_input_variant(stored_path, policy)
+
+        if self._should_use_contrast_only_for_vl(quality):
+            output_dir = self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id)
+            variant = self.image_preprocessor.prepare_contrast_only_vl_input(stored_path, output_dir)
+            if variant.get("processed_path"):
+                policy.update({
+                    "selected_mode": "contrast_only",
+                    "reason": "photo_or_low_contrast_light_contrast_only",
+                })
+                variant["vl_preprocess_policy"] = policy
+                return variant
+            policy.update({
+                "selected_mode": "original",
+                "reason": "contrast_only_unavailable_fallback_original",
+                "contrast_only_error": variant.get("error"),
+            })
+            return self._original_vl_input_variant(stored_path, policy)
+
+        policy.update({
+            "selected_mode": "original",
+            "reason": self._original_vl_reason_from_quality(quality),
+        })
+        return self._original_vl_input_variant(stored_path, policy)
+
+    def _original_vl_input_variant(
+        self,
+        stored_path: Path,
+        policy: dict[str, Any],
+        *,
+        operations: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "variant_name": policy.get("selected_mode") or "original",
+            "original_path": str(stored_path),
+            "processed_path": None,
+            "operations": operations or ["original_vl_input"],
+            "warnings": ["current_standard_preprocess_not_used_by_default"],
+            "vl_preprocess_policy": policy,
+        }
+
+    def _safe_quality_for_vl_input(self, stored_path: Path) -> dict[str, Any] | None:
+        try:
+            if not stored_path.exists():
+                return None
+            return self.ingestion.document_quality.analyze_document_quality([stored_path]).to_dict()
+        except Exception:
+            return None
+
+    def _vl_preprocess_quality_summary(self, quality: dict[str, Any]) -> dict[str, Any]:
+        pages = quality.get("pages") if isinstance(quality.get("pages"), list) else []
+        first_page = pages[0] if pages and isinstance(pages[0], dict) else {}
+        return {
+            "likely_scan_type": quality.get("likely_scan_type"),
+            "overall_quality_score": quality.get("overall_quality_score"),
+            "possible_right_column_crop": quality.get("possible_right_column_crop"),
+            "hidden_or_cropped_columns": list(quality.get("hidden_or_cropped_columns") or []),
+            "has_blurry_pages": quality.get("has_blurry_pages"),
+            "has_skewed_pages": quality.get("has_skewed_pages"),
+            "contrast_score": first_page.get("contrast_score"),
+            "blur_score": first_page.get("blur_score"),
+        }
+
+    def _should_use_contrast_only_for_vl(self, quality: dict[str, Any] | None) -> bool:
+        if not isinstance(quality, dict):
+            return False
+        if quality.get("possible_right_column_crop") or (quality.get("hidden_or_cropped_columns") or []):
+            return False
+        pages = quality.get("pages") if isinstance(quality.get("pages"), list) else []
+        first_page = pages[0] if pages and isinstance(pages[0], dict) else {}
+        scan_type = str(quality.get("likely_scan_type") or first_page.get("likely_scan_type") or "")
+        contrast = first_page.get("contrast_score")
+        blur = first_page.get("blur_score")
+        low_contrast = isinstance(contrast, (int, float)) and contrast < 0.105
+        blurry = quality.get("has_blurry_pages") or (isinstance(blur, (int, float)) and blur < 55.0)
+        return scan_type in {"photo", "fax_like"} and (low_contrast or blurry)
+
+    def _original_vl_reason_from_quality(self, quality: dict[str, Any] | None) -> str:
+        if not isinstance(quality, dict):
+            return "quality_unavailable_original_safe_default"
+        scan_type = quality.get("likely_scan_type") or "unknown"
+        if scan_type in {"scan", "digital_pdf", "unknown"}:
+            return f"{scan_type}_original_safe_default"
+        return "quality_does_not_require_contrast_only_original_selected"
 
     def _vl_primary_normalized_document(
         self,

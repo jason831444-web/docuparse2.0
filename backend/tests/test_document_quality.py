@@ -159,3 +159,24 @@ def test_standard_vl_input_uses_full_page_clarity_enhancement(tmp_path):
     assert "full_page_denoise" in operations
     assert "full_page_deblur_sharpen" in operations
     assert not any("crop" in operation for operation in operations)
+
+
+def test_contrast_only_vl_input_avoids_crop_denoise_and_sharpen(tmp_path):
+    image = Image.new("RGB", (900, 1300), (70, 66, 62))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((120, 100, 780, 1160), fill=(214, 211, 204))
+    draw.text((210, 210), "납품서", fill=(88, 88, 88))
+    draw.text((210, 420), "SUS 볼트 M5X20 1000 EA", fill=(88, 88, 88))
+    source = tmp_path / "low-contrast-delivery.jpg"
+    image.save(source)
+
+    variant = ImagePreprocessor().prepare_contrast_only_vl_input(source, tmp_path / "variants")
+
+    assert variant["variant_name"] == "contrast_only"
+    assert variant["processed_path"]
+    assert Path(variant["processed_path"]).exists()
+    operations = set(variant["operations"])
+    assert "full_page_light_local_contrast" in operations or "autocontrast_cutoff_1" in operations
+    assert not any("crop" in operation and "no_crop" not in operation for operation in operations)
+    assert not any("sharpen" in operation for operation in operations)
+    assert not any("denoise" in operation for operation in operations)

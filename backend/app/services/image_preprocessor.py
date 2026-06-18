@@ -155,6 +155,61 @@ class ImagePreprocessor:
                 "error": str(exc),
             }
 
+    def prepare_contrast_only_vl_input(self, image_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
+        """Create a light contrast-only VL input without crop or sharpening.
+
+        This candidate is intentionally weaker than ``prepare_standard_vl_input``:
+        it preserves the full page, avoids denoise/sharpen/unsharp steps, and is
+        meant only for low-contrast photo/fax-like inputs where the raw image is
+        likely to under-read item text.
+        """
+
+        path = Path(image_path)
+        if path.suffix.casefold() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+            return {
+                "variant_name": "original_file",
+                "original_path": str(path),
+                "processed_path": None,
+                "operations": ["contrast_only_skipped_non_image"],
+                "warnings": [],
+            }
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        try:
+            with Image.open(path) as opened:
+                image = opened.convert("RGB")
+            operations = ["full_page_preserved", "contrast_only_no_crop"]
+            processed = image
+            enhanced, cv_operations = self._enhance_full_page_for_vl(processed, mode="contrast_only")
+            if enhanced is not None:
+                processed = enhanced
+                operations.extend(cv_operations)
+            else:
+                processed = ImageOps.autocontrast(processed, cutoff=1)
+                operations.append("autocontrast_cutoff_1")
+            processed_path = output / f"{path.stem}-vl-contrast-only.png"
+            processed.save(processed_path)
+            return {
+                "variant_name": "contrast_only",
+                "original_path": str(path),
+                "processed_path": str(processed_path),
+                "operations": operations,
+                "warnings": [
+                    "no_crop_applied_preserve_full_document",
+                    "no_sharpen_or_denoise_applied",
+                    "vl_contrast_only_preprocess_input",
+                ],
+            }
+        except Exception as exc:
+            return {
+                "variant_name": "contrast_only_unavailable",
+                "original_path": str(path),
+                "processed_path": None,
+                "operations": [],
+                "warnings": ["vl_contrast_only_preprocess_failed"],
+                "error": str(exc),
+            }
+
     def _perspective_rectify_full_page(self, image: Image.Image) -> Image.Image | None:
         try:
             import cv2
@@ -239,6 +294,13 @@ class ImagePreprocessor:
                 operations.append("full_page_high_contrast_clahe")
                 enhanced = cv2.bilateralFilter(enhanced, d=5, sigmaColor=35, sigmaSpace=35)
                 operations.append("full_page_edge_preserving_denoise")
+            elif mode == "contrast_only":
+                background = cv2.GaussianBlur(gray, (0, 0), sigmaX=21, sigmaY=21)
+                normalized = cv2.divide(gray, background, scale=255)
+                operations.append("full_page_light_background_normalization")
+                clahe = cv2.createCLAHE(clipLimit=1.6, tileGridSize=(8, 8))
+                enhanced = clahe.apply(normalized)
+                operations.append("full_page_light_local_contrast")
             else:
                 return None, []
 

@@ -195,7 +195,7 @@ def test_vl_upload_pipeline_promotes_visible_official_table_amounts():
     assert first["line_total"] == 275000
 
 
-def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp_path):
+def test_vl_upload_pipeline_uses_original_image_by_default(tmp_path):
     text = """
     자재 이동 요청서
     문서번호 MV-2026-0010
@@ -215,22 +215,20 @@ def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp
         }
     )
     processor = _processor(worker)
-    processed_path = tmp_path / "doc010-vl-standard.png"
-    processed_path.write_bytes(b"processed")
-
-    def fake_prepare_standard_vl_input(image_path, output_dir):
-        return {
-            "variant_name": "full_page_document_clarity",
-            "original_path": str(image_path),
-            "processed_path": str(processed_path),
-            "operations": ["full_page_perspective_rectified", "full_page_upscale_2.6x"],
-            "warnings": ["no_inner_crop_applied_preserve_full_document", "vl_standard_preprocess_input"],
-        }
-
-    processor.image_preprocessor.prepare_standard_vl_input = fake_prepare_standard_vl_input
+    source_path = tmp_path / "DOC-010_internal_transfer_blurry_uncropped_photo.webp"
+    source_path.write_bytes(b"fake image bytes")
+    processor._safe_quality_for_vl_input = lambda _path: {
+        "likely_scan_type": "scan",
+        "overall_quality_score": 0.9,
+        "possible_right_column_crop": False,
+        "hidden_or_cropped_columns": [],
+        "has_blurry_pages": False,
+        "has_skewed_pages": False,
+        "pages": [{"contrast_score": 0.18, "blur_score": 120.0}],
+    }
     document = _document(
         original_filename="DOC-010_internal_transfer_blurry_uncropped_photo.webp",
-        stored_file_path="/tmp/DOC-010_internal_transfer_blurry_uncropped_photo.webp",
+        stored_file_path=str(source_path),
         mime_type="image/webp",
         document_type=DocumentType.general_document,
     )
@@ -241,15 +239,111 @@ def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp
         document.workflow_metadata,
     )
 
-    assert worker.calls == [(processed_path, "DOC-010_internal_transfer_blurry_uncropped_photo.webp")]
+    assert worker.calls == [(source_path, "DOC-010_internal_transfer_blurry_uncropped_photo.webp")]
     assert metadata is not None
-    assert metadata["vl_preprocess_mode"] == "standard_single_pass"
-    assert metadata["vl_preprocess_input"]["variant_name"] == "full_page_document_clarity"
+    assert metadata["vl_preprocess_mode"] == "original"
+    assert metadata["vl_preprocess_input"]["variant_name"] == "original"
+    assert metadata["vl_preprocess_policy"]["selected_mode"] == "original"
+    assert metadata["vl_preprocess_policy"]["current_standard"]["used"] is False
+    assert metadata["vl_preprocess_policy"]["current_standard"]["skip_reason"] == "legacy_debug_only_not_used_by_default"
     assert "vl_input_candidate_comparison" not in metadata
-    assert metadata["vl_provider_metadata"]["input_variant"]["variant_name"] == "full_page_document_clarity"
+    assert metadata["vl_provider_metadata"]["input_variant"]["variant_name"] == "original"
     assert "input_candidate_comparison" not in metadata["vl_provider_metadata"]
     assert metadata["vl_candidate_summary"]["parsed_line_item_count"] == 3
     assert "vl_candidate_preprocessed_retry_requires_review" not in metadata["vl_candidate_summary"]["issue_codes"]
+
+
+def test_vl_upload_pipeline_can_use_contrast_only_for_low_contrast_photo(tmp_path):
+    text = """
+    납품서
+    문서번호 DN-2026-0003
+    No 품목명 규격 수량 단위 비고
+    1 S45C PIN 8X60 500 EA 입고대기
+    2 SUS 볼트 M5X20 1000 EA 정상
+    """
+    worker = FakeVLWorker(
+        {
+            "ok": True,
+            "provider": "paddleocr_vl_1_6_gguf",
+            "classification": "pass",
+            "text": text,
+            "validation": {"status": "pass", "ok": True},
+        }
+    )
+    processor = _processor(worker)
+    source_path = tmp_path / "delivery-photo.jpg"
+    source_path.write_bytes(b"fake image bytes")
+    contrast_path = tmp_path / "delivery-photo-vl-contrast-only.png"
+    contrast_path.write_bytes(b"processed")
+    processor._safe_quality_for_vl_input = lambda _path: {
+        "likely_scan_type": "photo",
+        "overall_quality_score": 0.52,
+        "possible_right_column_crop": False,
+        "hidden_or_cropped_columns": [],
+        "has_blurry_pages": True,
+        "has_skewed_pages": False,
+        "pages": [{"contrast_score": 0.08, "blur_score": 42.0}],
+    }
+    processor.image_preprocessor.prepare_contrast_only_vl_input = lambda image_path, output_dir: {
+        "variant_name": "contrast_only",
+        "original_path": str(image_path),
+        "processed_path": str(contrast_path),
+        "operations": ["full_page_light_background_normalization", "full_page_light_local_contrast"],
+        "warnings": ["no_crop_applied_preserve_full_document"],
+    }
+    document = _document(
+        original_filename="delivery-photo.jpg",
+        stored_file_path=str(source_path),
+        mime_type="image/jpeg",
+        document_type=DocumentType.general_document,
+    )
+
+    metadata = processor._vl_primary_reader_metadata(
+        Path(document.stored_file_path),
+        document,
+        document.workflow_metadata,
+    )
+
+    assert worker.calls == [(contrast_path, "delivery-photo.jpg")]
+    assert metadata is not None
+    assert metadata["vl_preprocess_mode"] == "contrast_only"
+    assert metadata["vl_preprocess_input"]["variant_name"] == "contrast_only"
+    assert metadata["vl_preprocess_policy"]["selected_mode"] == "contrast_only"
+    assert metadata["vl_preprocess_policy"]["reason"] == "photo_or_low_contrast_light_contrast_only"
+
+
+def test_vl_upload_pipeline_keeps_original_when_hidden_column_risk(tmp_path):
+    worker = FakeVLWorker({"ok": True, "provider": "paddleocr_vl_1_6_gguf", "text": "납품서"})
+    processor = _processor(worker)
+    source_path = tmp_path / "hidden-column.jpg"
+    source_path.write_bytes(b"fake image bytes")
+    processor._safe_quality_for_vl_input = lambda _path: {
+        "likely_scan_type": "photo",
+        "overall_quality_score": 0.44,
+        "possible_right_column_crop": True,
+        "hidden_or_cropped_columns": ["tax_amount", "line_total"],
+        "has_blurry_pages": True,
+        "has_skewed_pages": False,
+        "pages": [{"contrast_score": 0.07, "blur_score": 31.0}],
+    }
+    document = _document(
+        original_filename="hidden-column.jpg",
+        stored_file_path=str(source_path),
+        mime_type="image/jpeg",
+        document_type=DocumentType.general_document,
+    )
+
+    metadata = processor._vl_primary_reader_metadata(
+        Path(document.stored_file_path),
+        document,
+        document.workflow_metadata,
+    )
+
+    assert worker.calls == [(source_path, "hidden-column.jpg")]
+    assert metadata is not None
+    assert metadata["vl_preprocess_mode"] == "original"
+    assert metadata["vl_preprocess_policy"]["hidden_cropped_guardrail"] is True
+    assert metadata["vl_preprocess_policy"]["reason"] == "hidden_or_cropped_column_risk_original_required"
 
 
 def test_final_business_safety_blocks_pos_summary_rows_from_manufacturing_items():
