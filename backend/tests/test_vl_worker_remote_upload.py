@@ -444,7 +444,7 @@ def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch,
         content = kwargs["json"]["messages"][0]["content"]
         assert content[0]["type"] == "text"
         assert "incoming inspection" in content[0]["text"]
-        assert content[1]["type"] == "image_url"
+        assert content[1]["type"] == "image"
         assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
         return _FakeSchemaPromptResponse()
 
