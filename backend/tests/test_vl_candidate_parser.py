@@ -1376,3 +1376,96 @@ def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promo
     assert "quantity" not in structured["line_items"][0]
     assert metadata["vl_candidate_summary"]["parser_evaluated"] is True
     assert metadata["vl_candidate_summary"]["parsed_line_item_count"] == 2
+
+
+def test_vl_candidate_parser_uses_official_line_item_table_amounts_when_visible():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "세금계산서",
+                "문서번호 INV-2026-0002",
+                "작성일자 2026.06.12",
+                "공급가액 합계 729,000 세액 합계 72,900 청구금액 801,900",
+            ]
+        ),
+        filename="MFG-002_tax_invoice_uncropped.png",
+        tables=[
+            {
+                "table_type": "line_items",
+                "source": "paddleocrvl_official_table_html",
+                "columns": ["품목", "규격", "수량", "단가", "공급가액", "세액", "합계"],
+                "rows": [
+                    {
+                        "item_name": "PCB Connector",
+                        "specification": "12P",
+                        "quantity": 200,
+                        "unit_price": 1250,
+                        "supply_amount": 250000,
+                        "tax_amount": 25000,
+                        "line_total": 275000,
+                    },
+                    {
+                        "item_name": "Cable Harness",
+                        "specification": "500mm",
+                        "quantity": 80,
+                        "unit_price": 2800,
+                        "supply_amount": 224000,
+                        "tax_amount": 22400,
+                        "line_total": 246400,
+                    },
+                ],
+                "warnings": ["paddleocrvl_official_table_review_required"],
+                "review_required": True,
+            }
+        ],
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["line_item_count"] == 2
+    first = candidate["line_items"][0]
+    assert first["item_name"] == "PCB Connector"
+    assert first["quantity"] == 200
+    assert first["unit_price"] == 1250
+    assert first["supply_amount"] == 250000
+    assert first["tax_amount"] == 25000
+    assert first["line_total"] == 275000
+
+
+def test_vl_candidate_parser_blocks_official_table_amounts_for_no_price_delivery():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "납품서",
+                "문서번호 DN-2026-0003",
+                "단가 미기재 납품서 - 수량 검수용",
+            ]
+        ),
+        filename="MFG-003_delivery_no_price_uncropped.jpg",
+        tables=[
+            {
+                "table_type": "line_items",
+                "source": "paddleocrvl_official_table_html",
+                "columns": ["품목명", "규격", "수량", "단위", "금액"],
+                "rows": [
+                    {
+                        "item_name": "S45C PIN",
+                        "specification": "8x60",
+                        "quantity": 500,
+                        "unit": "EA",
+                        "line_total": 500000,
+                    }
+                ],
+                "warnings": ["paddleocrvl_official_table_review_required"],
+                "review_required": True,
+            }
+        ],
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    first = candidate["line_items"][0]
+    assert first["item_name"] == "S45C PIN"
+    assert first["quantity"] == 500
+    assert "line_total" not in first
+    assert "no_price_document_amount_blocker" in first["review_flags"]

@@ -770,6 +770,8 @@ class DocumentProcessor:
         }
         if isinstance(result.get("structured_schema"), dict):
             provider_metadata["structured_schema"] = result.get("structured_schema")
+        if isinstance(result.get("schema_prompt"), dict):
+            provider_metadata["schema_prompt"] = result.get("schema_prompt")
         if isinstance(result.get("tables"), list):
             provider_metadata["table_count"] = len(result.get("tables") or [])
         input_variant = result.get("input_variant") if isinstance(result.get("input_variant"), dict) else None

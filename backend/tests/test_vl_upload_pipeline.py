@@ -121,6 +121,80 @@ def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields(
     assert document.line_items[0]["quantity"] == 100
 
 
+def test_vl_upload_pipeline_promotes_visible_official_table_amounts():
+    text = """
+    세금계산서
+    문서번호 INV-2026-0002
+    작성일자 2026.06.12
+    공급가액 합계 729,000 세액 합계 72,900 청구금액 801,900
+    """
+    worker = FakeVLWorker(
+        {
+            "ok": True,
+            "provider": "paddleocr_vl_1_6_gguf",
+            "classification": "pass",
+            "text": text,
+            "elapsed_ms": 12000,
+            "validation": {"status": "pass", "ok": True},
+            "schema_prompt": {
+                "used": True,
+                "official_table_count": 1,
+                "table_source": "paddleocrvl_official_table_html",
+            },
+            "tables": [
+                {
+                    "table_type": "line_items",
+                    "source": "paddleocrvl_official_table_html",
+                    "columns": ["품목", "규격", "수량", "단가", "공급가액", "세액", "합계"],
+                    "rows": [
+                        {
+                            "item_name": "PCB Connector",
+                            "specification": "12P",
+                            "quantity": 200,
+                            "unit_price": 1250,
+                            "supply_amount": 250000,
+                            "tax_amount": 25000,
+                            "line_total": 275000,
+                        },
+                        {
+                            "item_name": "Cable Harness",
+                            "specification": "500mm",
+                            "quantity": 80,
+                            "unit_price": 2800,
+                            "supply_amount": 224000,
+                            "tax_amount": 22400,
+                            "line_total": 246400,
+                        },
+                    ],
+                    "warnings": ["paddleocrvl_official_table_review_required"],
+                    "review_required": True,
+                }
+            ],
+        }
+    )
+    document = _document(
+        original_filename="MFG-002_tax_invoice_uncropped.png",
+        document_type=DocumentType.invoice,
+    )
+
+    metadata = _processor(worker)._vl_primary_reader_metadata(
+        Path(document.stored_file_path),
+        document,
+        document.workflow_metadata,
+    )
+
+    assert metadata is not None
+    assert metadata["vl_provider_metadata"]["schema_prompt"]["official_table_count"] == 1
+    assert len(document.line_items or []) == 2
+    first = document.line_items[0]
+    assert first["item_name"] == "PCB Connector"
+    assert first["quantity"] == 200
+    assert first["unit_price"] == 1250
+    assert first["supply_amount"] == 250000
+    assert first["tax_amount"] == 25000
+    assert first["line_total"] == 275000
+
+
 def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp_path):
     text = """
     자재 이동 요청서
