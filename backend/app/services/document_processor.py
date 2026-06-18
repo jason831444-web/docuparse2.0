@@ -186,9 +186,14 @@ class DocumentProcessor:
             document.due_date = (parsed.due_date or ai_result.due_date) if deterministic_first else (ai_result.due_date or parsed.due_date)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.issue_date, document.due_date = self._normalize_manufacturing_dates(parsed, document.issue_date, document.due_date)
+            preserve_return_credit_amounts = self._is_return_or_credit_parsed_document(parsed, raw_text)
             selected_line_items = (parsed.line_items or ai_result.line_items) if deterministic_first else (ai_result.line_items or parsed.line_items or [])
             document.line_items = sanitize_for_postgres(
-                self._line_items_for_extraction_method(selected_line_items, normalized.extraction_method)
+                self._line_items_for_extraction_method(
+                    selected_line_items,
+                    normalized.extraction_method,
+                    preserve_signed_amount_rows=preserve_return_credit_amounts,
+                )
             )
             document.low_confidence_fields = sanitize_for_postgres([] if deterministic_first and parsed.line_items else ai_result.low_confidence_fields or [])
             document.category = ai_result.category or parsed.category
@@ -222,10 +227,14 @@ class DocumentProcessor:
                 document.document_number = sanitize_for_postgres(parsed.document_number or document.document_number)
                 if getattr(parsed, "line_items", None):
                     document.line_items = sanitize_for_postgres(
-                        self._line_items_for_extraction_method(parsed.line_items, normalized.extraction_method)
+                        self._line_items_for_extraction_method(
+                            parsed.line_items,
+                            normalized.extraction_method,
+                            preserve_signed_amount_rows=True,
+                        )
                     )
-                document.category = "return_note"
-                document.tags = ["return_note"]
+                document.category = self._return_or_credit_category(parsed, raw_text)
+                document.tags = [document.category]
             if self._is_internal_transfer_parsed_document(parsed, raw_text):
                 internal_transfer_type = self._internal_transfer_document_type(parsed)
                 document.document_type = internal_transfer_type
@@ -256,7 +265,11 @@ class DocumentProcessor:
                 document.line_items = sanitize_for_postgres(
                     self.item_master_matcher.match_line_items(
                         db,
-                        self._line_items_for_extraction_method(document.line_items or [], normalized.extraction_method),
+                        self._line_items_for_extraction_method(
+                            document.line_items or [],
+                            normalized.extraction_method,
+                            preserve_signed_amount_rows=preserve_return_credit_amounts,
+                        ),
                     )
                 )
             document.title = self._clean_final_title(document.title, interpretation)
@@ -265,7 +278,12 @@ class DocumentProcessor:
                 document.summary = sanitize_for_postgres(interpretation.summary_hint)
             document.tags = self._merge_tags(document.tags, interpretation, document.document_type)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
-                document.tags = ["internal_transfer"] if self._is_internal_transfer_parsed_document(parsed, raw_text) else [parsed.document_type.value]
+                if self._is_internal_transfer_parsed_document(parsed, raw_text):
+                    document.tags = ["internal_transfer"]
+                elif preserve_return_credit_amounts:
+                    document.tags = [self._return_or_credit_category(parsed, raw_text)]
+                else:
+                    document.tags = [parsed.document_type.value]
             business_safety_issues = self._apply_final_business_safety_overrides(document, raw_text)
             taxonomy = self.taxonomy.classify(
                 document,
@@ -1143,7 +1161,12 @@ class DocumentProcessor:
         except Exception:
             return None
 
-    def _safe_vl_promoted_line_items(self, line_items: list[dict]) -> list[dict]:
+    def _safe_vl_promoted_line_items(
+        self,
+        line_items: list[dict],
+        *,
+        preserve_signed_amount_rows: bool = False,
+    ) -> list[dict]:
         safe_items: list[dict] = []
         for item in line_items:
             if not isinstance(item, dict):
@@ -1159,6 +1182,13 @@ class DocumentProcessor:
             warning_set = {str(warning) for warning in warnings}
             review_flags = list(safe_item.get("review_flags") or [])
             hidden_amount_review = self._vl_line_item_has_hidden_amount_review_signal(safe_item, warning_set, review_flags)
+            if (
+                preserve_signed_amount_rows
+                and hidden_amount_review
+                and self._vl_line_item_has_signed_amount_context(safe_item)
+                and not self._vl_line_item_has_hard_hidden_amount_signal(safe_item, warning_set, review_flags)
+            ):
+                hidden_amount_review = False
             if "explicit_quantity_price_amount_mismatch" in warning_set or hidden_amount_review:
                 for field in ("supply_amount", "tax_amount", "line_total"):
                     safe_item.pop(field, None)
@@ -1199,9 +1229,49 @@ class DocumentProcessor:
         )
         return any(any(fragment in code for fragment in hidden_fragments) for code in codes)
 
-    def _line_items_for_extraction_method(self, line_items: list[dict], extraction_method: str | None) -> list[dict]:
+    def _vl_line_item_has_hard_hidden_amount_signal(
+        self,
+        item: dict[str, Any],
+        warning_set: set[str],
+        review_flags: list[Any],
+    ) -> bool:
+        codes = set(warning_set)
+        codes.update(str(flag) for flag in review_flags if flag not in (None, ""))
+        codes.update(str(code) for code in item.get("issue_codes") or [] if code not in (None, ""))
+        hard_fragments = (
+            "hidden",
+            "cropped",
+            "truncated",
+            "amount_column_not_visible",
+            "row_amount_hidden",
+            "visual_crop",
+            "right_column_crop",
+        )
+        stale_suppression_code = "vl_amount_suppressed_due_to_hidden_or_unverified_column"
+        return any(
+            code != stale_suppression_code and any(fragment in code for fragment in hard_fragments)
+            for code in codes
+        )
+
+    def _vl_line_item_has_signed_amount_context(self, item: dict[str, Any]) -> bool:
+        for field in ("quantity", "supply_amount", "tax_amount", "line_total"):
+            value = self._vl_decimal(item.get(field))
+            if value is not None and value < 0:
+                return True
+        return False
+
+    def _line_items_for_extraction_method(
+        self,
+        line_items: list[dict],
+        extraction_method: str | None,
+        *,
+        preserve_signed_amount_rows: bool = False,
+    ) -> list[dict]:
         if extraction_method == "paddleocr_vl_1_6_gguf_primary_reader":
-            return self._safe_vl_promoted_line_items(line_items or [])
+            return self._safe_vl_promoted_line_items(
+                line_items or [],
+                preserve_signed_amount_rows=preserve_signed_amount_rows,
+            )
         return line_items or []
 
     def _apply_final_business_safety_overrides(self, document: Document, raw_text: str) -> list[dict[str, Any]]:

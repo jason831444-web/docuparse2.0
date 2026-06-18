@@ -690,6 +690,72 @@ def test_vl_upload_pipeline_suppresses_hidden_amount_columns_at_final_assignment
     assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" in safe_items[0]["review_flags"]
 
 
+def test_vl_upload_pipeline_preserves_visible_signed_return_credit_amount_rows():
+    line_items = [
+        {
+            "item_name": "AL6061 판재",
+            "specification": "3T 400x600",
+            "quantity": -2,
+            "unit_price": 18000,
+            "supply_amount": -36000,
+            "tax_amount": -3600,
+            "line_total": -39600,
+            "validation_warnings": ["line_total_not_visible_do_not_infer"],
+        },
+        {
+            "item_name": "반품 운송비",
+            "quantity": 1,
+            "unit_price": 5000,
+            "supply_amount": 5000,
+            "tax_amount": 500,
+            "line_total": 5500,
+        },
+    ]
+
+    safe_items = DocumentProcessor()._line_items_for_extraction_method(
+        line_items,
+        "paddleocr_vl_1_6_gguf_primary_reader",
+        preserve_signed_amount_rows=True,
+    )
+
+    assert safe_items[0]["quantity"] == -2
+    assert safe_items[0]["unit_price"] == 18000
+    assert safe_items[0]["supply_amount"] == -36000
+    assert safe_items[0]["tax_amount"] == -3600
+    assert safe_items[0]["line_total"] == -39600
+    assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" not in safe_items[0].get("review_flags", [])
+    assert safe_items[1]["supply_amount"] == 5000
+    assert safe_items[1]["tax_amount"] == 500
+    assert safe_items[1]["line_total"] == 5500
+
+
+def test_vl_upload_pipeline_keeps_hidden_amount_guardrail_for_signed_rows():
+    line_items = [
+        {
+            "item_name": "AL6061 판재",
+            "quantity": -2,
+            "unit_price": 18000,
+            "supply_amount": -36000,
+            "tax_amount": -3600,
+            "line_total": -39600,
+            "validation_warnings": ["row_amount_hidden_do_not_infer"],
+        }
+    ]
+
+    safe_items = DocumentProcessor()._line_items_for_extraction_method(
+        line_items,
+        "paddleocr_vl_1_6_gguf_primary_reader",
+        preserve_signed_amount_rows=True,
+    )
+
+    assert safe_items[0]["quantity"] == -2
+    assert safe_items[0]["unit_price"] == 18000
+    assert "supply_amount" not in safe_items[0]
+    assert "tax_amount" not in safe_items[0]
+    assert "line_total" not in safe_items[0]
+    assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" in safe_items[0]["review_flags"]
+
+
 def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching():
     processor = DocumentProcessor()
     parsed = ParsedDocument(
