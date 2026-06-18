@@ -471,7 +471,7 @@ def _run_direct_llama_schema_prompt(image_path: Path, settings: Any) -> tuple[di
                 "role": "user",
                 "content": [
                     {"type": "text", "text": VLM_TABLE_EXTRACTION_PROMPT},
-                    {"type": "image", "image_url": {"url": image_url}},
+                    {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             }
         ],
