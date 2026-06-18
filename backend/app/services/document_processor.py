@@ -1305,15 +1305,17 @@ class DocumentProcessor:
                 continue
             candidate_name = self._row_match_text(candidate.get("source_item_name") or candidate.get("item_name"))
             candidate_spec = self._row_match_text(candidate.get("specification") or candidate.get("spec"))
-            if item_name and candidate_name and item_name != candidate_name:
-                continue
-            if item_spec and candidate_spec and item_spec != candidate_spec:
-                continue
+            name_compatible = self._row_match_text_compatible(item_name, candidate_name)
+            spec_compatible = self._row_match_text_compatible(item_spec, candidate_spec)
             candidate_quantity = self._vl_decimal(candidate.get("quantity"))
             candidate_unit_price = self._vl_decimal(candidate.get("unit_price"))
             if quantity is not None and candidate_quantity is not None and quantity != candidate_quantity:
                 continue
             if unit_price is not None and candidate_unit_price is not None and unit_price != candidate_unit_price:
+                continue
+            if not (name_compatible or spec_compatible):
+                continue
+            if not name_compatible and item_spec and candidate_spec and not spec_compatible:
                 continue
             if any(candidate.get(field) not in (None, "", []) for field in ("supply_amount", "tax_amount", "line_total")):
                 return index, candidate
@@ -1324,6 +1326,15 @@ class DocumentProcessor:
         text = text.replace("×", "x").replace("*", "x")
         text = re.sub(r"[^0-9a-z가-힣x]+", "", text)
         return text
+
+    def _row_match_text_compatible(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        if left == right or left in right or right in left:
+            return True
+        left_tokens = {token for token in re.split(r"(?<=[a-z가-힣])(?=\d)|(?<=\d)(?=[a-z가-힣])", left) if token}
+        right_tokens = {token for token in re.split(r"(?<=[a-z가-힣])(?=\d)|(?<=\d)(?=[a-z가-힣])", right) if token}
+        return bool(left_tokens and right_tokens and len(left_tokens & right_tokens) >= 2)
 
     def _remove_review_code(self, item: dict[str, Any], code: str) -> None:
         for field in ("validation_warnings", "review_flags", "issue_codes"):

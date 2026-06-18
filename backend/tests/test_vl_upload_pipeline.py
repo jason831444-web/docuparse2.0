@@ -798,8 +798,8 @@ def test_vl_upload_pipeline_restores_return_credit_visible_amounts_after_matchin
     ]
     parsed_items = [
         {
-            "item_name": "AL6061 판재 3T",
-            "specification": "400x600",
+            "item_name": "AL6061 판재",
+            "specification": "3T 400x600",
             "quantity": -2,
             "unit_price": 18000,
             "supply_amount": -36000,
