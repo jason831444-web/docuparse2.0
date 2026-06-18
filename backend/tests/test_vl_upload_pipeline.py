@@ -756,6 +756,24 @@ def test_vl_upload_pipeline_keeps_hidden_amount_guardrail_for_signed_rows():
     assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" in safe_items[0]["review_flags"]
 
 
+def test_vl_upload_pipeline_classifies_return_credit_category_from_visible_text():
+    parsed = ParsedDocument(
+        document_type=DocumentType.general_document,
+        category="credit_note",
+        tags=["return_document"],
+    )
+    raw_text = "\n".join([
+        "반품/크레딧 메모",
+        "문서번호 RCM-2026-0009",
+        "사유 규격 불일치",
+    ])
+
+    processor = DocumentProcessor()
+
+    assert processor._is_return_or_credit_parsed_document(parsed, raw_text)
+    assert processor._return_or_credit_category(parsed, raw_text) == "credit_note"
+
+
 def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching():
     processor = DocumentProcessor()
     parsed = ParsedDocument(

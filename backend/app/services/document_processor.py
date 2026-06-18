@@ -2175,6 +2175,14 @@ class DocumentProcessor:
             or re.search(r"(반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|반품\s*요청|차감\s*요청|return\s+note|credit\s+(?:note|memo))", text, flags=re.IGNORECASE)
         )
 
+    def _return_or_credit_category(self, parsed: object, raw_text: str) -> str:
+        category = str(getattr(parsed, "category", "") or "")
+        tags = " ".join(str(tag or "") for tag in (getattr(parsed, "tags", None) or []))
+        text = f"{category} {tags}\n" + "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:12])
+        if re.search(r"(credit_note|크레딧|차감|credit\s+(?:note|memo))", text, flags=re.IGNORECASE):
+            return "credit_note"
+        return "return_note"
+
     def _is_internal_transfer_parsed_document(self, parsed: object, raw_text: str) -> bool:
         doc_number = str(getattr(parsed, "document_number", "") or "")
         category = str(getattr(parsed, "category", "") or "")
