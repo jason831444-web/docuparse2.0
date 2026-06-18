@@ -683,6 +683,16 @@ def _tables_from_official_paddle_output(output: Any, text: str, *, original_file
         warnings = ["paddleocrvl_official_table_review_required"]
         if table_type == "incoming_inspection":
             warnings.extend(["inspection_report_no_amount_fields", "vl_schema_prompt_inspection_review_required"])
+        table_quality = _official_table_quality(
+            columns=columns,
+            raw_rows=raw_rows,
+            canonical_rows=canonical_rows,
+            table_type=table_type,
+            text=text,
+            original_filename=original_filename,
+        )
+        if table_quality.get("quality_score", 1.0) < 0.55:
+            warnings.append("official_table_quality_low")
         tables.append(
             {
                 "table_type": table_type,
@@ -694,19 +704,176 @@ def _tables_from_official_paddle_output(output: Any, text: str, *, original_file
                 "rows": canonical_rows,
                 "warnings": sorted(set(warnings)),
                 "review_required": True,
+                "official_table_quality": table_quality,
                 "amount_fields_policy": "null_for_inspection_report" if table_type == "incoming_inspection" else "do_not_infer_hidden_values",
                 "provenance": {
                     "source_type": "vl_source",
                     "mode": "paddleocrvl_official_table_html",
                     "visible": True,
                     "review_required": True,
+                    "quality_score": table_quality.get("quality_score"),
+                    "expected_column_coverage": table_quality.get("expected_column_coverage"),
                     "block_bbox": block.get("block_bbox"),
                     "block_polygon_points": block.get("block_polygon_points"),
                     "block_label": block.get("block_label"),
                 },
             }
         )
+    table_count = len(tables)
+    for table in tables:
+        quality = table.get("official_table_quality")
+        if isinstance(quality, dict):
+            quality["table_count"] = table_count
     return tables
+
+
+def _official_table_quality(
+    *,
+    columns: list[str],
+    raw_rows: list[list[str]],
+    canonical_rows: list[dict[str, Any]],
+    table_type: str,
+    text: str,
+    original_filename: str,
+) -> dict[str, Any]:
+    canonical_headers = [_canonical_field_for_header(column) for column in columns]
+    non_empty_headers = [column for column in columns if _clean_cell(column)]
+    mapped_headers = [header for header in canonical_headers if header]
+    total_cells = sum(max(len(columns), len(row)) for row in raw_rows)
+    empty_cells = 0
+    for row in raw_rows:
+        width = max(len(columns), len(row))
+        for index in range(width):
+            value = row[index] if index < len(row) else ""
+            if not _clean_cell(value):
+                empty_cells += 1
+    empty_cell_ratio = (empty_cells / total_cells) if total_cells else 1.0
+    header_match_score = (len(set(mapped_headers)) / len(non_empty_headers)) if non_empty_headers else 0.0
+    row_boundary_quality = _official_table_row_boundary_quality(columns, raw_rows, canonical_rows)
+    document_type = _official_table_document_type_for_quality(table_type, text, original_filename)
+    expected_columns = _official_table_expected_column_groups(document_type)
+    covered_expected: list[str] = []
+    missing_expected: list[str] = []
+    actual_fields = set(header for header in mapped_headers if header)
+    for label, alternatives in expected_columns:
+        if actual_fields.intersection(alternatives):
+            covered_expected.append(label)
+        else:
+            missing_expected.append(label)
+    expected_column_coverage = (len(covered_expected) / len(expected_columns)) if expected_columns else 0.0
+    amount_fields = {"unit_price", "supply_amount", "tax_amount", "line_total"}
+    amount_column_coverage = (
+        len(actual_fields.intersection(amount_fields)) / len(amount_fields)
+        if document_type in {"invoice", "transaction_statement", "purchase_order", "quotation"}
+        else None
+    )
+    quality_score = (
+        header_match_score * 0.30
+        + row_boundary_quality * 0.30
+        + expected_column_coverage * 0.30
+        + max(0.0, 1.0 - empty_cell_ratio) * 0.10
+    )
+    warnings: list[str] = []
+    if expected_column_coverage < 0.55:
+        warnings.append("expected_column_coverage_low")
+    if row_boundary_quality < 0.65:
+        warnings.append("row_boundary_quality_low")
+    if header_match_score < 0.45:
+        warnings.append("header_match_score_low")
+    return {
+        "version": 1,
+        "table_count": 1,
+        "document_type_guess": document_type,
+        "table_type": table_type,
+        "column_count": len(columns),
+        "row_count": len(canonical_rows),
+        "raw_row_count": len(raw_rows),
+        "empty_cell_ratio": round(empty_cell_ratio, 4),
+        "header_match_score": round(header_match_score, 4),
+        "row_boundary_quality": round(row_boundary_quality, 4),
+        "expected_column_coverage": round(expected_column_coverage, 4),
+        "amount_column_coverage": round(amount_column_coverage, 4) if amount_column_coverage is not None else None,
+        "quality_score": round(max(0.0, min(1.0, quality_score)), 4),
+        "covered_expected_columns": covered_expected,
+        "missing_expected_columns": missing_expected,
+        "mapped_headers": [header for header in canonical_headers if header],
+        "warnings": warnings,
+    }
+
+
+def _official_table_row_boundary_quality(
+    columns: list[str],
+    raw_rows: list[list[str]],
+    canonical_rows: list[dict[str, Any]],
+) -> float:
+    if not raw_rows:
+        return 0.0
+    expected_width = max(1, len(columns))
+    width_scores: list[float] = []
+    content_scores: list[float] = []
+    for row in raw_rows:
+        width_delta = abs(len(row) - expected_width)
+        width_scores.append(max(0.0, 1.0 - (width_delta / expected_width)))
+        non_empty = sum(1 for cell in row if _clean_cell(cell))
+        content_scores.append(min(1.0, non_empty / max(1, min(expected_width, 3))))
+    retained_ratio = len(canonical_rows) / len(raw_rows)
+    return max(0.0, min(1.0, (sum(width_scores) / len(width_scores)) * 0.45 + (sum(content_scores) / len(content_scores)) * 0.35 + retained_ratio * 0.20))
+
+
+def _official_table_document_type_for_quality(table_type: str, text: str, original_filename: str) -> str:
+    if table_type == "incoming_inspection":
+        return "inspection_report"
+    haystack = f"{original_filename}\n{text}".casefold()
+    if re.search(r"검사|inspection|iqc", haystack):
+        return "inspection_report"
+    if re.search(r"납품서|delivery", haystack):
+        return "delivery_note"
+    if re.search(r"발주서|purchase\s*order|\bpo[-_]", haystack):
+        return "purchase_order"
+    if re.search(r"견적|quotation|quote", haystack):
+        return "quotation"
+    if re.search(r"거래명세|transaction", haystack):
+        return "transaction_statement"
+    if re.search(r"세금계산서|invoice|commercial", haystack):
+        return "invoice"
+    return "line_items"
+
+
+def _official_table_expected_column_groups(document_type: str) -> list[tuple[str, set[str]]]:
+    if document_type == "inspection_report":
+        return [
+            ("품명", {"item_name"}),
+            ("Lot/Code", {"lot_code", "document_item_code"}),
+            ("입고수량", {"received_quantity"}),
+            ("합격수량 또는 판정", {"accepted_quantity", "result"}),
+            ("불량수량 또는 비고", {"defective_quantity", "note"}),
+            ("검사항목", {"inspection_item"}),
+            ("판정", {"result"}),
+            ("비고", {"note"}),
+        ]
+    if document_type == "delivery_note":
+        return [
+            ("품명", {"item_name"}),
+            ("규격", {"specification"}),
+            ("수량", {"quantity", "delivered_quantity", "requested_quantity"}),
+            ("단위", {"unit"}),
+            ("비고", {"note"}),
+        ]
+    if document_type in {"invoice", "transaction_statement", "purchase_order", "quotation"}:
+        return [
+            ("품명", {"item_name"}),
+            ("규격", {"specification"}),
+            ("수량", {"quantity"}),
+            ("단가", {"unit_price"}),
+            ("공급가액", {"supply_amount"}),
+            ("세액", {"tax_amount"}),
+            ("합계", {"line_total"}),
+        ]
+    return [
+        ("품명", {"item_name"}),
+        ("규격", {"specification"}),
+        ("수량", {"quantity", "delivered_quantity", "requested_quantity"}),
+    ]
 
 
 def _official_parsing_blocks(output: Any) -> list[dict[str, Any]]:

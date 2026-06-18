@@ -423,6 +423,16 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     assert payload["tables"][0]["review_required"] is True
     assert payload["tables"][0]["raw_columns"] == ["No", "품명", "Lot/Code", "입고수량", "합격", "불량", "검사항목", "판정", "비고"]
     assert payload["tables"][0]["provenance"]["block_bbox"] == [177, 598, 1926, 948]
+    quality = payload["tables"][0]["official_table_quality"]
+    assert quality["table_count"] == 1
+    assert quality["document_type_guess"] == "inspection_report"
+    assert quality["column_count"] == 9
+    assert quality["row_count"] == 3
+    assert quality["expected_column_coverage"] >= 0.85
+    assert quality["row_boundary_quality"] >= 0.85
+    assert quality["quality_score"] >= 0.80
+    assert "품명" in quality["covered_expected_columns"]
+    assert "검사항목" in quality["covered_expected_columns"]
     rows = payload["tables"][0]["rows"]
     assert rows[0]["item_name"] == "스테인리스 브라젯"
     assert rows[0]["document_item_code"] == "BRK-SUS"
@@ -439,6 +449,45 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     assert "unit_price" not in rows[0]
     assert "line_total" not in rows[0]
     assert fake_pipeline.calls
+
+
+def test_official_table_quality_scores_visible_amount_columns():
+    quality = vl_worker_server._official_table_quality(
+        columns=["품목", "규격", "수량", "단가", "공급가액", "세액", "합계"],
+        raw_rows=[
+            ["PCB Connector", "12P", "200", "1,250", "250,000", "25,000", "275,000"],
+            ["Cable Harness", "500mm", "80", "2,800", "224,000", "22,400", "246,400"],
+        ],
+        canonical_rows=[
+            {
+                "item_name": "PCB Connector",
+                "specification": "12P",
+                "quantity": 200,
+                "unit_price": 1250,
+                "supply_amount": 250000,
+                "tax_amount": 25000,
+                "line_total": 275000,
+            },
+            {
+                "item_name": "Cable Harness",
+                "specification": "500mm",
+                "quantity": 80,
+                "unit_price": 2800,
+                "supply_amount": 224000,
+                "tax_amount": 22400,
+                "line_total": 246400,
+            },
+        ],
+        table_type="line_items",
+        text="세금계산서 문서번호 INV-2026-0002",
+        original_filename="MFG-002_tax_invoice_uncropped.png",
+    )
+
+    assert quality["document_type_guess"] == "invoice"
+    assert quality["expected_column_coverage"] == 1.0
+    assert quality["amount_column_coverage"] == 1.0
+    assert quality["quality_score"] >= 0.90
+    assert quality["missing_expected_columns"] == []
 
 
 def test_vl_worker_structures_incoming_inspection_rows_with_received_quantity_only():
