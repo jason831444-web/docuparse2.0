@@ -173,6 +173,57 @@ class _FakeInspectionPipeline:
         ]
 
 
+class _FakeOfficialPaddleResult:
+    @property
+    def json(self) -> dict:
+        return {
+            "res": {
+                "input_path": "incoming-inspection.jpg",
+                "width": 2074,
+                "height": 2878,
+                "parsing_res_list": [
+                    {
+                        "block_label": "header",
+                        "block_content": "문서번호: DOC-001",
+                        "block_bbox": [176, 155, 426, 195],
+                    },
+                    {
+                        "block_label": "doc_title",
+                        "block_content": "입고 검사 기록서",
+                        "block_bbox": [834, 149, 1239, 216],
+                    },
+                    {
+                        "block_label": "table",
+                        "block_content": (
+                            "<table>"
+                            "<tr><td>No</td><td>품명</td><td>Lot/Code</td><td>입고수량</td><td>검사항목</td><td>판정</td><td>비고</td></tr>"
+                            "<tr><td>1</td><td>스테인리스 브라젯</td><td>BRK-SUS</td><td>20</td><td>외관/치수</td><td>합격</td><td>이상 없음</td></tr>"
+                            "<tr><td>2</td><td>SUS 볼트 M5x20</td><td>BOLT-M5X20</td><td>120</td><td>외관/치수</td><td>합격</td><td>치수 재확인</td></tr>"
+                            "<tr><td>3</td><td>PCB Connector 12P</td><td>CONN-12P</td><td>20</td><td>외관/치수</td><td>합격</td><td>이상 없음</td></tr>"
+                            "</table>"
+                        ),
+                        "block_bbox": [177, 598, 1926, 948],
+                        "block_polygon_points": [[177, 598], [1926, 598], [1926, 948], [177, 948]],
+                    },
+                    {
+                        "block_label": "text",
+                        "block_content": "※ 검사 기록서는 금액이 없는 품질 확인 문서입니다.",
+                        "block_bbox": [176, 1030, 801, 1073],
+                    },
+                ],
+            }
+        }
+
+
+class _FakeOfficialInspectionPipeline:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def predict(self, image_path: str, *, max_new_tokens: int) -> list[_FakeOfficialPaddleResult]:
+        self.calls.append((image_path, max_new_tokens))
+        return [_FakeOfficialPaddleResult()]
+
+
 def test_vl_candidate_client_uploads_file_to_remote_worker(monkeypatch, tmp_path: Path):
     sample = tmp_path / "sample.pdf"
     sample.write_bytes(b"%PDF-remote-worker-test")
@@ -333,7 +384,7 @@ def test_vl_worker_analyze_upload_saves_file_and_runs_pipeline(monkeypatch, tmp_
 
 
 def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypatch, tmp_path: Path):
-    fake_pipeline = _FakeInspectionPipeline()
+    fake_pipeline = _FakeOfficialInspectionPipeline()
     monkeypatch.setattr(
         vl_worker_server,
         "get_settings",
@@ -349,7 +400,6 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
         ),
     )
     monkeypatch.setattr(vl_worker_server, "_get_pipeline", lambda: fake_pipeline)
-    monkeypatch.setattr(vl_worker_server, "extract_text", lambda output: output[0]["text"])
     monkeypatch.setattr(
         vl_worker_server,
         "validate_output_text",
@@ -366,16 +416,27 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     payload = response.json()
     assert payload["ok"] is True
     assert payload["structured_schema"]["version"] == "docparse_vl_table_schema_v1"
+    assert payload["schema_prompt"]["transport"] == "paddleocrvl_predict_official_result"
+    assert payload["schema_prompt"]["prompt_bypassed"] is True
     assert payload["tables"][0]["table_type"] == "incoming_inspection"
+    assert payload["tables"][0]["source"] == "paddleocrvl_official_table_html"
     assert payload["tables"][0]["review_required"] is True
+    assert payload["tables"][0]["raw_columns"] == ["No", "품명", "Lot/Code", "입고수량", "검사항목", "판정", "비고"]
+    assert payload["tables"][0]["provenance"]["block_bbox"] == [177, 598, 1926, 948]
     rows = payload["tables"][0]["rows"]
-    assert rows[0]["item_name"] == "베어링 하우징"
-    assert rows[0]["specification"] == "BH-220"
-    assert rows[0]["received_quantity"] == 80
-    assert rows[0]["accepted_quantity"] == 78
-    assert rows[0]["defective_quantity"] == 2
-    assert rows[0]["result"] == "조건부 합격"
-    assert rows[1]["item_name"] == "S45C PIN"
+    assert rows[0]["item_name"] == "스테인리스 브라젯"
+    assert rows[0]["document_item_code"] == "BRK-SUS"
+    assert rows[0]["received_quantity"] == 20
+    assert rows[0]["inspection_item"] == "외관/치수"
+    assert rows[0]["result"] == "합격"
+    assert rows[0]["note"] == "이상 없음"
+    assert rows[1]["item_name"] == "SUS 볼트"
+    assert rows[1]["specification"] == "M5x20"
+    assert rows[1]["document_item_code"] == "BOLT-M5X20"
+    assert rows[1]["received_quantity"] == 120
+    assert "unit_price" not in rows[0]
+    assert "line_total" not in rows[0]
+    assert fake_pipeline.calls
 
 
 def test_vl_worker_structures_incoming_inspection_rows_with_received_quantity_only():
@@ -417,6 +478,7 @@ def test_vl_worker_structures_incoming_inspection_rows_with_received_quantity_on
 
 def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch, tmp_path: Path):
     calls: list[dict] = []
+    fake_pipeline = _FakePipeline()
     monkeypatch.setattr(
         vl_worker_server,
         "get_settings",
@@ -435,9 +497,6 @@ def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch,
         ),
     )
 
-    def fail_pipeline():
-        raise AssertionError("PaddleOCRVL fallback should not run when schema prompt succeeds")
-
     def fake_post(url: str, **kwargs):
         calls.append({"url": url, "json": kwargs.get("json")})
         assert url == "http://localhost:8080/v1/chat/completions"
@@ -448,7 +507,8 @@ def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch,
         assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
         return _FakeSchemaPromptResponse()
 
-    monkeypatch.setattr(vl_worker_server, "_get_pipeline", fail_pipeline)
+    monkeypatch.setattr(vl_worker_server, "_get_pipeline", lambda: fake_pipeline)
+    monkeypatch.setattr(vl_worker_server, "extract_text", lambda output: output[0]["text"])
     monkeypatch.setattr("app.services.vl_worker_server.requests.post", fake_post)
     monkeypatch.setattr(
         vl_worker_server,
@@ -475,11 +535,13 @@ def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch,
     assert row["defective_quantity"] == 2
     assert row["result"] == "조건부 합격"
     assert "line_total" not in row
+    assert fake_pipeline.calls
     assert calls
 
 
 def test_vl_worker_repairs_non_json_schema_prompt_into_table_json(monkeypatch, tmp_path: Path):
     calls: list[dict] = []
+    fake_pipeline = _FakePipeline()
     monkeypatch.setattr(
         vl_worker_server,
         "get_settings",
@@ -498,9 +560,6 @@ def test_vl_worker_repairs_non_json_schema_prompt_into_table_json(monkeypatch, t
         ),
     )
 
-    def fail_pipeline():
-        raise AssertionError("PaddleOCRVL fallback should not run when schema repair succeeds")
-
     def fake_post(url: str, **kwargs):
         calls.append({"url": url, "json": kwargs.get("json")})
         assert url == "http://localhost:8080/v1/chat/completions"
@@ -509,7 +568,8 @@ def test_vl_worker_repairs_non_json_schema_prompt_into_table_json(monkeypatch, t
         assert "Convert the following VLM extraction output into ONLY valid JSON" in kwargs["json"]["messages"][0]["content"]
         return _FakeSchemaRepairResponse()
 
-    monkeypatch.setattr(vl_worker_server, "_get_pipeline", fail_pipeline)
+    monkeypatch.setattr(vl_worker_server, "_get_pipeline", lambda: fake_pipeline)
+    monkeypatch.setattr(vl_worker_server, "extract_text", lambda output: output[0]["text"])
     monkeypatch.setattr("app.services.vl_worker_server.requests.post", fake_post)
     monkeypatch.setattr(
         vl_worker_server,
@@ -535,6 +595,7 @@ def test_vl_worker_repairs_non_json_schema_prompt_into_table_json(monkeypatch, t
     assert row["item_name"] == "스테인리스 브라켓"
     assert row["document_item_code"] == "BRK-SUS"
     assert row["received_quantity"] == 20
+    assert fake_pipeline.calls
     assert len(calls) == 2
 
 

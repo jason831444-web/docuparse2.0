@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 import logging
 import mimetypes
@@ -9,6 +8,7 @@ import re
 import threading
 import time
 import uuid
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -267,42 +267,60 @@ def _analyze_path(
             raise FileNotFoundError(f"file_path_not_found: {path}")
         image_path = _prepare_input_image(path)
         settings = get_settings()
-        schema_metadata: dict[str, Any] = {"enabled": bool(getattr(settings, "paddleocr_vl_gguf_schema_prompt_enabled", False))}
+        schema_metadata: dict[str, Any] = {
+            "enabled": bool(getattr(settings, "paddleocr_vl_gguf_schema_prompt_enabled", False)),
+            "official_table_source": "paddleocrvl_official_table_html",
+            "official_table_count": 0,
+        }
         schema_payload: dict[str, Any] | None = None
         tables: list[dict[str, Any]] = []
         output: Any
-        if schema_metadata["enabled"]:
-            schema_payload, schema_metadata = _run_schema_prompt_inference(image_path, settings)
-        if schema_payload:
-            text = str(schema_payload.get("raw_text") or "")
-            tables = _tables_from_schema_payload(schema_payload, source=schema_metadata.get("table_source") or "vl_schema_prompt")
-            output = [{"text": text, "structured_json": schema_payload}]
+        with _inference_lock:
+            output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
+        text = extract_text(output)
+        tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename or path.name)
+        schema_metadata["official_table_count"] = len(tables)
+        if tables:
+            schema_metadata.update(
+                {
+                    "used": True,
+                    "transport": "paddleocrvl_predict_official_result",
+                    "table_source": "paddleocrvl_official_table_html",
+                    "prompt_bypassed": True,
+                }
+            )
         else:
-            with _inference_lock:
-                output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
-            text = extract_text(output)
-            schema_json = _schema_json_from_output(output)
-            if schema_json:
-                schema_metadata.update({"used": True, "transport": "paddleocr_predict_prompt"})
-                text = str(schema_json.get("raw_text") or text)
-                tables = _tables_from_schema_payload(schema_json, source="vl_schema_prompt")
-            elif schema_metadata.get("attempted") and text.strip():
-                schema_metadata["repair_attempted"] = True
-                repaired, repair_error = _run_llama_schema_json_repair(text, settings)
-                if repaired and _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair"):
-                    schema_metadata.update(
-                        {
-                            "used": True,
-                            "transport": "paddleocr_predict_text_schema_repair",
-                            "repair_used": True,
-                            "table_source": "vl_schema_prompt_repair",
-                        }
-                    )
-                    text = str(repaired.get("raw_text") or text)
-                    tables = _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair")
-                    output = [{"text": text, "structured_json": repaired, "source_output": output}]
-                else:
-                    schema_metadata["repair_error"] = repair_error
+            if schema_metadata["enabled"]:
+                prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
+                schema_payload = prompt_payload
+                schema_metadata.update(prompt_metadata)
+            if schema_payload:
+                text = str(schema_payload.get("raw_text") or text or "")
+                tables = _tables_from_schema_payload(schema_payload, source=schema_metadata.get("table_source") or "vl_schema_prompt")
+                output = [{"text": text, "structured_json": schema_payload, "source_output": output}]
+            else:
+                schema_json = _schema_json_from_output(output)
+                if schema_json:
+                    schema_metadata.update({"used": True, "transport": "paddleocr_predict_prompt"})
+                    text = str(schema_json.get("raw_text") or text)
+                    tables = _tables_from_schema_payload(schema_json, source="vl_schema_prompt")
+                elif schema_metadata.get("attempted") and text.strip():
+                    schema_metadata["repair_attempted"] = True
+                    repaired, repair_error = _run_llama_schema_json_repair(text, settings)
+                    if repaired and _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair"):
+                        schema_metadata.update(
+                            {
+                                "used": True,
+                                "transport": "paddleocr_predict_text_schema_repair",
+                                "repair_used": True,
+                                "table_source": "vl_schema_prompt_repair",
+                            }
+                        )
+                        text = str(repaired.get("raw_text") or text)
+                        tables = _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair")
+                        output = [{"text": text, "structured_json": repaired, "source_output": output}]
+                    else:
+                        schema_metadata["repair_error"] = repair_error
         validation = validate_output_text(text, [])
         if not tables:
             tables = _extract_structured_tables(text, output, original_filename=original_filename or path.name)
@@ -530,18 +548,6 @@ def _run_llama_schema_json_repair(content: str, settings: Any) -> tuple[dict[str
 def _predict_with_optional_paddle_schema_prompt(image_path: Path, settings: Any) -> Any:
     pipeline = _get_pipeline()
     kwargs: dict[str, Any] = {"max_new_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512)}
-    if getattr(settings, "paddleocr_vl_gguf_schema_prompt_enabled", False):
-        signature = inspect.signature(pipeline.predict)
-        prompt_key = next(
-            (
-                key
-                for key in ("prompt", "instruction", "query", "task_prompt")
-                if key in signature.parameters
-            ),
-            None,
-        )
-        if prompt_key:
-            kwargs[prompt_key] = VLM_TABLE_EXTRACTION_PROMPT
     return pipeline.predict(str(image_path), **kwargs)
 
 
@@ -594,6 +600,280 @@ def _parse_json_object(content: str) -> dict[str, Any] | None:
     except Exception:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+class _HTMLTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[str]] = []
+        self._current_row: list[str] | None = None
+        self._current_cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.casefold()
+        if tag == "tr":
+            self._current_row = []
+        elif tag in {"td", "th"}:
+            self._current_cell = []
+        elif tag == "br" and self._current_cell is not None:
+            self._current_cell.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._current_cell is not None:
+            self._current_cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if tag in {"td", "th"} and self._current_cell is not None:
+            value = _clean_cell("".join(self._current_cell))
+            if self._current_row is not None:
+                self._current_row.append(value or "")
+            self._current_cell = None
+        elif tag == "tr" and self._current_row is not None:
+            if any(_clean_cell(cell) for cell in self._current_row):
+                self.rows.append(self._current_row)
+            self._current_row = None
+
+
+def _tables_from_official_paddle_output(output: Any, text: str, *, original_filename: str = "") -> list[dict[str, Any]]:
+    tables: list[dict[str, Any]] = []
+    for block in _official_parsing_blocks(output):
+        if str(block.get("block_label") or "").casefold() != "table":
+            continue
+        html_table = str(block.get("block_content") or "")
+        if not re.search(r"<\s*table\b", html_table, flags=re.IGNORECASE):
+            continue
+        parsed_rows = _parse_html_table_rows(html_table)
+        if len(parsed_rows) < 2:
+            continue
+        columns = [_clean_cell(cell) or "" for cell in parsed_rows[0]]
+        raw_rows = [[_clean_cell(cell) or "" for cell in row] for row in parsed_rows[1:]]
+        table_type = _guess_official_table_type(columns, raw_rows, text, original_filename)
+        canonical_rows = [_canonical_row_from_official_table(columns, row, table_type) for row in raw_rows]
+        canonical_rows = [row for row in canonical_rows if row]
+        if not canonical_rows:
+            continue
+        warnings = ["paddleocrvl_official_table_review_required"]
+        if table_type == "incoming_inspection":
+            warnings.extend(["inspection_report_no_amount_fields", "vl_schema_prompt_inspection_review_required"])
+        tables.append(
+            {
+                "table_type": table_type,
+                "source": "paddleocrvl_official_table_html",
+                "schema_version": VLM_STRUCTURED_OUTPUT_SCHEMA["version"],
+                "columns": columns,
+                "raw_columns": columns,
+                "raw_rows": raw_rows,
+                "rows": canonical_rows,
+                "warnings": sorted(set(warnings)),
+                "review_required": True,
+                "amount_fields_policy": "null_for_inspection_report" if table_type == "incoming_inspection" else "do_not_infer_hidden_values",
+                "provenance": {
+                    "source_type": "vl_source",
+                    "mode": "paddleocrvl_official_table_html",
+                    "visible": True,
+                    "review_required": True,
+                    "block_bbox": block.get("block_bbox"),
+                    "block_polygon_points": block.get("block_polygon_points"),
+                    "block_label": block.get("block_label"),
+                },
+            }
+        )
+    return tables
+
+
+def _official_parsing_blocks(output: Any) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    items = output if isinstance(output, (list, tuple)) else [output]
+    for item in items or []:
+        for payload in _official_json_payload_candidates(item):
+            if not isinstance(payload, dict):
+                continue
+            res = payload.get("res") if isinstance(payload.get("res"), dict) else payload
+            parsing = res.get("parsing_res_list") if isinstance(res, dict) else None
+            if isinstance(parsing, list):
+                blocks.extend(block for block in parsing if isinstance(block, dict))
+    return blocks
+
+
+def _official_json_payload_candidates(item: Any) -> list[Any]:
+    candidates: list[Any] = []
+    if isinstance(item, dict):
+        candidates.append(item)
+        if isinstance(item.get("json"), dict):
+            candidates.append(item["json"])
+        if isinstance(item.get("res"), dict):
+            candidates.append({"res": item["res"]})
+    if candidates:
+        return candidates
+    for attr in ("json", "str"):
+        if not hasattr(item, attr):
+            continue
+        value = getattr(item, attr)
+        try:
+            value = value() if callable(value) else value
+        except TypeError:
+            continue
+        if isinstance(value, dict):
+            candidates.append(value)
+            if attr == "json":
+                return candidates
+    return candidates
+
+
+def _parse_html_table_rows(html_table: str) -> list[list[str]]:
+    parser = _HTMLTableParser()
+    try:
+        parser.feed(html_table)
+        parser.close()
+    except Exception:
+        return []
+    return parser.rows
+
+
+def _guess_official_table_type(
+    columns: list[str],
+    rows: list[list[str]],
+    text: str,
+    original_filename: str,
+) -> str:
+    haystack = "\n".join([original_filename, text, " ".join(columns), *(" ".join(row) for row in rows[:3])])
+    if _looks_like_incoming_inspection(haystack, original_filename):
+        return "incoming_inspection"
+    if re.search(r"(입고수량|검사항목|판정|Lot\s*/?\s*Code)", haystack, flags=re.IGNORECASE):
+        return "incoming_inspection"
+    return "line_items"
+
+
+def _canonical_row_from_official_table(columns: list[str], raw_row: list[str], table_type: str) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "raw_cells": {columns[index] if index < len(columns) else f"column_{index + 1}": value for index, value in enumerate(raw_row)}
+    }
+    for index, value in enumerate(raw_row):
+        header = columns[index] if index < len(columns) else ""
+        canonical = _canonical_field_for_header(header)
+        cell = _clean_cell(value)
+        if not canonical or cell in (None, ""):
+            continue
+        if canonical in {
+            "no",
+            "quantity",
+            "received_quantity",
+            "accepted_quantity",
+            "defective_quantity",
+            "requested_quantity",
+            "delivered_quantity",
+        }:
+            parsed = _int_text(cell)
+            if parsed is not None:
+                row[canonical] = parsed
+            else:
+                row.setdefault("review_flags", []).append(f"{canonical}_parse_review_required")
+                row[canonical] = cell
+        elif canonical in {"unit_price", "supply_amount", "tax_amount", "line_total"}:
+            if table_type == "incoming_inspection":
+                row.setdefault("review_flags", []).append("inspection_report_amount_field_removed")
+                continue
+            parsed = _int_text(cell)
+            row[canonical] = parsed if parsed is not None else cell
+        else:
+            row[canonical] = cell
+    if table_type == "incoming_inspection":
+        for amount_field in ("unit_price", "supply_amount", "tax_amount", "line_total", "subtotal", "total", "currency"):
+            row.pop(amount_field, None)
+        row.setdefault("review_flags", []).append("paddleocrvl_official_table_review_required")
+        row.setdefault("review_flags", []).append("vl_schema_prompt_inspection_review_required")
+        row.update(_split_official_inspection_item_fields(row))
+        if not row.get("item_name") or _inspection_header_or_note(str(row.get("item_name"))):
+            return {}
+        row["review_flags"] = sorted(set(str(flag) for flag in row.get("review_flags") or [] if flag))
+    elif not row.get("item_name"):
+        return {}
+    return row
+
+
+def _canonical_field_for_header(header: str) -> str | None:
+    normalized = re.sub(r"[\s_:/()-]+", "", str(header or "").casefold())
+    mapping = {
+        "no": "no",
+        "번호": "no",
+        "품명": "item_name",
+        "품목": "item_name",
+        "품목명": "item_name",
+        "제품명": "item_name",
+        "item": "item_name",
+        "itemname": "item_name",
+        "description": "item_name",
+        "규격": "specification",
+        "모델명": "specification",
+        "spec": "specification",
+        "specification": "specification",
+        "lot": "lot_code",
+        "lotcode": "document_item_code",
+        "lotno": "lot_code",
+        "code": "document_item_code",
+        "품목코드": "document_item_code",
+        "문서품목코드": "document_item_code",
+        "입고수량": "received_quantity",
+        "합격수량": "accepted_quantity",
+        "불량수량": "defective_quantity",
+        "검사항목": "inspection_item",
+        "판정": "result",
+        "결과": "result",
+        "비고": "note",
+        "remark": "note",
+        "remarks": "note",
+        "note": "note",
+        "수량": "quantity",
+        "qty": "quantity",
+        "quantity": "quantity",
+        "납품수량": "delivered_quantity",
+        "요청수량": "requested_quantity",
+        "발주수량": "requested_quantity",
+        "단위": "unit",
+        "unit": "unit",
+        "단가": "unit_price",
+        "unitprice": "unit_price",
+        "공급가액": "supply_amount",
+        "세액": "tax_amount",
+        "합계": "line_total",
+        "합계금액": "line_total",
+        "금액": "line_total",
+        "amount": "line_total",
+        "linetotal": "line_total",
+        "tax": "tax_amount",
+    }
+    return mapping.get(normalized)
+
+
+def _split_official_inspection_item_fields(row: dict[str, Any]) -> dict[str, Any]:
+    item_name = _clean_cell(str(row.get("item_name") or ""))
+    if not item_name:
+        return {}
+    if row.get("document_item_code") and row.get("specification"):
+        return {}
+    tokens = item_name.split()
+    if len(tokens) < 2:
+        return {}
+    code_index: int | None = None
+    spec_index: int | None = None
+    for index, token in enumerate(tokens):
+        if not row.get("document_item_code") and re.fullmatch(r"[A-Z]{2,8}(?:[-_][A-Z0-9]{1,12})+", token, flags=re.IGNORECASE):
+            code_index = index
+        if not row.get("specification") and re.fullmatch(r"(?:M\d+(?:[xX]\d+)?|\d+[xX]\d+(?:[xX]\d+)?|\d+(?:mm|T|P)|\d+P)", token, flags=re.IGNORECASE):
+            spec_index = index
+    updates: dict[str, Any] = {}
+    cut_indexes = [index for index in (code_index, spec_index) if index is not None]
+    if code_index is not None:
+        updates["document_item_code"] = tokens[code_index]
+    if spec_index is not None:
+        updates["specification"] = tokens[spec_index]
+    if cut_indexes:
+        cut = min(cut_indexes)
+        cleaned_name = " ".join(tokens[:cut]).strip()
+        if cleaned_name:
+            updates["item_name"] = cleaned_name
+    return updates
 
 
 def _image_data_url(image_path: Path) -> str:
