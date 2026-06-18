@@ -176,6 +176,128 @@ def test_vl_upload_pipeline_sends_standard_preprocessed_image_once_to_worker(tmp
     assert "vl_candidate_preprocessed_retry_requires_review" not in metadata["vl_candidate_summary"]["issue_codes"]
 
 
+def test_final_business_safety_blocks_pos_summary_rows_from_manufacturing_items():
+    document = _document(
+        original_filename="DOC-004_pos_daily_settlement_blurry_screen_photo.jpg",
+        document_type=DocumentType.general_document,
+        title="일정산",
+        document_number="POS-2026-0004",
+        extracted_amount=Decimal("955900"),
+        line_items=[
+            {"item_name": "순판매금액", "line_total": 955900},
+            {"item_name": "과세합계", "line_total": 869010},
+            {"item_name": "주문횟수", "quantity": 22},
+        ],
+    )
+
+    issues = DocumentProcessor()._apply_final_business_safety_overrides(
+        document,
+        "루팡 POS 메인포스 일정산 실 판매금액 955,900 주문횟수 22",
+    )
+
+    assert document.line_items == []
+    assert document.document_type == DocumentType.general_document
+    assert document.category == "unsupported_pos_settlement"
+    assert document.review_required is True
+    assert {issue["code"] for issue in issues} == {"unsupported_pos_daily_settlement_review_required"}
+
+
+def test_final_business_safety_does_not_treat_transaction_statement_as_pos_from_settlement_word_only():
+    document = _document(
+        original_filename="DOC-010_transaction_statement_uncropped_photo.pdf",
+        document_type=DocumentType.transaction_statement,
+        vendor_name="상호: (주)태광부품",
+        customer_name="고객사: 삼광유통",
+        line_items=[
+            {"item_name": "AL6061 판재", "quantity": 12, "unit_price": 18000, "line_total": 237600},
+            {"item_name": "POS 영수증 용지", "quantity": 10, "unit_price": 33000, "line_total": 330000},
+            {"item_name": "S45C 환봉", "quantity": 15, "unit_price": 12500, "line_total": 206250},
+        ],
+    )
+
+    issues = DocumentProcessor()._apply_final_business_safety_overrides(
+        document,
+        "거래명세서 월말 정산 참고 POS 영수증 용지 결제합계 460,350 공급가액 418,500 세액 41,850 합계 460,350",
+    )
+
+    assert document.document_type == DocumentType.transaction_statement
+    assert document.category != "unsupported_pos_settlement"
+    assert len(document.line_items or []) == 3
+    assert document.vendor_name == "태광부품"
+    assert document.customer_name == "삼광유통"
+    assert not any(issue["code"] == "unsupported_pos_daily_settlement_review_required" for issue in issues)
+
+
+def test_final_business_safety_clears_person_label_from_party_name():
+    document = _document(
+        original_filename="DOC-066_purchase_order_uncropped_photo.webp",
+        document_type=DocumentType.purchase_order,
+        vendor_name="상호: (주)세진푸드",
+        customer_name="담당: 김선영 / 회계팀",
+        line_items=[{"item_name": "PCB Connector 12P", "quantity": 100}],
+    )
+
+    DocumentProcessor()._apply_final_business_safety_overrides(document, "발주서")
+
+    assert document.vendor_name == "세진푸드"
+    assert document.customer_name is None
+
+
+def test_final_business_safety_removes_amounts_from_inspection_documents():
+    document = _document(
+        original_filename="DOC-001_incoming_inspection.pdf",
+        document_type=DocumentType.invoice,
+        extracted_amount=Decimal("81212"),
+        subtotal=Decimal("80012"),
+        tax=Decimal("1200"),
+        currency="KRW",
+        line_items=[
+            {
+                "item_name": "S45C PIN",
+                "specification": "8X60",
+                "quantity": 300,
+                "unit_price": 1200,
+                "supply_amount": 80012,
+                "line_total": 81212,
+            }
+        ],
+    )
+
+    issues = DocumentProcessor()._apply_final_business_safety_overrides(
+        document,
+        "입고 검사 기록서 검사일 2026.06.15 품목 S45C PIN 입고수량 300 합격 300 불량 0 금액 항목 없음",
+    )
+
+    assert document.document_type == DocumentType.inspection_report
+    assert document.extracted_amount is None
+    assert document.subtotal is None
+    assert document.tax is None
+    assert document.currency is None
+    assert document.line_items[0]["item_name"] == "S45C PIN"
+    assert "unit_price" not in document.line_items[0]
+    assert "supply_amount" not in document.line_items[0]
+    assert "line_total" not in document.line_items[0]
+    assert "no_price_document_amount_blocker" in {issue["code"] for issue in issues}
+
+
+def test_final_business_safety_drops_summary_footer_rows_from_any_reader_path():
+    document = _document(
+        original_filename="DOC-009_return_credit_blurry_uncropped_photo.pdf",
+        document_type=DocumentType.transaction_statement,
+        line_items=[
+            {"item_name": "S45C PIN", "quantity": 10, "line_total": 20000},
+            {"item_name": "크레뒷합계", "line_total": 12100},
+            {"item_name": "TOTAL USD / KRW Converted", "line_total": 1370},
+            {"item_name": "옵션 선택 후 예상합계", "line_total": 500000},
+        ],
+    )
+
+    issues = DocumentProcessor()._apply_final_business_safety_overrides(document, "반품 크레딧 메모")
+
+    assert [item["item_name"] for item in document.line_items] == ["S45C PIN"]
+    assert {issue["code"] for issue in issues} == {"summary_total_not_line_item"}
+
+
 def test_vl_upload_pipeline_partially_promotes_blank_quantity_candidate():
     text = """
     견적서
@@ -228,6 +350,95 @@ def test_vl_upload_pipeline_partially_promotes_blank_quantity_candidate():
     assert document.line_items[1]["quantity"] == 100
     issue_codes = metadata["vl_candidate_summary"]["issue_codes"]
     assert "vl_candidate_requires_review" in issue_codes
+    assert metadata["normalized_review_issues"][0]["code"] == "vl_candidate_review_required"
+
+
+def test_vl_upload_pipeline_preserves_worker_inspection_tables_as_review_required_business_data():
+    text = """
+    입고 검사 기록서
+    문서번호 IQC-REMOTE-007
+    검사일 2026.06.15
+    No 품목 규격 입고수량 합격 불량 판정 비고
+    품목명 검사항목 판정 비고가 같은 줄에 섞여 보일 수 있음
+    금액 항목 없음
+    """
+    worker = FakeVLWorker(
+        {
+            "ok": True,
+            "provider": "paddleocr_vl_1_6_gguf",
+            "classification": "pass",
+            "text": text,
+            "tables": [
+                {
+                    "table_type": "incoming_inspection",
+                    "source": "vl_worker_table_extractor",
+                    "schema_version": "docparse_vl_table_schema_v1",
+                    "rows": [
+                        {
+                            "no": 1,
+                            "item_name": "베어링 하우징",
+                            "specification": "BH-220",
+                            "received_quantity": 80,
+                            "accepted_quantity": 78,
+                            "defective_quantity": 2,
+                            "result": "조건부합격",
+                            "note": "표면 흠집",
+                        },
+                        {
+                            "no": 2,
+                            "item_name": "S45C PIN",
+                            "specification": "8X60",
+                            "received_quantity": 300,
+                            "accepted_quantity": 300,
+                            "defective_quantity": 0,
+                            "result": "합격",
+                        },
+                    ],
+                    "warnings": ["vl_table_review_required"],
+                    "review_required": True,
+                }
+            ],
+            "structured_schema": {"version": "docparse_vl_table_schema_v1"},
+            "validation": {"status": "pass", "ok": True},
+        }
+    )
+    document = _document(
+        original_filename="incoming-inspection-worker-table.jpg",
+        document_type=DocumentType.inspection_report,
+        workflow_metadata={
+            "taxonomy": {
+                "document_profile": "quality_document",
+                "document_profiles": ["quality_document", "no_price_document"],
+            }
+        },
+    )
+
+    metadata = _processor(worker)._vl_primary_reader_metadata(
+        Path(document.stored_file_path),
+        document,
+        document.workflow_metadata,
+    )
+
+    assert metadata is not None
+    assert metadata["vl_provider_metadata"]["structured_schema"]["version"] == "docparse_vl_table_schema_v1"
+    assert metadata["vl_provider_metadata"]["table_count"] == 1
+    assert metadata["vl_candidate_summary"]["gate_decision"] == "review_required"
+    assert metadata["vl_candidate_summary"]["requires_review"] is True
+    assert metadata["vl_candidate_summary"]["fallback_used"] is False
+    assert metadata["vl_candidates"][0]["structured_candidate"]["tables"][0]["table_type"] == "incoming_inspection"
+    assert document.document_type == DocumentType.inspection_report
+    assert document.extracted_amount is None
+    assert document.currency is None
+    assert len(document.line_items or []) == 2
+    assert document.line_items[0]["item_name"] == "베어링 하우징"
+    assert document.line_items[0]["received_quantity"] == 80
+    assert document.line_items[0]["accepted_quantity"] == 78
+    assert document.line_items[0]["rejected_quantity"] == 2
+    assert document.line_items[0]["defective_quantity"] == 2
+    assert "unit_price" not in document.line_items[0]
+    assert "line_total" not in document.line_items[0]
+    issue_codes = metadata["vl_candidate_summary"]["issue_codes"]
+    assert "vl_candidate_inspection_table_review_required" in issue_codes
     assert metadata["normalized_review_issues"][0]["code"] == "vl_candidate_review_required"
 
 

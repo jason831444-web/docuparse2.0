@@ -28,15 +28,23 @@ class VLCandidateParser:
         text: str,
         *,
         filename: str = "",
+        tables: list[dict[str, Any]] | None = None,
         manual_visual_check: dict[str, Any] | None = None,
         validation: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        doc_type = self.parser._guess_document_type(str(text or ""), filename)
+        doc_type = self._guess_document_type_from_vlm_tables(tables) or self.parser._guess_document_type(str(text or ""), filename)
         cleaned = self._clean_text(text, doc_type=doc_type)
-        if not cleaned:
+        table_items = self._line_items_from_vlm_tables(tables)
+        if not cleaned and not table_items:
             return None
-        parsed = self.parser.parse(cleaned, filename)
+        parsed = self.parser.parse(cleaned, filename) if cleaned else ParsedDocument(document_type=DocumentType.inspection_report)
+        if table_items and self._should_prefer_vlm_table_items(table_items, parsed.line_items, parsed.document_type):
+            parsed.document_type = DocumentType.inspection_report
+            parsed.line_items = table_items
         parsed.line_items = self._line_items_for_visible_columns_only(cleaned, doc_type, parsed.line_items)
+        if table_items and self._should_prefer_vlm_table_items(table_items, parsed.line_items, parsed.document_type):
+            parsed.document_type = DocumentType.inspection_report
+            parsed.line_items = table_items
         handwritten_items = self._extract_handwritten_freeform_items(cleaned, parsed.document_type)
         if (
             not self._has_explicit_table_header(cleaned, parsed.document_type)
@@ -57,10 +65,141 @@ class VLCandidateParser:
             "document": self._compact_document(parsed),
             "line_items": [self._compact_line_item(item) for item in parsed.line_items[:25]],
             "line_item_count": len(parsed.line_items),
+            "tables": self._compact_vlm_tables(tables),
             "issue_codes": list(dict.fromkeys(issue["code"] for issue in issues if issue.get("code"))),
             "issues": issues,
             "review_flags": list(dict.fromkeys(issue["code"] for issue in issues if issue.get("code"))),
         }
+
+    def _guess_document_type_from_vlm_tables(self, tables: list[dict[str, Any]] | None) -> DocumentType | None:
+        for table in tables or []:
+            if not isinstance(table, dict):
+                continue
+            if str(table.get("table_type") or "").casefold() in {"incoming_inspection", "inspection_report"}:
+                return DocumentType.inspection_report
+        return None
+
+    def _line_items_from_vlm_tables(self, tables: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for table in tables or []:
+            if not isinstance(table, dict):
+                continue
+            table_type = str(table.get("table_type") or "").casefold()
+            if table_type not in {"incoming_inspection", "inspection_report"}:
+                continue
+            for row in table.get("rows") or []:
+                item = self._inspection_item_from_vlm_table_row(row, table)
+                if item:
+                    items.append(item)
+        return self.parser._dedupe_line_items(items)[:40]
+
+    def _inspection_item_from_vlm_table_row(self, row: Any, table: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(row, dict):
+            return None
+        item_name = self._clean_structured_cell(row.get("item_name"))
+        if not item_name or self._looks_like_table_header(item_name):
+            return None
+        item: dict[str, Any] = {
+            "item_name": item_name,
+            "validation_warnings": [
+                "inspection_table_review_required",
+                "inspection_report_review_required",
+            ],
+            "review_flags": [
+                "inspection_table_review_required",
+                "inspection_report_review_required",
+            ],
+            "_provenance": {
+                "source_type": "vl_source",
+                "mode": "vl_worker_structured_table",
+                "table_type": table.get("table_type"),
+                "visible": True,
+                "review_required": True,
+            },
+        }
+        for source, target in (
+            ("lot_code", "lot_code"),
+            ("lot_code", "lot_no"),
+            ("document_item_code", "document_item_code"),
+            ("specification", "specification"),
+            ("inspection_item", "inspection_item"),
+            ("result", "inspection_result"),
+            ("note", "remarks"),
+        ):
+            value = self._clean_structured_cell(row.get(source))
+            if value not in (None, "", []):
+                item[target] = value
+        for source, target in (
+            ("received_quantity", "received_quantity"),
+            ("accepted_quantity", "accepted_quantity"),
+            ("defective_quantity", "defective_quantity"),
+            ("defective_quantity", "rejected_quantity"),
+        ):
+            value = self._normalize_structured_quantity(row.get(source))
+            if value is not None:
+                item[target] = value
+        if item.get("received_quantity") is not None:
+            item["quantity"] = item["received_quantity"]
+            item["unit"] = "EA"
+        for flag in row.get("review_flags") or table.get("warnings") or []:
+            if not flag:
+                continue
+            item["validation_warnings"].append(str(flag))
+            item["review_flags"].append(str(flag))
+        for amount_field in ("unit_price", "supply_amount", "tax_amount", "line_total", "subtotal", "total", "currency"):
+            item.pop(amount_field, None)
+        item["validation_warnings"] = sorted(set(item["validation_warnings"]))
+        item["review_flags"] = sorted(set(item["review_flags"]))
+        return self.parser._normalize_line_item(item)
+
+    def _clean_structured_cell(self, value: Any) -> str | None:
+        if value in (None, "", []):
+            return None
+        text = re.sub(r"\s+", " ", str(value)).strip(" -:：")
+        return text or None
+
+    def _normalize_structured_quantity(self, value: Any) -> int | None:
+        if value in (None, "", []):
+            return None
+        try:
+            return int(Decimal(str(value).replace(",", "")))
+        except Exception:
+            return None
+
+    def _should_prefer_vlm_table_items(
+        self,
+        table_items: list[dict[str, Any]],
+        fallback_items: list[dict[str, Any]],
+        doc_type: Any | None,
+    ) -> bool:
+        if not table_items:
+            return False
+        doc_value = doc_type.value if isinstance(doc_type, DocumentType) else str(doc_type or "")
+        if doc_value == "inspection_report":
+            return True
+        if any(self._looks_like_table_header(str(item.get("item_name") or "")) for item in fallback_items or []):
+            return True
+        return self._structured_line_item_score(table_items) > self._structured_line_item_score(fallback_items or [])
+
+    def _compact_vlm_tables(self, tables: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        compacted: list[dict[str, Any]] = []
+        for table in tables or []:
+            if not isinstance(table, dict):
+                continue
+            rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+            compacted.append(
+                {
+                    "table_type": table.get("table_type"),
+                    "source": table.get("source"),
+                    "schema_version": table.get("schema_version"),
+                    "row_count": len(rows),
+                    "columns": table.get("columns") if isinstance(table.get("columns"), list) else None,
+                    "warnings": table.get("warnings") if isinstance(table.get("warnings"), list) else [],
+                    "review_required": bool(table.get("review_required")),
+                    "rows_preview": rows[:5],
+                }
+            )
+        return compacted
 
     def _clean_text(self, text: str, doc_type: Any | None = None) -> str:
         text = self._normalize_vl_text(text)
@@ -704,6 +843,8 @@ class VLCandidateParser:
             "document_item_code",
             "internal_item_code",
             "source_item_code",
+            "lot_code",
+            "lot_no",
             "specification",
             "quantity",
             "ordered_quantity",
@@ -712,8 +853,12 @@ class VLCandidateParser:
             "delivered_quantity",
             "remaining_quantity",
             "accepted_quantity",
+            "defective_quantity",
             "rejected_quantity",
+            "inspection_item",
             "inspection_result",
+            "remarks",
+            "note",
             "unit",
             "unit_price",
             "supply_amount",

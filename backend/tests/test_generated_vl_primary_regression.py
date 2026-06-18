@@ -293,6 +293,72 @@ def test_expected_metadata_jsonl_maps_real_company_smoke_rows(tmp_path):
     assert metadata["DOC-010_internal_transfer_uncropped_photo.webp"]["no_price_document"] is True
 
 
+def test_expected_metadata_jsonl_maps_uncropped_photo_common_fields(tmp_path):
+    rows = [
+        {
+            "filename": "DOC-004_transaction_statement_uncropped_photo.jpg",
+            "document_type": "transaction_statement",
+            "vendor": "대성정공",
+            "customer": "시흥대야점",
+            "date": "2026.06.17",
+            "total_amount": 11964040,
+            "line_items": 7,
+            "synthetic": True,
+        },
+        {
+            "filename": "DOC-001_incoming_inspection_uncropped_photo.jpg",
+            "document_type": "incoming_inspection",
+            "vendor": "신우정밀",
+            "customer": "삼광유통",
+            "date": "2026.06.02",
+            "line_items": 3,
+            "synthetic": True,
+        },
+    ]
+    (tmp_path / "expected_metadata.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+        encoding="utf-8",
+    )
+
+    metadata = regression._load_expected_metadata(tmp_path)
+
+    statement = metadata["DOC-004_transaction_statement_uncropped_photo.jpg"]
+    assert statement["document_type"] == "transaction_statement"
+    assert statement["vendor"] == "대성정공"
+    assert statement["customer"] == "시흥대야점"
+    assert statement["issue_date"] == "2026.06.17"
+    assert statement["total_amount"] == 11964040
+    assert statement["expected_line_item_min_count"] == 7
+
+    inspection = metadata["DOC-001_incoming_inspection_uncropped_photo.jpg"]
+    assert inspection["document_type"] == "inspection_report"
+    assert inspection["no_price_document"] is True
+    assert inspection["expected_line_item_min_count"] == 3
+
+
+def test_compare_accepts_dotted_date_expected_against_iso_actual():
+    expected = {
+        "document_type": "transaction_statement",
+        "vendor": "대성정공",
+        "customer": "시흥대야점",
+        "issue_date": "2026.06.17",
+        "total_amount": 11964040,
+        "expected_line_item_min_count": 1,
+    }
+    actual = {
+        "document_type": "transaction_statement",
+        "vendor_name": "대성정공",
+        "customer_name": "시흥대야점",
+        "extracted_date": "2026-06-17",
+        "extracted_amount": 11964040,
+        "line_items": [{"item_name": "S45C PIN"}],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert result["status"] == "PASS"
+
+
 def test_compare_warns_when_required_header_field_is_missing():
     expected = {
         "document_type": "invoice",

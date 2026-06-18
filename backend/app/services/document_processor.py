@@ -265,6 +265,7 @@ class DocumentProcessor:
             document.tags = self._merge_tags(document.tags, interpretation, document.document_type)
             if deterministic_first and self._is_manufacturing_parsed_type(parsed):
                 document.tags = ["internal_transfer"] if self._is_internal_transfer_parsed_document(parsed, raw_text) else [parsed.document_type.value]
+            business_safety_issues = self._apply_final_business_safety_overrides(document, raw_text)
             taxonomy = self.taxonomy.classify(
                 document,
                 ai_result.cleaned_raw_text or raw_text,
@@ -299,6 +300,19 @@ class DocumentProcessor:
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
             workflow_metadata = workflow.workflow_metadata or {}
+            if business_safety_issues:
+                issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
+                for issue in business_safety_issues:
+                    if issue.get("code") not in existing_codes:
+                        issues.append(issue)
+                        existing_codes.add(issue.get("code"))
+                workflow_metadata["normalized_review_issues"] = issues
+                workflow_metadata["review_required"] = True
+                workflow_metadata["business_safety_sanitizer"] = {
+                    "source": "final_business_safety_overrides",
+                    "issue_codes": [issue.get("code") for issue in business_safety_issues],
+                }
             if vl_pipeline_metadata:
                 workflow_metadata = self._merge_vl_pipeline_metadata(workflow_metadata, vl_pipeline_metadata)
             layout_debug = self._bbox_layout_debug_metadata(normalized, document, workflow_metadata)
@@ -713,6 +727,10 @@ class DocumentProcessor:
             "n_predict": result.get("n_predict"),
             "remote_upload": _safe_remote_upload_metadata(result.get("remote_upload")),
         }
+        if isinstance(result.get("structured_schema"), dict):
+            provider_metadata["structured_schema"] = result.get("structured_schema")
+        if isinstance(result.get("tables"), list):
+            provider_metadata["table_count"] = len(result.get("tables") or [])
         input_variant = result.get("input_variant") if isinstance(result.get("input_variant"), dict) else None
         if input_variant:
             provider_metadata["input_variant"] = {
@@ -749,6 +767,7 @@ class DocumentProcessor:
         structured = self.vl_candidate_parser.parse_text(
             text,
             filename=document.original_filename,
+            tables=result.get("tables") if isinstance(result.get("tables"), list) else None,
             validation=result.get("validation") if isinstance(result.get("validation"), dict) else None,
         )
         candidate = {
@@ -765,6 +784,8 @@ class DocumentProcessor:
             "inference_time_ms": result.get("elapsed_ms"),
             "structured_candidate": structured,
         }
+        if isinstance(result.get("tables"), list):
+            candidate["tables"] = result.get("tables")
         original_workflow_metadata = document.workflow_metadata
         document.workflow_metadata = workflow_metadata
         try:
@@ -973,6 +994,212 @@ class DocumentProcessor:
         if extraction_method == "paddleocr_vl_1_6_gguf_primary_reader":
             return self._safe_vl_promoted_line_items(line_items or [])
         return line_items or []
+
+    def _apply_final_business_safety_overrides(self, document: Document, raw_text: str) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        line_items = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
+
+        if self._looks_like_pos_settlement_document(document, raw_text, line_items):
+            if line_items:
+                document.line_items = []
+                issues.append(self._business_safety_issue(
+                    "unsupported_pos_daily_settlement_review_required",
+                    "POS 일일정산 화면은 제조업 품목 거래 문서가 아니므로 품목 행으로 확정하지 않았습니다.",
+                    "line_items",
+                ))
+            document.document_type = DocumentType.general_document
+            document.ai_document_type = DocumentType.general_document
+            document.category = "unsupported_pos_settlement"
+            document.tags = sorted(set([*(document.tags or []), "unsupported_pos_settlement"]))
+            document.review_required = True
+            document.low_confidence_fields = sorted(set([*(document.low_confidence_fields or []), "unsupported_pos_settlement"]))
+            return issues
+
+        self._normalize_party_fields(document)
+
+        filtered_items: list[dict] = []
+        removed_summary_rows = 0
+        for item in line_items:
+            if self._line_item_has_summary_footer_signal(item):
+                removed_summary_rows += 1
+                continue
+            filtered_items.append(item)
+        if removed_summary_rows:
+            issues.append(self._business_safety_issue(
+                "summary_total_not_line_item",
+                "합계/요약/정산 행은 실제 품목이 아니므로 품목 정보에서 제외했습니다.",
+                "line_items",
+            ))
+            document.review_required = True
+
+        if self._has_inspection_no_price_document_signal(document, raw_text, filtered_items):
+            internal_transfer = self._is_internal_transfer_document(document)
+            if (
+                not internal_transfer
+                and getattr(document.document_type, "value", str(document.document_type or "")) not in {"delivery_note", "inspection_report"}
+            ):
+                document.document_type = DocumentType.inspection_report
+                document.ai_document_type = DocumentType.inspection_report
+            removed_amount = any(
+                getattr(document, field, None) is not None
+                for field in ("extracted_amount", "subtotal", "tax")
+            ) or bool(document.currency)
+            document.extracted_amount = None
+            document.subtotal = None
+            document.tax = None
+            document.currency = None
+            sanitized_items = []
+            for item in filtered_items:
+                safe_item = dict(item)
+                item_removed_amount = False
+                for field in ("unit_price", "supply_amount", "tax_amount", "line_total"):
+                    if safe_item.get(field) not in (None, "", []):
+                        item_removed_amount = True
+                    safe_item.pop(field, None)
+                if item_removed_amount:
+                    flags = set(str(flag) for flag in safe_item.get("review_flags") or [])
+                    flags.add("no_price_document_amount_removed")
+                    safe_item["review_flags"] = sorted(flags)
+                    removed_amount = True
+                sanitized_items.append(safe_item)
+            filtered_items = sanitized_items
+            if removed_amount:
+                issues.append(self._business_safety_issue(
+                    "no_price_document_amount_blocker",
+                    "검사/납품/이동처럼 금액 없는 수량 확인 문서로 판단되어 금액을 확정값에서 제거했습니다.",
+                    "line_items",
+                ))
+                document.review_required = True
+            document.category = document.category or ("internal_transfer" if internal_transfer else "inspection_report")
+            tags = [*(document.tags or []), "no_price_document"]
+            if not internal_transfer:
+                tags.append("inspection_report")
+            document.tags = sorted(set(tags))
+
+        if filtered_items != line_items:
+            document.line_items = sanitize_for_postgres(filtered_items)
+        return issues
+
+    def _normalize_party_fields(self, document: Document) -> None:
+        document.vendor_name = self._normalize_party_name(document.vendor_name)
+        document.customer_name = self._normalize_party_name(document.customer_name)
+
+    def _normalize_party_name(self, value: Any) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if re.search(r"^(담당|담당자|회계|검사자|작성자|검수자)\s*[:：]", text):
+            return None
+        text = re.sub(r"^(상호|업체|거래처|공급자|공급업체|공급받는자|고객사|수신|받는곳)\s*[:：]?\s*", "", text).strip()
+        text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
+        text = re.sub(r"\s*(?:\(?주\)?|주식회사)$", "", text).strip()
+        text = re.sub(r"\s*/\s*(회계팀|구매팀|품질팀|생산관리|담당.*)$", "", text).strip()
+        return text or None
+
+    def _business_safety_issue(self, code: str, message: str, field: str) -> dict[str, Any]:
+        return {
+            "code": code,
+            "message_ko": message,
+            "field": field,
+            "severity": "warning",
+            "blocking": False,
+            "source": "final_business_safety_overrides",
+        }
+
+    def _line_item_has_summary_footer_signal(self, item: dict) -> bool:
+        text = self._line_item_business_text(item)
+        return bool(self._summary_footer_pattern().search(text))
+
+    def _line_item_business_text(self, item: dict) -> str:
+        fields = (
+            "item_name",
+            "name",
+            "description",
+            "specification",
+            "spec",
+            "unit",
+            "note",
+            "remarks",
+            "memo",
+            "document_item_code",
+            "item_code",
+        )
+        return " ".join(str(item.get(field) or "") for field in fields)
+
+    def _summary_footer_pattern(self) -> re.Pattern:
+        return re.compile(
+            r"("
+            r"크레[딧뒷]\s*합계|반품\s*합계|차감\s*합계|조정\s*합계|"
+            r"예상\s*합계|총\s*옵션\s*항목|옵션\s*선택\s*후|"
+            r"total\s+usd|krw\s+converted|converted\s+krw|"
+            r"순\s*판매\s*금액|총\s*판매\s*금액|할인\s*금액|취소\s*금액|"
+            r"과세\s*합계|면세\s*금액|vat\b|v\.a\.t|부가세|"
+            r"결제\s*합계|현금\s*합계|카드\s*합계|온라인\s*결제|"
+            r"주문\s*횟수|매장\s*판매|배달\s*판매|평균\s*단가|"
+            r"공급\s*가액\s*합계|세액\s*합계|청구\s*금액|합계\s*금액"
+            r")",
+            flags=re.IGNORECASE,
+        )
+
+    def _looks_like_pos_settlement_document(self, document: Document, raw_text: str, line_items: list[dict]) -> bool:
+        text = " ".join([
+            str(raw_text or ""),
+            str(document.title or ""),
+            str(document.document_number or ""),
+            str(document.vendor_name or ""),
+            str(document.customer_name or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+        ])
+        manufacturing_document_signal = re.search(
+            r"(거래\s*명세서|발주서|견적서|세금\s*계산서|인보이스|invoice|납품서|입고\s*검사|자재\s*이동|반품|크레딧)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if re.search(r"(pos|일\s*정산|매출\s*정산)", text, flags=re.IGNORECASE):
+            if manufacturing_document_signal and not re.search(r"(pos\s*메인|pos\s*일\s*정산|일\s*정산|매출\s*정산)", text, flags=re.IGNORECASE):
+                return False
+            return True
+        if manufacturing_document_signal:
+            return False
+        if re.search(r"(영수증|승인번호|카드사)", text, flags=re.IGNORECASE) and re.search(
+            r"(결제|카드|현금|승인|부가세|vat)", text, flags=re.IGNORECASE
+        ):
+            return True
+        if not line_items:
+            return False
+        pos_metric_count = sum(1 for item in line_items if self._pos_metric_pattern().search(self._line_item_business_text(item)))
+        return pos_metric_count >= 3 and pos_metric_count >= max(2, int(len(line_items) * 0.6))
+
+    def _pos_metric_pattern(self) -> re.Pattern:
+        return re.compile(
+            r"(순\s*판매\s*금액|총\s*판매\s*금액|과세\s*합계|면세\s*금액|"
+            r"결제\s*합계|현금\s*합계|카드\s*합계|온라인\s*결제|"
+            r"주문\s*횟수|매장\s*판매|배달\s*판매|평균\s*단가|승인번호|카드사)",
+            flags=re.IGNORECASE,
+        )
+
+    def _has_inspection_no_price_document_signal(self, document: Document, raw_text: str, line_items: list[dict]) -> bool:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        if doc_type in {"delivery_note", "inspection_report"} or self._is_internal_transfer_document(document):
+            return True
+        text = " ".join([
+            str(raw_text or ""),
+            str(document.title or ""),
+            str(document.document_number or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+            " ".join(self._line_item_business_text(item) for item in line_items),
+        ])
+        inspection_signal = re.search(
+            r"(입고\s*검사|검사\s*기록|검사\s*성적|검사번호|검사일|"
+            r"입고\s*수량|합격\s*수량|불량\s*수량|판정|조건부\s*합격|"
+            r"금액\s*항목\s*없음|금액\s*정보\s*없음|품질\s*확인)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not inspection_signal:
+            return False
+        priced_signal = re.search(r"(세금계산서|청구금액|합계금액|공급가액\s*합계|세액\s*합계)", text, flags=re.IGNORECASE)
+        return not bool(priced_signal)
 
     def _nonnegative_document_amount(self, value: Any) -> Any:
         if value is None:

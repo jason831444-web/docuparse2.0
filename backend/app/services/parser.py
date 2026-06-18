@@ -73,7 +73,7 @@ CATEGORY_KEYWORDS = {
 }
 
 LINE_ITEM_LABELS = {
-    "item_name": ["품목명", "품명", "반품품목", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
+    "item_name": ["품목명", "품명", "품목", "반품품목", "제품명", "상품명", "자재명", "item name", "item description", "description", "product name", "item"],
     "item_code": ["품목코드", "문서품목코드", "품번", "제품코드", "상품코드", "자재코드", "내부품목코드", "거래처코드", "거래처품목코드", "vendor sku", "customer item code", "sku", "part no", "part number", "item code"],
     "specification": ["규격", "사양", "모델", "모델명", "size", "spec", "specification", "dimension"],
     "quantity": ["수량", "주문수량", "발주수량", "요청수량", "요청수림", "납품수량", "delivery qty", "delivery quantity", "delivered qty", "qty", "quantity"],
@@ -128,6 +128,8 @@ class DocumentParser:
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
+        if doc_type != DocumentType.inspection_report and self._has_inspection_no_price_signal(lines):
+            doc_type = DocumentType.inspection_report
         line_items = self._extract_line_items(lines, doc_type)
         document_scope_text = self._document_scope_text(lines)
         no_amount_quantity_document = self._is_no_amount_quantity_document(lines, doc_type)
@@ -392,8 +394,15 @@ class DocumentParser:
         return key in {
             "공급가액합계", "공급액합계", "공급금액합계", "금월공급가액", "차감공급가액", "차감공급액",
             "세액합계", "금월세액", "차감세액", "총액", "총합계", "합계금액", "금월합계", "차감합계", "조정합계", "반품합계", "크레딧합계",
-            "grandtotal", "totaldue", "totalamount", "amountdue",
-        }
+            "크레뒷합계", "예상합계", "과세합계", "순판매금액", "결제합계", "현금합계", "카드합계",
+            "grandtotal", "totaldue", "totalamount", "amountdue", "totalusd", "krwconverted",
+        } or bool(re.search(
+            r"(크레[딧뒷]\s*합계|차감\s*합계|반품\s*합계|조정\s*합계|예상\s*합계|총\s*옵션\s*항목|"
+            r"순\s*판매\s*금액|과세\s*합계|결제\s*합계|현금\s*합계|카드\s*합계|주문\s*횟수|평균\s*단가|"
+            r"TOTAL\s+USD|KRW\s+Converted|총\s*합계|합계\s*금액)",
+            str(line or ""),
+            flags=re.IGNORECASE,
+        ))
 
     def _normalized_amount_label_key(self, line: str) -> str:
         key = re.sub(r"[\s:：]+", "", str(line or "").lower())
@@ -748,10 +757,35 @@ class DocumentParser:
             return True
         if doc_type == DocumentType.inspection_report:
             return True
+        if self._has_inspection_no_price_signal(lines):
+            return True
         normalized = re.sub(r"\s+", "", text.lower())
         internal_transfer_signal = bool(re.search(r"(사업장간|자재이동|내부.*이동|요청수량|요청수림|내부품목코드|\bTRF[-_ ]?\d{4})", normalized, flags=re.IGNORECASE))
         amount_signal = bool(re.search(r"(단가|공급가액|공급액|세액|부가세|합계금액|총액|unit\s*price|subtotal|tax|total)", text, flags=re.IGNORECASE))
         return internal_transfer_signal and not amount_signal
+
+    def _has_inspection_no_price_signal(self, lines: list[str]) -> bool:
+        text = "\n".join(lines)
+        compact = re.sub(r"\s+", "", text.casefold())
+        if re.search(r"(입고검사|검사기록|검사성적|검사번호|검사일|iqc[-_ ]?\d{4}|qc[-_ ]?\d{4})", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(외관[\/·]?\s*치수|치수\s*확인|검사\s*의견|판정|합격수량|불량수량)", text, flags=re.IGNORECASE):
+            return True
+        inspection_terms = [
+            "검사",
+            "합격",
+            "불량",
+            "외관",
+            "치수",
+            "판정",
+            "lotno",
+            "lot",
+            "품질",
+        ]
+        hits = sum(1 for term in inspection_terms if term in compact)
+        has_itemish_terms = bool(re.search(r"(품목|규격|입고수량|합격|불량|판정|S45C|SUS|PIN|볼트|와셔|베어링)", text, flags=re.IGNORECASE))
+        priced_document_signal = bool(re.search(r"(세금계산서|영수증|거래명세서|견적서|발주서|단가|공급가액|세액|합계금액|청구금액)", text, flags=re.IGNORECASE))
+        return hits >= 3 and has_itemish_terms and not priced_document_signal
 
     def _is_option_selection_quotation(self, lines: list[str], doc_type: DocumentType) -> bool:
         if doc_type != DocumentType.quotation:
@@ -1741,8 +1775,10 @@ class DocumentParser:
             return True
         return bool(re.search(
             r"(공급가액\s*합계|차감\s*공급가액|차감\s*세액|차감\s*합계|합계금액|총액|VAT|부가세|"
-            r"선택시\s*합계|옵션라인|모두\s*합산|담당|검토|승인|Docu?Parse|synthetic data|"
-            r"페이지\s*하단|전월이월|총\s*미수금)",
+            r"선택시\s*합계|예상\s*합계|총\s*옵션\s*항목|옵션라인|모두\s*합산|담당|검토|승인|Docu?Parse|synthetic data|"
+            r"페이지\s*하단|전월이월|총\s*미수금|크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|"
+            r"순\s*판매\s*금액|과세\s*합계|결제\s*합계|현금\s*합계|카드\s*합계|주문\s*횟수|평균\s*단가|"
+            r"TOTAL\s+USD|KRW\s+Converted)",
             text,
             flags=re.IGNORECASE,
         ))
@@ -2066,6 +2102,7 @@ class DocumentParser:
             return items
         text = "\n".join(lines)
         safe_items = [dict(item) for item in items]
+        safe_items = [item for item in safe_items if not self._looks_like_footer_note_item(item)]
         if doc_type == DocumentType.quotation and re.search(r"(수량\s*공란|수량.*빈\s*값|quantity\s*(?:blank|missing))", text, flags=re.IGNORECASE):
             target_index = 0
             ordinal = re.search(r"(첫\s*번째|1\s*번째|first)", text, flags=re.IGNORECASE)
@@ -2451,6 +2488,9 @@ class DocumentParser:
         )
         if vertical_items:
             return vertical_items
+        inline_items = self._extract_inline_inspection_quantity_rows(lines)
+        if inline_items:
+            return inline_items
         header_index = next((
             index for index, line in enumerate(lines)
             if re.search(r"품목명", line)
@@ -2490,6 +2530,87 @@ class DocumentParser:
             if item.get("item_name"):
                 items.append(item)
         return items
+
+    def _extract_inline_inspection_quantity_rows(self, lines: list[str]) -> list[dict]:
+        text = "\n".join(lines)
+        if not re.search(r"(입고수량|합격수량|불량수량|판정)", text):
+            return []
+        if not re.search(r"(검사|품질|합격|불량|판정)", text):
+            return []
+        items: list[dict] = []
+        for line in lines:
+            value = self._clean_value(line) or ""
+            if not value:
+                continue
+            item = self._parse_inline_inspection_quantity_row(value)
+            if item:
+                items.append(self._normalize_line_item(item))
+                continue
+            if self._looks_like_sparse_inspection_non_item(value):
+                continue
+        return self._dedupe_line_items(items)[:30]
+
+    def _parse_inline_inspection_quantity_row(self, value: str) -> dict | None:
+        text = str(value or "").strip()
+        if not self._looks_like_sparse_inspection_item_name(text):
+            return None
+        match = re.match(
+            r"^(?P<prefix>.+?)\s+"
+            r"(?P<received>\d{1,6}(?:,\d{3})?)\s+"
+            r"(?P<accepted>\d{1,6}(?:,\d{3})?)\s+"
+            r"(?P<rejected>\d{1,6}(?:,\d{3})?)"
+            r"(?:\s+(?P<tail>.*))?$",
+            text,
+        )
+        if not match:
+            return None
+        prefix = self._clean_value(match.group("prefix")) or ""
+        tail = self._clean_value(match.group("tail") or "") or ""
+        if not prefix:
+            return None
+        item_name, specification, lot_no = self._split_inspection_item_identity(prefix)
+        if not item_name:
+            return None
+        item: dict = {
+            "item_name": item_name,
+            "received_quantity": self._normalize_number(match.group("received")),
+            "accepted_quantity": self._normalize_number(match.group("accepted")),
+            "rejected_quantity": self._normalize_number(match.group("rejected")),
+            "quantity": self._normalize_number(match.group("received")),
+            "unit": "EA",
+        }
+        if specification:
+            item["specification"] = specification
+        if lot_no:
+            item["lot_no"] = lot_no
+        if tail:
+            result_match = re.search(r"(조건부\s*합격|조건부합격|불합격|재검|합격)", tail)
+            if result_match:
+                item["inspection_result"] = re.sub(r"조건부\s*합격", "조건부 합격", result_match.group(1))
+            remark = re.sub(r"(조건부\s*합격|조건부합격|불합격|재검|합격)", "", tail).strip()
+            if remark:
+                item["remarks"] = remark
+        return item
+
+    def _split_inspection_item_identity(self, prefix: str) -> tuple[str | None, str | None, str | None]:
+        tokens = prefix.split()
+        if not tokens:
+            return None, None, None
+        lot_no = next((token for token in tokens if re.fullmatch(r"LOT[-_A-Za-z0-9]+", token, flags=re.IGNORECASE)), None)
+        if lot_no:
+            tokens = [token for token in tokens if token != lot_no]
+        spec_indexes = [
+            index for index, token in enumerate(tokens)
+            if re.fullmatch(r"(?:[A-Z]{1,5}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T)", token, flags=re.IGNORECASE)
+        ]
+        spec_index = spec_indexes[-1] if spec_indexes else None
+        if spec_index is None and len(tokens) >= 2 and re.fullmatch(r"[A-Z]{1,6}-\d+", tokens[-1], flags=re.IGNORECASE):
+            spec_index = len(tokens) - 1
+        if spec_index is None:
+            return self._clean_value(" ".join(tokens)), None, lot_no
+        item_name = self._clean_value(" ".join(tokens[:spec_index]))
+        specification = self._clean_value(" ".join(tokens[spec_index:]))
+        return item_name, specification, lot_no
 
     def _inspection_field_for_label(self, label: str) -> str | None:
         key = re.sub(r"[\s_/-]+", "", str(label or "").strip().lower())
@@ -2920,11 +3041,15 @@ class DocumentParser:
             "remaining_quantity",
             "accepted_quantity",
             "rejected_quantity",
-            "lot_no",
-            "inspection_result",
+            "defective_quantity",
         ]:
             if item.get(field) not in (None, ""):
-                normalized[field] = self._normalize_number(item[field]) if "quantity" in field else self._clean_value(item[field])
+                normalized[field] = self._normalize_number(item[field])
+        for field in ["lot_no", "lot_code", "inspection_result", "inspection_item", "remarks", "note"]:
+            if item.get(field) not in (None, ""):
+                normalized[field] = self._clean_value(item[field])
+        if item.get("review_flags"):
+            normalized["review_flags"] = [self._clean_value(flag) for flag in item.get("review_flags") or [] if flag]
         normalized = self._repair_line_item_arithmetic(normalized)
         normalized = self._suppress_implausible_line_item_numbers(normalized)
         if normalized.get("quantity") is None and normalized.get("unit") and not normalized.get("_quantity_suppressed"):
@@ -3637,12 +3762,15 @@ class DocumentParser:
         return code
 
     def _looks_like_footer_note_item(self, item: dict) -> bool:
-        text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
+        text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification", "unit", "note"])
         return bool(re.search(
             r"(문서\s*총액|주의|검토\s*필요|본문서는|ERP\s*입력용|담당|검토|승인|총액\s*:|"
-            r"Docu?Parse\s+realistic|synthetic\s+data|옵션.*선택|모두\s*합산하면\s*안|"
+            r"Docu?Parse\s+realistic|synthetic\s+data|옵션.*선택|모두\s*합산하면\s*안|예상\s*합계|총\s*옵션\s*항목|"
             r"전월이월|품목\s*합계에\s*포함하지|통관/회계|거래처\s*문서가\s*아니라|"
-            r"반품\s*문서|품질\s*담당|페이지\s*하단|금액\s*정보\s*없는\s*수량\s*확인용)",
+            r"반품\s*문서|품질\s*담당|페이지\s*하단|금액\s*정보\s*없는\s*수량\s*확인용|"
+            r"크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|"
+            r"순\s*판매\s*금액|과세\s*합계|결제\s*합계|현금\s*합계|카드\s*합계|주문\s*횟수|평균\s*단가|"
+            r"TOTAL\s+USD|KRW\s+Converted)",
             text,
             flags=re.IGNORECASE,
         ))

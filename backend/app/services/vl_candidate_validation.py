@@ -47,6 +47,12 @@ class VLCandidateValidationGate:
         "vl_candidate_fax_row_boundary_uncertain",
         "vl_candidate_foreign_script_item_noise",
         "vl_candidate_preprocessed_retry_requires_review",
+        "vl_candidate_inspection_table_review_required",
+        "vl_candidate_inspection_report_review_required",
+        "vl_candidate_ocr_uncertainty_review_required",
+        "vl_candidate_ocr_o_zero_uncertain",
+        "vl_candidate_company_marker_uncertain",
+        "vl_candidate_ocr_similar_word_requires_review",
     }
 
     non_promotable_issue_codes = {

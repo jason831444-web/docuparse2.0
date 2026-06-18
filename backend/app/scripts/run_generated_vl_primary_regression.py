@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -153,10 +154,17 @@ def _expected_from_metadata_row(record: dict[str, Any]) -> dict[str, Any]:
     expected: dict[str, Any] = {
         "document_type": document_type,
         "document_number": record.get("document_no"),
+        "vendor": record.get("vendor") or record.get("supplier") or record.get("store"),
+        "customer": record.get("customer") or record.get("buyer"),
+        "issue_date": record.get("date") or record.get("issue_date"),
+        "total_amount": record.get("total_amount"),
         "source_filename": record.get("source_filename"),
         "synthetic": bool(record.get("synthetic", True)),
         "smoke_only": True,
     }
+    line_item_count = _int_or_none(record.get("line_items"))
+    if line_item_count is not None:
+        expected["expected_line_item_min_count"] = line_item_count
     if source_document_type in {"delivery_note", "incoming_inspection", "internal_transfer"}:
         expected["no_price_document"] = True
     if record.get("blur_severity"):
@@ -409,6 +417,8 @@ def _actual_document_amount(actual: dict[str, Any], direct_keys: tuple[str, ...]
 def _header_values_match(field: str, expected: Any, actual: Any) -> bool:
     if _values_match(expected, actual):
         return True
+    if field.endswith("date") or field in {"issue_date", "due_date", "delivery_date", "valid_until", "inspection_date"}:
+        return _normalize_date_text(expected) == _normalize_date_text(actual)
     if field == "related_document_number":
         return _normalize_text(expected) in _normalize_text(actual)
     return False
@@ -677,6 +687,17 @@ def _values_match(expected: Any, actual: Any) -> bool:
 
 def _normalize_text(value: Any) -> str:
     return "".join(str(value or "").casefold().split())
+
+
+def _normalize_date_text(value: Any) -> str:
+    text = str(value or "")
+    numbers = re.findall(r"\d+", text)
+    if len(numbers) >= 3:
+        year, month, day = numbers[:3]
+        if len(year) == 2:
+            year = f"20{year}"
+        return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+    return _normalize_text(value)
 
 
 def _is_numeric_field(field: str) -> bool:

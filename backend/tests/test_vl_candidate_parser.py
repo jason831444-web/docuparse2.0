@@ -400,6 +400,70 @@ def test_vl_candidate_parser_parses_inspection_rows_with_decision_column_without
     assert "vl_candidate_return_credit_type_uncertain" not in candidate["issue_codes"]
 
 
+def test_vl_candidate_parser_uses_worker_structured_inspection_tables_as_review_candidates():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "입고 검사 기록서",
+                "문서번호 IQC-REMOTE-007",
+                "No 품목 규격 입고수량 합격 불량 판정 비고",
+                "품목명 검사항목 판정 비고가 일부 섞여 보일 수 있음",
+            ]
+        ),
+        filename="incoming-inspection-worker-table.jpg",
+        tables=[
+            {
+                "table_type": "incoming_inspection",
+                "source": "vl_worker_table_extractor",
+                "schema_version": "docparse_vl_table_schema_v1",
+                "rows": [
+                    {
+                        "no": 1,
+                        "item_name": "베어링 하우징",
+                        "specification": "BH-220",
+                        "received_quantity": 80,
+                        "accepted_quantity": 78,
+                        "defective_quantity": 2,
+                        "result": "조건부합격",
+                        "note": "표면 흠집",
+                    },
+                    {
+                        "no": 2,
+                        "item_name": "S45C PIN",
+                        "specification": "8X60",
+                        "received_quantity": 300,
+                        "accepted_quantity": 300,
+                        "defective_quantity": 0,
+                        "result": "합격",
+                    },
+                ],
+                "warnings": ["vl_table_review_required"],
+                "review_required": True,
+            }
+        ],
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_type"] == "inspection_report"
+    assert candidate["line_item_count"] == 2
+    first, second = candidate["line_items"]
+    assert first["item_name"] == "베어링 하우징"
+    assert first["specification"] == "BH-220"
+    assert first["received_quantity"] == 80
+    assert first["accepted_quantity"] == 78
+    assert first["defective_quantity"] == 2
+    assert first["rejected_quantity"] == 2
+    assert first["inspection_result"] == "조건부합격"
+    assert first["remarks"] == "표면 흠집"
+    assert "unit_price" not in first
+    assert "line_total" not in first
+    assert "inspection_table_review_required" in first["validation_warnings"]
+    assert second["item_name"] == "S45C PIN"
+    assert candidate["tables"][0]["table_type"] == "incoming_inspection"
+    assert "vl_candidate_inspection_table_review_required" in candidate["issue_codes"]
+
+
 def test_vl_candidate_parser_strips_standalone_row_number_prefix_but_keeps_model_numbers():
     candidate = VLCandidateParser().parse_text(
         "\n".join(

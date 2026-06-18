@@ -26,6 +26,37 @@ _last_request_at: str | None = None
 _last_success_at: str | None = None
 
 
+VLM_STRUCTURED_OUTPUT_SCHEMA: dict[str, Any] = {
+    "version": "docparse_vl_table_schema_v1",
+    "response_fields": ["raw_text", "tables"],
+    "table_types": {
+        "incoming_inspection": {
+            "columns": [
+                "no",
+                "item_name",
+                "lot_code",
+                "document_item_code",
+                "specification",
+                "received_quantity",
+                "accepted_quantity",
+                "defective_quantity",
+                "inspection_item",
+                "result",
+                "note",
+            ],
+            "amount_fields": "must_be_null",
+            "visibility_policy": "do_not_infer_hidden_values",
+            "review_policy": "review_required_until_human_confirms",
+        }
+    },
+    "uncertainty_policy": [
+        "Keep unseen values null.",
+        "Do not create amount, tax, or total fields for inspection reports.",
+        "Flag O/0, 주/(주), 유동/유통, 검사/경사 and similar OCR uncertainty for review.",
+    ],
+}
+
+
 class VLAnalyzeRequest(BaseModel):
     file_path: str
     original_filename: str | None = None
@@ -173,6 +204,8 @@ def _analyze_path(
                 "validation": validation,
                 "render": {"image_path": str(image_path)},
                 "text_preview": text[:5000],
+                "structured_schema": VLM_STRUCTURED_OUTPUT_SCHEMA,
+                "tables": _extract_structured_tables(text, output, original_filename=original_filename or path.name),
                 "provider_available_candidate": bool(validation.get("ok")),
                 "provider_available_decision_reason": "vl_worker_output_readable" if validation.get("ok") else "vl_worker_output_invalid",
             }
@@ -269,3 +302,249 @@ def _render_first_page(path: Path) -> Path:
         pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
         pixmap.save(output_path)
     return output_path
+
+
+def _extract_structured_tables(text: str, output: Any, *, original_filename: str = "") -> list[dict[str, Any]]:
+    """Build review-only JSON tables from VL output.
+
+    PaddleOCRVL's current Python surface returns layout/text artifacts rather
+    than accepting a custom JSON schema prompt.  This worker still exposes the
+    schema contract at the boundary and converts the VLM-visible table text into
+    structured rows before it reaches the backend parser.
+    """
+
+    candidate_text = "\n".join(_candidate_table_texts(output, text))
+    if not _looks_like_incoming_inspection(candidate_text, original_filename):
+        return []
+    rows, warnings = _extract_incoming_inspection_rows(candidate_text)
+    if not rows:
+        return []
+    return [
+        {
+            "table_type": "incoming_inspection",
+            "source": "vl_worker_table_extractor",
+            "schema_version": VLM_STRUCTURED_OUTPUT_SCHEMA["version"],
+            "columns": VLM_STRUCTURED_OUTPUT_SCHEMA["table_types"]["incoming_inspection"]["columns"],
+            "rows": rows,
+            "warnings": sorted(set(warnings + ["vl_table_review_required", "inspection_report_no_amount_fields"])),
+            "review_required": True,
+            "amount_fields_policy": "null_for_inspection_report",
+        }
+    ]
+
+
+def _candidate_table_texts(output: Any, text: str) -> list[str]:
+    fragments: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key in ("block_content", "rec_text", "text", "content", "markdown", "html"):
+                content = value.get(key)
+                if isinstance(content, str) and _table_like_text(content):
+                    fragments.append(content)
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+        elif isinstance(value, str) and _table_like_text(value):
+            fragments.append(value)
+
+    walk(output)
+    if text:
+        fragments.append(text)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for fragment in fragments:
+        normalized = re.sub(r"\s+", " ", fragment).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(fragment)
+    return deduped or [text]
+
+
+def _table_like_text(value: str) -> bool:
+    return bool(
+        re.search(r"(입고\s*검사|검사\s*기록|검사\s*성적|inspection)", value, flags=re.IGNORECASE)
+        or re.search(r"(입고수량|합격수량|불량수량|판정|Lot\s*No)", value, flags=re.IGNORECASE)
+    )
+
+
+def _looks_like_incoming_inspection(text: str, filename: str = "") -> bool:
+    haystack = f"{filename}\n{text}"
+    return bool(
+        re.search(r"(incoming[_ -]?inspection|입고\s*검사|검사\s*기록|검사\s*성적|검사번호)", haystack, flags=re.IGNORECASE)
+        and re.search(r"(입고수량|합격수량|불량수량|판정|합격|불량)", haystack, flags=re.IGNORECASE)
+    )
+
+
+def _extract_incoming_inspection_rows(text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    warnings: list[str] = []
+    rows: list[dict[str, Any]] = []
+    for line in _normalized_table_lines(text):
+        if _inspection_header_or_note(line):
+            continue
+        row = _parse_incoming_inspection_line(line)
+        if not row:
+            continue
+        row_warnings = _inspection_uncertainty_warnings(line, row)
+        if row_warnings:
+            row["review_flags"] = sorted(set([*(row.get("review_flags") or []), *row_warnings]))
+            warnings.extend(row_warnings)
+        rows.append(row)
+    return _dedupe_inspection_rows(rows), sorted(set(warnings))
+
+
+def _normalized_table_lines(text: str) -> list[str]:
+    normalized = str(text or "")
+    normalized = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", normalized)
+    normalized = re.sub(r"<[^>]+>", " ", normalized)
+    lines: list[str] = []
+    for raw in normalized.splitlines():
+        line = raw.strip().strip("|")
+        if not line:
+            continue
+        line = re.sub(r"\s*\|\s*", " ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _inspection_header_or_note(line: str) -> bool:
+    compact = re.sub(r"\s+", "", line)
+    if re.search(r"^(No|번호)?품목(?:명)?규격입고수량합격(?:수량)?불량(?:수량)?판정", compact, flags=re.IGNORECASE):
+        return True
+    return bool(
+        re.search(r"(검사의견|금액항목없음|금액정보없음|문서번호|검사일|협력사|검사자|품질팀)", compact)
+        and not re.match(r"^\d{1,3}\s+", line)
+    )
+
+
+def _parse_incoming_inspection_line(line: str) -> dict[str, Any] | None:
+    match = re.match(
+        r"^(?P<no>\d{1,3})\s+"
+        r"(?P<prefix>.+?)\s+"
+        r"(?P<received>\d{1,6}(?:,\d{3})?)\s+"
+        r"(?P<accepted>\d{1,6}(?:,\d{3})?)\s+"
+        r"(?P<defective>\d{1,6}(?:,\d{3})?)"
+        r"(?:\s+(?P<tail>.*))?$",
+        line,
+    )
+    if not match:
+        return None
+    item_name, specification, lot_code, document_item_code = _split_inspection_identity(match.group("prefix"))
+    if not item_name:
+        return None
+    tail = (match.group("tail") or "").strip()
+    result, note = _split_inspection_tail(tail)
+    row: dict[str, Any] = {
+        "no": _int_text(match.group("no")),
+        "item_name": item_name,
+        "received_quantity": _int_text(match.group("received")),
+        "accepted_quantity": _int_text(match.group("accepted")),
+        "defective_quantity": _int_text(match.group("defective")),
+        "review_flags": ["vl_table_structured_inspection_review_required"],
+    }
+    if specification:
+        row["specification"] = specification
+    if lot_code:
+        row["lot_code"] = lot_code
+    if document_item_code:
+        row["document_item_code"] = document_item_code
+    if result:
+        row["result"] = result
+    if note:
+        row["note"] = note
+    return row
+
+
+def _split_inspection_identity(prefix: str) -> tuple[str | None, str | None, str | None, str | None]:
+    tokens = [token for token in str(prefix or "").split() if token]
+    if not tokens:
+        return None, None, None, None
+    lot_code: str | None = None
+    document_item_code: str | None = None
+    filtered: list[str] = []
+    for token in tokens:
+        if re.fullmatch(r"(?:LOT|L)[-_]?[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*", token, flags=re.IGNORECASE):
+            lot_code = token
+            continue
+        if re.fullmatch(r"(?:IQC|QC|INS)[-_]?[A-Za-z0-9]+", token, flags=re.IGNORECASE):
+            document_item_code = token
+            continue
+        filtered.append(token)
+    spec_index: int | None = None
+    for index, token in enumerate(filtered):
+        if re.fullmatch(
+            r"(?:[A-Z]{1,6}[-_])?\d+[xX]\d+(?:[xX]\d+)?|M\d+(?:[xX]\d+)?|BH-\d+|\d+(?:mm|T)|[A-Z]{1,5}-\d+",
+            token,
+            flags=re.IGNORECASE,
+        ):
+            spec_index = index
+    if spec_index is None:
+        return _clean_cell(" ".join(filtered)), None, lot_code, document_item_code
+    return (
+        _clean_cell(" ".join(filtered[:spec_index])),
+        _clean_cell(" ".join(filtered[spec_index:])),
+        lot_code,
+        document_item_code,
+    )
+
+
+def _split_inspection_tail(tail: str) -> tuple[str | None, str | None]:
+    if not tail:
+        return None, None
+    result_match = re.search(r"(조건부\s*합격|조건부합격|불합격|재검|보류|합격)", tail)
+    result = None
+    if result_match:
+        result = re.sub(r"조건부\s*합격", "조건부 합격", result_match.group(1)).strip()
+    note = re.sub(r"(조건부\s*합격|조건부합격|불합격|재검|보류|합격)", "", tail).strip(" -:：")
+    return result, note or None
+
+
+def _inspection_uncertainty_warnings(line: str, row: dict[str, Any]) -> list[str]:
+    joined = " ".join(str(value) for value in row.values() if value not in (None, "", []))
+    source = f"{line} {joined}"
+    warnings: list[str] = []
+    if re.search(r"(?<=\d)[Oo](?=\d)|(?<![A-Za-z])[Oo](?=\d)", source):
+        warnings.append("ocr_o_zero_uncertain")
+    if re.search(r"\(?주\)?|㈜", source):
+        warnings.append("company_marker_uncertain")
+    if re.search(r"(유동|유통|검사|경사)", source):
+        warnings.append("ocr_similar_word_requires_review")
+    return warnings
+
+
+def _int_text(value: str | None) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value).replace(",", ""))
+    except Exception:
+        return None
+
+
+def _clean_cell(value: str | None) -> str | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" -:：")
+    return text or None
+
+
+def _dedupe_inspection_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in rows:
+        key = (
+            row.get("no"),
+            row.get("item_name"),
+            row.get("specification"),
+            row.get("received_quantity"),
+            row.get("accepted_quantity"),
+            row.get("defective_quantity"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped

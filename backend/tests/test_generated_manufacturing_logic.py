@@ -1413,3 +1413,94 @@ def test_vl_inline_commercial_invoice_cropped_amount_column_keeps_unit_price_unc
     assert "supply_amount" not in first
     assert "line_total" not in first
     assert "missing_line_amount" in first["validation_warnings"]
+
+
+def test_photo_inspection_note_with_amount_like_noise_stays_no_price_document():
+    text = "\n".join([
+        "대성정공 품질팀",
+        "입고 검사 기록서",
+        "검사일 2026.06.15",
+        "검사번호 IQC-2026-0007",
+        "품목 규격 입고수량 합격 불량 판정 비고",
+        "베어링 하우징 BH-220 80 78 2 조건부합격 표면 흠집",
+        "S45C PIN 8X60 300 300 0 합격",
+        "SUS 볼트 M5X20 500 497 3 재검 나사산 확인",
+        "검사 의견: 불량 수량은 별도 격리 후 협력사 통보. 금액 항목 없음.",
+    ])
+
+    parsed = DocumentParser().parse(text, "incoming-inspection-photo.txt")
+
+    assert parsed.document_type == DocumentType.inspection_report
+    assert parsed.extracted_amount is None
+    assert parsed.currency is None
+    assert parsed.line_items
+    assert all(item.get("line_total") is None for item in parsed.line_items)
+    assert all(item.get("supply_amount") is None for item in parsed.line_items)
+    assert all(item.get("tax_amount") is None for item in parsed.line_items)
+
+
+def test_return_credit_summary_label_rows_are_not_line_items():
+    text = "\n".join([
+        "반품 크레딧 메모",
+        "문서번호 RTN-2026-0090",
+        "품목 | 규격 | 수량 | 단가 | 공급가액 | 세액 | 합계",
+        "SUS 볼트 | M5X20 | 10 | 500 | 5000 | 500 | 5500",
+        "크레뒷합계 | 5,500",
+    ])
+
+    parsed = DocumentParser().parse(text, "return-credit-photo.txt")
+
+    names = " ".join(item.get("item_name", "") for item in parsed.line_items)
+    assert "크레" not in names
+    assert len(parsed.line_items) == 1
+
+
+def test_option_quote_summary_label_rows_are_not_line_items():
+    text = "\n".join([
+        "견적서",
+        "문서번호 QT-2026-0018",
+        "품목 | 규격 | 수량 | 단가 | 공급가액",
+        "SUS 브라켓 | M5 | 10 | 1000 | 10000",
+        "예상합계 총옵션항목 | 10,000",
+        "옵션 선택 후 확정",
+    ])
+
+    parsed = DocumentParser().parse(text, "option-quote-summary-photo.txt")
+
+    assert len(parsed.line_items) == 1
+    assert parsed.line_items[0]["item_name"] == "SUS 브라켓"
+    assert parsed.extracted_amount is None
+
+
+def test_pos_summary_rows_are_not_promoted_to_manufacturing_line_items():
+    text = "\n".join([
+        "일정산",
+        "순판매금액 955,900",
+        "과세합계 869,010",
+        "V.A.T 86,890",
+        "결제합계 955,900",
+        "주문횟수 220",
+    ])
+
+    parsed = DocumentParser().parse(text, "pos-daily-settlement-photo.txt")
+
+    names = " ".join(item.get("item_name", "") for item in parsed.line_items)
+    assert "순판매" not in names
+    assert "과세" not in names
+    assert "결제" not in names
+
+
+def test_commercial_invoice_converted_total_row_is_not_line_item():
+    text = "\n".join([
+        "COMMERCIAL INVOICE",
+        "Invoice No INV-2026-0024",
+        "Description | Qty | Unit | Unit Price | Amount",
+        "Linear Guide Rail | 10 | EA | 45.00 | 450.00",
+        "TOTAL USD | 450.00 | KRW Converted | 616,500",
+    ])
+
+    parsed = DocumentParser().parse(text, "commercial-invoice-converted-total-photo.txt")
+
+    names = " ".join(item.get("item_name", "") for item in parsed.line_items)
+    assert "TOTAL" not in names.upper()
+    assert "KRW" not in names.upper()

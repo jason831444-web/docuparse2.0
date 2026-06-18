@@ -32,6 +32,28 @@ class _FakePipeline:
         return [{"text": "견적서\n견적번호 QT-REMOTE-001\n총액 473,000"}]
 
 
+class _FakeInspectionPipeline:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def predict(self, image_path: str, *, max_new_tokens: int) -> list[dict]:
+        self.calls.append((image_path, max_new_tokens))
+        return [
+            {
+                "text": "\n".join(
+                    [
+                        "입고 검사 기록서",
+                        "문서번호 IQC-REMOTE-007",
+                        "No 품목 규격 입고수량 합격 불량 판정 비고",
+                        "1 베어링 하우징 BH-220 80 78 2 조건부합격 표면 흠집",
+                        "2 S45C PIN 8X60 300 300 0 합격",
+                        "금액 항목 없음",
+                    ]
+                )
+            }
+        ]
+
+
 def test_vl_candidate_client_uploads_file_to_remote_worker(monkeypatch, tmp_path: Path):
     sample = tmp_path / "sample.pdf"
     sample.write_bytes(b"%PDF-remote-worker-test")
@@ -189,3 +211,49 @@ def test_vl_worker_analyze_upload_saves_file_and_runs_pipeline(monkeypatch, tmp_
     saved_path = Path(payload["remote_upload"]["saved_path"])
     assert saved_path.exists()
     assert saved_path.read_bytes() == b"fake-jpeg-fixture"
+
+
+def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypatch, tmp_path: Path):
+    fake_pipeline = _FakeInspectionPipeline()
+    monkeypatch.setattr(
+        vl_worker_server,
+        "get_settings",
+        lambda: SimpleNamespace(
+            upload_dir=tmp_path,
+            paddleocr_vl_gguf_n_predict=128,
+            paddleocr_vl_gguf_model_dir=tmp_path,
+            paddleocr_vl_gguf_model_file="model.gguf",
+            paddleocr_vl_gguf_mmproj_file="mmproj.gguf",
+            paddleocr_vl_gguf_server_url="http://localhost:8080/v1",
+            paddleocr_vl_gguf_concurrency=1,
+            paddleocr_vl_gguf_max_pages=1,
+        ),
+    )
+    monkeypatch.setattr(vl_worker_server, "_get_pipeline", lambda: fake_pipeline)
+    monkeypatch.setattr(vl_worker_server, "extract_text", lambda output: output[0]["text"])
+    monkeypatch.setattr(
+        vl_worker_server,
+        "validate_output_text",
+        lambda text, expected_terms: {"ok": True, "status": "pass", "matched_terms": ["입고"]},
+    )
+
+    response = TestClient(vl_worker_server.app).post(
+        "/analyze-upload",
+        files={"file": ("incoming-inspection.jpg", b"fake-jpeg-fixture", "image/jpeg")},
+        data={"original_filename": "incoming-inspection.jpg"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["structured_schema"]["version"] == "docparse_vl_table_schema_v1"
+    assert payload["tables"][0]["table_type"] == "incoming_inspection"
+    assert payload["tables"][0]["review_required"] is True
+    rows = payload["tables"][0]["rows"]
+    assert rows[0]["item_name"] == "베어링 하우징"
+    assert rows[0]["specification"] == "BH-220"
+    assert rows[0]["received_quantity"] == 80
+    assert rows[0]["accepted_quantity"] == 78
+    assert rows[0]["defective_quantity"] == 2
+    assert rows[0]["result"] == "조건부 합격"
+    assert rows[1]["item_name"] == "S45C PIN"
