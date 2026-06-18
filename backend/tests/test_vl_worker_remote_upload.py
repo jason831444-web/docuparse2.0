@@ -196,10 +196,10 @@ class _FakeOfficialPaddleResult:
                         "block_label": "table",
                         "block_content": (
                             "<table>"
-                            "<tr><td>No</td><td>품명</td><td>Lot/Code</td><td>입고수량</td><td>검사항목</td><td>판정</td><td>비고</td></tr>"
-                            "<tr><td>1</td><td>스테인리스 브라젯</td><td>BRK-SUS</td><td>20</td><td>외관/치수</td><td>합격</td><td>이상 없음</td></tr>"
-                            "<tr><td>2</td><td>SUS 볼트 M5x20</td><td>BOLT-M5X20</td><td>120</td><td>외관/치수</td><td>합격</td><td>치수 재확인</td></tr>"
-                            "<tr><td>3</td><td>PCB Connector 12P</td><td>CONN-12P</td><td>20</td><td>외관/치수</td><td>합격</td><td>이상 없음</td></tr>"
+                            "<tr><td>No</td><td>품명</td><td>Lot/Code</td><td>입고수량</td><td>합격</td><td>불량</td><td>검사항목</td><td>판정</td><td>비고</td></tr>"
+                            "<tr><td>1</td><td>스테인리스 브라젯</td><td>BRK-SUS</td><td>20</td><td>19</td><td>1</td><td>외관/치수</td><td>조건부합격</td><td>이상 없음</td></tr>"
+                            "<tr><td>2</td><td>SUS 볼트 M5x20</td><td>BOLT-M5X20</td><td>120</td><td>120</td><td>0</td><td>외관/치수</td><td>합격</td><td>치수 재확인</td></tr>"
+                            "<tr><td>3</td><td>PCB Connector 12P</td><td>CONN-12P</td><td>20</td><td>20</td><td>0</td><td>외관/치수</td><td>합격</td><td>이상 없음</td></tr>"
                             "</table>"
                         ),
                         "block_bbox": [177, 598, 1926, 948],
@@ -421,14 +421,16 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     assert payload["tables"][0]["table_type"] == "incoming_inspection"
     assert payload["tables"][0]["source"] == "paddleocrvl_official_table_html"
     assert payload["tables"][0]["review_required"] is True
-    assert payload["tables"][0]["raw_columns"] == ["No", "품명", "Lot/Code", "입고수량", "검사항목", "판정", "비고"]
+    assert payload["tables"][0]["raw_columns"] == ["No", "품명", "Lot/Code", "입고수량", "합격", "불량", "검사항목", "판정", "비고"]
     assert payload["tables"][0]["provenance"]["block_bbox"] == [177, 598, 1926, 948]
     rows = payload["tables"][0]["rows"]
     assert rows[0]["item_name"] == "스테인리스 브라젯"
     assert rows[0]["document_item_code"] == "BRK-SUS"
     assert rows[0]["received_quantity"] == 20
+    assert rows[0]["accepted_quantity"] == 19
+    assert rows[0]["defective_quantity"] == 1
     assert rows[0]["inspection_item"] == "외관/치수"
-    assert rows[0]["result"] == "합격"
+    assert rows[0]["result"] == "조건부 합격"
     assert rows[0]["note"] == "이상 없음"
     assert rows[1]["item_name"] == "SUS 볼트"
     assert rows[1]["specification"] == "M5x20"

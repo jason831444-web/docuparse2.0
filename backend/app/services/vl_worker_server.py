@@ -873,7 +873,7 @@ def _canonical_row_from_official_table(columns: list[str], raw_row: list[str], t
             parsed = _int_text(cell)
             row[canonical] = parsed if parsed is not None else cell
         else:
-            row[canonical] = cell
+            row[canonical] = re.sub(r"조건부\s*합격|조건부합격", "조건부 합격", cell).strip() if canonical == "result" else cell
     if table_type == "incoming_inspection":
         for amount_field in ("unit_price", "supply_amount", "tax_amount", "line_total", "subtotal", "total", "currency"):
             row.pop(amount_field, None)
@@ -911,7 +911,9 @@ def _canonical_field_for_header(header: str) -> str | None:
         "품목코드": "document_item_code",
         "문서품목코드": "document_item_code",
         "입고수량": "received_quantity",
+        "합격": "accepted_quantity",
         "합격수량": "accepted_quantity",
+        "불량": "defective_quantity",
         "불량수량": "defective_quantity",
         "검사항목": "inspection_item",
         "판정": "result",
