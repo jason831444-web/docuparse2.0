@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -558,7 +559,23 @@ def _run_llama_schema_json_repair(content: str, settings: Any) -> tuple[dict[str
 def _predict_with_optional_paddle_schema_prompt(image_path: Path, settings: Any) -> Any:
     pipeline = _get_pipeline()
     kwargs: dict[str, Any] = {"max_new_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512)}
-    return pipeline.predict(str(image_path), **kwargs)
+    return _materialize_predict_output(pipeline.predict(str(image_path), **kwargs))
+
+
+def _materialize_predict_output(output: Any) -> Any:
+    """Preserve PaddleOCRVL generator results for multiple downstream readers.
+
+    PaddleOCRVL.predict() can return an iterator of result objects.  The worker
+    reads the same output twice: first for text, then for official table blocks.
+    Materializing iterators here prevents the first reader from exhausting the
+    only copy of the official result.
+    """
+
+    if isinstance(output, (str, bytes, dict, list, tuple)):
+        return output
+    if isinstance(output, Iterator):
+        return list(output)
+    return output
 
 
 def _schema_json_from_output(output: Any) -> dict[str, Any] | None:

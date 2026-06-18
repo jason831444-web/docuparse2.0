@@ -219,9 +219,9 @@ class _FakeOfficialInspectionPipeline:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
 
-    def predict(self, image_path: str, *, max_new_tokens: int) -> list[_FakeOfficialPaddleResult]:
+    def predict(self, image_path: str, *, max_new_tokens: int):
         self.calls.append((image_path, max_new_tokens))
-        return [_FakeOfficialPaddleResult()]
+        yield _FakeOfficialPaddleResult()
 
 
 def test_vl_candidate_client_uploads_file_to_remote_worker(monkeypatch, tmp_path: Path):
