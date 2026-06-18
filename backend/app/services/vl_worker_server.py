@@ -64,6 +64,8 @@ VLM_STRUCTURED_OUTPUT_SCHEMA: dict[str, Any] = {
 VLM_TABLE_EXTRACTION_PROMPT = """You are Docparse's manufacturing document VLM table extractor.
 
 Read the provided document image visually. Return ONLY valid JSON, no markdown.
+The first character of your response must be "{" and the last character must be "}".
+Do not explain the document in prose. Do not output a markdown table.
 
 Required JSON shape:
 {
@@ -96,12 +98,40 @@ Required JSON shape:
 }
 
 Rules:
+- The primary output is the "tables" array. Put every visible table row there.
 - If the document is an incoming inspection / inspection report, extract the visible table as table_type "incoming_inspection".
 - Keep unseen values null. Do not infer hidden, cropped, or unreadable cells.
 - For inspection reports, do not create amount, unit_price, supply_amount, tax_amount, line_total, subtotal, total, or currency.
 - Keep the output review_required=true when handwriting, blur, row boundary uncertainty, or OCR ambiguity exists.
 - Flag O/0, 주/(주), 유동/유통, 검사/경사 and similar uncertainty in warnings/review flags.
 - Do not merge header, footer, stamp, or summary text into item rows.
+"""
+
+VLM_TABLE_JSON_REPAIR_PROMPT = """Convert the following VLM extraction output into ONLY valid JSON for Docparse.
+
+Return the same JSON shape used by the table extractor:
+{
+  "raw_text": "...",
+  "document_type": "inspection_report | delivery_note | purchase_order | quotation | invoice | transaction_statement | internal_transfer | return_credit | unknown",
+  "tables": [
+    {
+      "table_type": "incoming_inspection | line_items | unknown",
+      "review_required": true,
+      "columns": ["..."],
+      "rows": []
+    }
+  ],
+  "warnings": []
+}
+
+Rules:
+- Use only values present in the VLM output below.
+- Preserve table rows as JSON rows.
+- For inspection reports, do not add amount, unit_price, supply_amount, tax_amount, line_total, subtotal, total, or currency.
+- If a cell is not visible or not present, keep it null or omit it.
+- Return JSON only. No prose. No markdown.
+
+VLM output to convert:
 """
 
 
@@ -245,7 +275,7 @@ def _analyze_path(
             schema_payload, schema_metadata = _run_schema_prompt_inference(image_path, settings)
         if schema_payload:
             text = str(schema_payload.get("raw_text") or "")
-            tables = _tables_from_schema_payload(schema_payload)
+            tables = _tables_from_schema_payload(schema_payload, source=schema_metadata.get("table_source") or "vl_schema_prompt")
             output = [{"text": text, "structured_json": schema_payload}]
         else:
             with _inference_lock:
@@ -255,7 +285,7 @@ def _analyze_path(
             if schema_json:
                 schema_metadata.update({"used": True, "transport": "paddleocr_predict_prompt"})
                 text = str(schema_json.get("raw_text") or text)
-                tables = _tables_from_schema_payload(schema_json)
+                tables = _tables_from_schema_payload(schema_json, source="vl_schema_prompt")
         validation = validate_output_text(text, [])
         if not tables:
             tables = _extract_structured_tables(text, output, original_filename=original_filename or path.name)
@@ -378,21 +408,40 @@ def _run_schema_prompt_inference(image_path: Path, settings: Any) -> tuple[dict[
         "used": False,
         "transport": None,
         "error": None,
+        "table_json_primary": True,
+        "repair_attempted": False,
+        "repair_used": False,
+        "raw_response_preview": None,
     }
     if getattr(settings, "paddleocr_vl_gguf_direct_schema_prompt_enabled", False):
         metadata["attempted"] = True
-        payload, error = _run_direct_llama_schema_prompt(image_path, settings)
+        payload, error, raw_content = _run_direct_llama_schema_prompt(image_path, settings)
         if payload:
-            metadata.update({"used": True, "transport": "llama_server_chat_completions"})
+            metadata.update({"used": True, "transport": "llama_server_chat_completions", "table_source": "vl_schema_prompt"})
             return payload, metadata
+        if raw_content:
+            metadata["raw_response_preview"] = raw_content[:1200]
+            metadata["repair_attempted"] = True
+            repaired, repair_error = _run_llama_schema_json_repair(raw_content, settings)
+            if repaired and _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair"):
+                metadata.update(
+                    {
+                        "used": True,
+                        "transport": "llama_server_chat_completions_repair",
+                        "repair_used": True,
+                        "table_source": "vl_schema_prompt_repair",
+                    }
+                )
+                return repaired, metadata
+            metadata["repair_error"] = repair_error
         metadata["error"] = error
     return None, metadata
 
 
-def _run_direct_llama_schema_prompt(image_path: Path, settings: Any) -> tuple[dict[str, Any] | None, str | None]:
+def _run_direct_llama_schema_prompt(image_path: Path, settings: Any) -> tuple[dict[str, Any] | None, str | None, str | None]:
     server_url = str(getattr(settings, "paddleocr_vl_gguf_server_url", "") or "").rstrip("/")
     if not server_url:
-        return None, "missing_llama_server_url"
+        return None, "missing_llama_server_url", None
     endpoint = f"{server_url}/chat/completions"
     image_url = _image_data_url(image_path)
     body = {
@@ -421,7 +470,41 @@ def _run_direct_llama_schema_prompt(image_path: Path, settings: Any) -> tuple[di
         content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         parsed = _parse_json_object(content)
         if not parsed:
-            return None, "schema_prompt_response_not_json"
+            return None, "schema_prompt_response_not_json", content
+        return parsed, None, content
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}", None
+
+
+def _run_llama_schema_json_repair(content: str, settings: Any) -> tuple[dict[str, Any] | None, str | None]:
+    server_url = str(getattr(settings, "paddleocr_vl_gguf_server_url", "") or "").rstrip("/")
+    if not server_url:
+        return None, "missing_llama_server_url"
+    endpoint = f"{server_url}/chat/completions"
+    body = {
+        "model": getattr(settings, "paddleocr_vl_gguf_model_file", "PaddleOCR-VL-1.6-GGUF.gguf"),
+        "temperature": 0,
+        "max_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "user",
+                "content": f"{VLM_TABLE_JSON_REPAIR_PROMPT}\n{str(content or '')[:8000]}",
+            }
+        ],
+    }
+    try:
+        response = requests.post(
+            endpoint,
+            json=body,
+            timeout=max(30.0, float(getattr(settings, "paddleocr_vl_gguf_timeout_seconds", 240.0))),
+        )
+        response.raise_for_status()
+        data = response.json()
+        repaired_content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        parsed = _parse_json_object(repaired_content)
+        if not parsed:
+            return None, "schema_repair_response_not_json"
         return parsed, None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -502,7 +585,7 @@ def _image_data_url(image_path: Path) -> str:
     return f"data:{mime_type};base64,{data}"
 
 
-def _tables_from_schema_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _tables_from_schema_payload(payload: dict[str, Any], *, source: str = "vl_schema_prompt") -> list[dict[str, Any]]:
     tables: list[dict[str, Any]] = []
     for table in payload.get("tables") or []:
         if not isinstance(table, dict):
@@ -523,7 +606,7 @@ def _tables_from_schema_payload(payload: dict[str, Any]) -> list[dict[str, Any]]
         tables.append(
             {
                 "table_type": table_type,
-                "source": "vl_schema_prompt",
+                "source": source,
                 "schema_version": VLM_STRUCTURED_OUTPUT_SCHEMA["version"],
                 "columns": table.get("columns") or VLM_STRUCTURED_OUTPUT_SCHEMA["table_types"].get(table_type, {}).get("columns", []),
                 "rows": normalized_rows,

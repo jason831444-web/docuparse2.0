@@ -66,6 +66,72 @@ class _FakeSchemaPromptResponse:
         }
 
 
+class _FakeNonJsonSchemaPromptResponse:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "\n".join(
+                            [
+                                "입고 검사 기록서",
+                                "문서번호 DOC-001",
+                                "No 품명 Lot/Code 입고수량 검사항목 판정 비고",
+                                "1 스테인리스 브라켓 BRK-SUS 20 외관/치수 합격 이상 없음",
+                            ]
+                        )
+                    }
+                }
+            ]
+        }
+
+
+class _FakeSchemaRepairResponse:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": """
+                        {
+                          "raw_text": "입고 검사 기록서\\n문서번호 DOC-001",
+                          "document_type": "inspection_report",
+                          "tables": [
+                            {
+                              "table_type": "incoming_inspection",
+                              "review_required": true,
+                              "rows": [
+                                {
+                                  "no": 1,
+                                  "item_name": "스테인리스 브라켓",
+                                  "document_item_code": "BRK-SUS",
+                                  "received_quantity": 20,
+                                  "inspection_item": "외관/치수",
+                                  "result": "합격",
+                                  "note": "이상 없음"
+                                }
+                              ],
+                              "warnings": ["row_boundary_uncertain"]
+                            }
+                          ]
+                        }
+                        """
+                    }
+                }
+            ]
+        }
+
+
 class _FakePipeline:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
@@ -400,3 +466,63 @@ def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch,
     assert row["result"] == "조건부 합격"
     assert "line_total" not in row
     assert calls
+
+
+def test_vl_worker_repairs_non_json_schema_prompt_into_table_json(monkeypatch, tmp_path: Path):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        vl_worker_server,
+        "get_settings",
+        lambda: SimpleNamespace(
+            upload_dir=tmp_path,
+            paddleocr_vl_gguf_n_predict=256,
+            paddleocr_vl_gguf_model_dir=tmp_path,
+            paddleocr_vl_gguf_model_file="model.gguf",
+            paddleocr_vl_gguf_mmproj_file="mmproj.gguf",
+            paddleocr_vl_gguf_server_url="http://localhost:8080/v1",
+            paddleocr_vl_gguf_concurrency=1,
+            paddleocr_vl_gguf_max_pages=1,
+            paddleocr_vl_gguf_timeout_seconds=30,
+            paddleocr_vl_gguf_schema_prompt_enabled=True,
+            paddleocr_vl_gguf_direct_schema_prompt_enabled=True,
+        ),
+    )
+
+    def fail_pipeline():
+        raise AssertionError("PaddleOCRVL fallback should not run when schema repair succeeds")
+
+    def fake_post(url: str, **kwargs):
+        calls.append({"url": url, "json": kwargs.get("json")})
+        assert url == "http://localhost:8080/v1/chat/completions"
+        if len(calls) == 1:
+            return _FakeNonJsonSchemaPromptResponse()
+        assert "Convert the following VLM extraction output into ONLY valid JSON" in kwargs["json"]["messages"][0]["content"]
+        return _FakeSchemaRepairResponse()
+
+    monkeypatch.setattr(vl_worker_server, "_get_pipeline", fail_pipeline)
+    monkeypatch.setattr("app.services.vl_worker_server.requests.post", fake_post)
+    monkeypatch.setattr(
+        vl_worker_server,
+        "validate_output_text",
+        lambda text, expected_terms: {"ok": True, "status": "pass", "matched_terms": ["입고"]},
+    )
+
+    response = TestClient(vl_worker_server.app).post(
+        "/analyze-upload",
+        files={"file": ("incoming-inspection.jpg", b"fake-jpeg-fixture", "image/jpeg")},
+        data={"original_filename": "incoming-inspection.jpg"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["schema_prompt"]["used"] is True
+    assert payload["schema_prompt"]["repair_attempted"] is True
+    assert payload["schema_prompt"]["repair_used"] is True
+    assert payload["schema_prompt"]["transport"] == "llama_server_chat_completions_repair"
+    assert payload["tables"][0]["source"] == "vl_schema_prompt_repair"
+    row = payload["tables"][0]["rows"][0]
+    assert row["item_name"] == "스테인리스 브라켓"
+    assert row["document_item_code"] == "BRK-SUS"
+    assert row["received_quantity"] == 20
+    assert len(calls) == 2
