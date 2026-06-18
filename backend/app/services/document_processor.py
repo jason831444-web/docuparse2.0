@@ -523,21 +523,15 @@ class DocumentProcessor:
         }
 
     def _select_vl_input_candidate(self, candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], str]:
-        safe_candidates = [
-            candidate for candidate in candidates
-            if not ((candidate.get("metrics") or {}).get("unsafe_amount_risk"))
-        ] or candidates
-        selected = safe_candidates[0]
+        selected = candidates[0]
         reason = "single_candidate"
-        for candidate in safe_candidates[1:]:
+        for candidate in candidates[1:]:
             comparison = self._compare_vl_input_candidates(candidate, selected)
             if comparison > 0:
                 reason = self._vl_input_candidate_selection_reason(candidate, selected)
                 selected = candidate
         if selected is not candidates[0] and reason == "single_candidate":
             reason = "higher_quality_score"
-        if (selected.get("metrics") or {}).get("unsafe_amount_risk"):
-            reason = "all_candidates_marked_unsafe_keep_best_available"
         return selected, reason
 
     def _compare_vl_input_candidates(self, candidate: dict, current: dict) -> int:
@@ -581,7 +575,7 @@ class DocumentProcessor:
             "enabled": len(candidates) > 1,
             "selected_candidate": selected_candidate,
             "selection_reason": selection_reason,
-            "policy": "official_table_quality_then_rows_then_empty_ratio_then_original",
+            "policy": "model_official_table_quality_only_then_rows_then_empty_ratio_then_original",
             "candidates": [
                 {
                     "name": candidate.get("name"),
