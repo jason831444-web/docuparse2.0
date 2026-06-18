@@ -65,6 +65,26 @@ def test_right_edge_content_risk_flags_possible_crop(tmp_path):
     assert "line_total" not in risky.visible_columns
 
 
+def test_dark_photo_background_does_not_count_as_right_column_crop(tmp_path):
+    analyzer = DocumentQualityAnalyzer()
+    image = Image.new("RGB", (1600, 1200), (45, 42, 40))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((220, 120, 1380, 1080), fill=(245, 245, 245))
+    for index in range(5):
+        y = 360 + index * 80
+        draw.rectangle((300, y, 1170, y + 3), fill=(95, 95, 95))
+        draw.text((330, y + 16), f"S45C PIN 8x60 {index + 1}", fill=(60, 60, 60))
+    path = tmp_path / "photo-background.png"
+    image.save(path)
+
+    result = analyzer.analyze_page_image(path)
+
+    assert result.right_edge_content_risk < 0.018
+    assert result.possible_right_column_crop is False
+    assert "document_right_column_crop_risk" not in result.review_reasons
+    assert result.hidden_or_cropped_columns == []
+
+
 def test_document_quality_summary_stays_serializable(tmp_path):
     analyzer = DocumentQualityAnalyzer()
     page_one = _save_sharp_document(tmp_path / "page-one.png")
@@ -91,3 +111,57 @@ def test_preprocessor_does_not_overwrite_original_and_preserves_crop_risk(tmp_pa
     if result.processed_path:
         assert Path(result.processed_path).exists()
         assert Path(result.processed_path) != source
+
+
+def test_vl_retry_variants_preserve_full_page_without_inner_crop(tmp_path):
+    image = Image.new("RGB", (1200, 1600), (50, 48, 45))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(180, 120), (1040, 180), (1080, 1450), (120, 1390)], fill=(242, 242, 242))
+    draw.text((420, 240), "자재 이동 요청서", fill=(20, 20, 20))
+    draw.text((260, 620), "S45C PIN 8x60 200 EA", fill=(30, 30, 30))
+    draw.text((260, 1320), "하단 비고: 수량 확인 후 처리", fill=(30, 30, 30))
+    source = tmp_path / "internal-transfer-photo.webp"
+    image.save(source)
+    before_bytes = source.read_bytes()
+
+    variants = ImagePreprocessor().generate_vl_retry_variants(source, tmp_path / "variants", max_variants=1)
+
+    assert source.read_bytes() == before_bytes
+    assert variants
+    variant = variants[0]
+    assert variant["processed_path"]
+    assert Path(variant["processed_path"]).exists()
+    assert "no_inner_crop_applied_preserve_full_document" in variant["warnings"]
+    assert not any("crop" in op for op in variant["operations"])
+
+
+def test_vl_retry_variants_include_full_page_clarity_enhancement(tmp_path):
+    image = Image.new("RGB", (900, 1300), (70, 66, 62))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(130, 80), (790, 140), (820, 1180), (95, 1130)], fill=(214, 211, 204))
+    for index, text in enumerate(
+        [
+            "자재 이동 요청서",
+            "S45C PIN 8x60 200 EA",
+            "AL6061 환봉 10파이 50 EA",
+            "절삭유 4L 6 CAN",
+            "하단 비고: 내부 이동 문서",
+        ]
+    ):
+        draw.text((210, 210 + index * 150), text, fill=(88, 88, 88))
+    source = tmp_path / "blurred-transfer-photo.jpg"
+    image.filter(ImageFilter.GaussianBlur(radius=1.5)).save(source)
+
+    variants = ImagePreprocessor().generate_vl_retry_variants(source, tmp_path / "variants", max_variants=3)
+
+    assert [variant["variant_name"] for variant in variants] == [
+        "full_page_readability",
+        "full_page_document_clarity",
+        "full_page_high_contrast",
+    ]
+    all_operations = {operation for variant in variants for operation in variant["operations"]}
+    assert "full_page_shadow_normalization" in all_operations
+    assert "full_page_local_contrast" in all_operations
+    assert "full_page_background_normalization" in all_operations
+    assert "full_page_high_contrast_clahe" in all_operations
+    assert not any("crop" in operation for operation in all_operations)

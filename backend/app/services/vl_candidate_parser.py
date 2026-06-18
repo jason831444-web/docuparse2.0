@@ -43,6 +43,7 @@ class VLCandidateParser:
             and self._should_prefer_handwritten_items(handwritten_items, parsed.line_items)
         ):
             parsed.line_items = handwritten_items
+        parsed.line_items = [self._normalize_manufacturing_vl_line_item(item) for item in parsed.line_items or []]
         issues = self._issues(parsed, cleaned, manual_visual_check or {}, validation or {})
         return {
             "source": "vl_candidate_parser",
@@ -100,12 +101,20 @@ class VLCandidateParser:
             "스프링와야": "스프링와샤",
             "브라컷": "브라켓",
             "봉제": "봉재",
+            "발사위": "절삭유",
+            "절상유": "절삭유",
+            "图号": "품목",
+            "図号": "품목",
+            "品号": "품목",
+            "이동시킴": "비고",
             "545C": "S45C",
             "站到": "합계",
             "합게": "합계",
         }
         for source, target in replacements.items():
             normalized = normalized.replace(source, target)
+        normalized = re.sub(r"(?<=\d)박이\b", "파이", normalized)
+        normalized = re.sub(r"\b([A-Z]{2,6})[.·]\s*(20\d{2})[-.]?(\d{4})\b", r"\1-\2-\3", normalized)
         normalized = normalized.replace("거래명세서서", "거래명세서")
         cleaned_lines: list[str] = []
         for raw in normalized.splitlines():
@@ -361,6 +370,78 @@ class VLCandidateParser:
                 if item.get(field) not in (None, "", []):
                     score += 1
         return score
+
+    def _normalize_manufacturing_vl_line_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(item)
+        for field in ("specification", "document_item_code", "item_code", "source_item_code"):
+            if normalized.get(field) not in (None, "", []):
+                normalized[field] = self._normalize_manufacturing_code_text(str(normalized[field]))
+        name = str(normalized.get("item_name") or "").strip()
+        if name:
+            name = self._split_manufacturing_code_and_spec_from_name(name, normalized)
+            name = self._normalize_manufacturing_item_name(name, normalized)
+            normalized["item_name"] = name
+        return normalized
+
+    def _split_manufacturing_code_and_spec_from_name(self, value: str, item: dict[str, Any]) -> str:
+        text = " ".join(str(value or "").split()).strip()
+        if not text:
+            return text
+
+        code_match = re.match(r"^(?P<code>AL\d{4}|SUS\d{3}|SS\d{3,4}|SCM\d{3,4})\s+(?P<rest>.+)$", text, flags=re.IGNORECASE)
+        if code_match and item.get("document_item_code") in (None, "", []) and self._should_split_material_code_from_name(code_match.group("rest")):
+            item["document_item_code"] = self._normalize_manufacturing_code_text(code_match.group("code").upper())
+            text = code_match.group("rest").strip()
+
+        if item.get("specification") in (None, "", []) and not self._should_keep_material_spec_in_name(text, item):
+            spec_match = re.match(
+                r"^(?P<name>.+?)\s+"
+                r"(?P<spec>(?:[B8]\s*[Xx]\s*\d+(?:\s*[Xx]\s*\d+)?)|(?:\d+\s*[Xx]\s*\d+(?:\s*[Xx]\s*\d+)?)|"
+                r"(?:M\d+(?:\s*[Xx]\s*\d+)?)|(?:\d+(?:\.\d+)?\s*(?:mm|T|파이|L)))$",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if spec_match:
+                text = spec_match.group("name").strip()
+                item["specification"] = self._normalize_manufacturing_code_text(spec_match.group("spec"))
+        return text
+
+    def _should_split_material_code_from_name(self, rest: str) -> bool:
+        """Split leading material codes only when the remaining name shows OCR noise.
+
+        In clean manufacturing documents values such as ``AL6061 환봉`` and
+        ``SUS304 3T PLATE`` are often the visible item name itself.  For blurry
+        photo OCR, however, the material token can be the only reliable item
+        code and the rest may contain a fixable OCR error such as ``환불``.
+        """
+
+        text = str(rest or "")
+        return bool(re.search(r"\b(?:환불|봉제)\b", text))
+
+    def _should_keep_material_spec_in_name(self, text: str, item: dict[str, Any]) -> bool:
+        if not re.match(r"^(?:AL\d{4}|SUS\d{3}|SS\d{3,4}|SCM\d{3,4})\s+", str(text or ""), flags=re.IGNORECASE):
+            return False
+        has_amount_context = any(
+            item.get(field) not in (None, "", [])
+            for field in ("unit_price", "supply_amount", "tax_amount", "line_total")
+        )
+        return has_amount_context
+
+    def _normalize_manufacturing_code_text(self, value: str) -> str:
+        text = " ".join(str(value or "").split()).strip()
+        text = re.sub(r"\bB(?=[Xx]\d)", "8", text)
+        text = re.sub(r"(?<=\d)[Oo](?=\d)", "0", text)
+        text = re.sub(r"(?<=\d)박이\b", "파이", text)
+        return text
+
+    def _normalize_manufacturing_item_name(self, value: str, item: dict[str, Any]) -> str:
+        text = " ".join(str(value or "").split()).strip()
+        text = self._normalize_manufacturing_code_text(text)
+        text = text.replace("발사위", "절삭유").replace("절상유", "절삭유")
+        if re.search(r"\bAL\d{4}\b", " ".join(str(item.get(field) or "") for field in ("specification", "document_item_code", "item_code", "source_item_code"))):
+            text = re.sub(r"\b환불\b", "환봉", text)
+        text = re.sub(r"\b환불(?=\s+\d+\s*파이\b)", "환봉", text)
+        return text
 
     def _has_explicit_table_header(self, text: str, doc_type: Any | None = None) -> bool:
         lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
@@ -737,6 +818,16 @@ class VLCandidateParser:
                         "message": "VL parser promoted a table header-like line as an item row.",
                     }
                 )
+            if self._looks_like_foreign_script_item_noise(name, text):
+                issues.append(
+                    {
+                        "code": "vl_candidate_foreign_script_item_noise",
+                        "severity": "warn",
+                        "line_index": index,
+                        "item_name": item.get("item_name"),
+                        "message": "VL parser produced foreign-script item noise in a Korean manufacturing document; keep the row for review only.",
+                    }
+                )
             if no_price_document and self._looks_like_unparsed_no_price_row(name):
                 issues.append(
                     {
@@ -958,6 +1049,22 @@ class VLCandidateParser:
         if foreign_header_noise and foreign_noise_tokens >= max(4, korean_tokens // 2):
             return True
         return False
+
+    def _looks_like_foreign_script_item_noise(self, item_name: str, text: str) -> bool:
+        value = str(item_name or "").strip()
+        if not value:
+            return False
+        if not re.search(r"[一-龥ぁ-んァ-ン]", value):
+            return False
+        # The current product focus is Korean manufacturing documents. Hangul is
+        # expected, but Chinese/Japanese artifacts inside item names are usually
+        # decoding noise from blurry photos unless the whole document is actually
+        # written in that language.
+        if not re.search(r"(품목|품명|규격|수량|단위|자재|이동|납품|검사|발주|거래|세금계산서)", text or ""):
+            return False
+        hangul_tokens = len(re.findall(r"[가-힣]+", text or ""))
+        foreign_tokens = len(re.findall(r"[一-龥ぁ-んァ-ン]+", text or ""))
+        return hangul_tokens >= max(3, foreign_tokens)
 
     def _line_item_warning_issues(self, parsed: ParsedDocument) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []

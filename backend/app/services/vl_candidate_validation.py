@@ -45,6 +45,8 @@ class VLCandidateValidationGate:
         "vl_candidate_remaining_quantity_hidden",
         "vl_candidate_inspection_decision_hidden",
         "vl_candidate_fax_row_boundary_uncertain",
+        "vl_candidate_foreign_script_item_noise",
+        "vl_candidate_preprocessed_retry_requires_review",
     }
 
     non_promotable_issue_codes = {
@@ -59,6 +61,7 @@ class VLCandidateValidationGate:
         "vl_candidate_invalid_tax_greater_than_supply",
         "vl_candidate_invalid_tax_greater_than_total",
         "vl_candidate_invalid_supply_greater_than_total",
+        "vl_candidate_foreign_script_item_noise",
     }
 
     no_price_profiles = {

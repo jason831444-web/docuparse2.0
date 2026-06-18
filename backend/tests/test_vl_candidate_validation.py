@@ -159,6 +159,32 @@ def test_vl_candidate_gate_partially_promotes_hidden_amount_or_arithmetic_mismat
     assert "vl_candidate_has_review_issues" in result["reasons"]
 
 
+def test_vl_candidate_gate_blocks_foreign_script_item_noise_from_promotion():
+    candidate = {
+        "provider_available_candidate": True,
+        "issue_codes": ["vl_candidate_foreign_script_item_noise"],
+        "structured_candidate": {
+            "candidate_only": True,
+            "parser_integrated": False,
+            "confirmed_promotion": False,
+            "document": {
+                "document_number": "QT-2026-0808-009",
+                "total": "473000",
+            },
+            "line_items": [{"item_name": "番号", "quantity": 50}],
+            "line_item_count": 1,
+            "issue_codes": ["vl_candidate_foreign_script_item_noise"],
+        },
+    }
+
+    result = VLCandidateValidationGate().evaluate(_document(), candidate)
+
+    assert result["decision"] == "review_required"
+    assert result["auto_promote"] is False
+    assert result["promotion_mode"] == "none"
+    assert "vl_candidate_has_review_issues" in result["reasons"]
+
+
 def test_vl_candidate_gate_keeps_raw_invalid_row_warning_as_review_candidate_only():
     candidate = {
         "provider_available_candidate": True,
@@ -262,6 +288,54 @@ def test_vl_candidate_gate_partially_promotes_fax_row_boundary_warning():
     assert result["auto_promote"] is True
     assert result["promotion_mode"] == "partial"
     assert "vl_candidate_fax_row_boundary_uncertain" in result["issue_codes"]
+
+
+def test_vl_candidate_gate_keeps_preprocessed_retry_as_review_required_partial_candidate():
+    candidate = {
+        "provider_available_candidate": True,
+        "issue_codes": ["vl_candidate_preprocessed_retry_requires_review"],
+        "structured_candidate": {
+            "candidate_only": True,
+            "parser_integrated": False,
+            "confirmed_promotion": False,
+            "document": {
+                "document_number": "MV-2026-0010",
+            },
+            "line_items": [
+                {
+                    "item_name": "S45C PIN",
+                    "specification": "8X60",
+                    "quantity": 200,
+                    "unit": "EA",
+                }
+            ],
+            "line_item_count": 1,
+            "issue_codes": ["vl_candidate_preprocessed_retry_requires_review"],
+        },
+    }
+
+    document = Document(
+        original_filename="internal-transfer-blurry.webp",
+        stored_file_path="/tmp/internal-transfer-blurry.webp",
+        mime_type="image/webp",
+        document_type=DocumentType.other,
+        document_number=None,
+        extracted_amount=None,
+        currency=None,
+        workflow_metadata={
+            "taxonomy": {
+                "document_profile": "inventory_movement_document",
+                "document_profiles": ["inventory_movement_document", "no_price_document"],
+            }
+        },
+    )
+
+    result = VLCandidateValidationGate().evaluate(document, candidate)
+
+    assert result["decision"] == "review_required"
+    assert result["auto_promote"] is True
+    assert result["promotion_mode"] == "partial"
+    assert "vl_candidate_preprocessed_retry_requires_review" in result["issue_codes"]
 
 
 def test_vl_candidate_gate_rejects_no_price_amount_conflict():

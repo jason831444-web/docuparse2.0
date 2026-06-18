@@ -93,7 +93,7 @@ class DocumentQualityAnalyzer:
         is_blurry = blur_score < 55.0
         is_skewed = skew is not None and abs(skew) >= 2.0
         low_contrast = contrast < 0.105
-        possible_crop = right_edge_risk >= 0.018
+        possible_crop = right_edge_risk >= 0.08
         visible_columns, hidden_or_cropped_columns = self._visible_column_estimate(possible_crop)
         likely_scan_type = self._likely_scan_type(pil_image, is_blurry, is_skewed, contrast, brightness)
         review_reasons = self._review_reasons(
@@ -277,6 +277,7 @@ class DocumentQualityAnalyzer:
     def _right_edge_content_risk(self, grayscale: np.ndarray) -> float:
         if grayscale.size == 0:
             return 0.0
+        grayscale = self._visible_document_region(grayscale)
         height, width = grayscale.shape
         edge_width = max(8, int(width * 0.06))
         edge = grayscale[:, max(0, width - edge_width):]
@@ -285,6 +286,71 @@ class DocumentQualityAnalyzer:
         dark_ratio = float(np.mean(edge < 185))
         horizontal_density = float(np.mean(np.mean(edge < 185, axis=1) > 0.08))
         return min(1.0, dark_ratio * 0.75 + horizontal_density * 0.25)
+
+    def _visible_document_region(self, grayscale: np.ndarray) -> np.ndarray:
+        """Return the likely paper/page area without cropping the source image.
+
+        Photo uploads often include a dark desk/background around the paper.
+        Right-edge crop detection should inspect the page itself, not that dark
+        background, otherwise a normal full-page photo looks like a truncated
+        amount column.
+        """
+
+        try:
+            import cv2
+
+            height, width = grayscale.shape
+            blurred = cv2.GaussianBlur(grayscale, (5, 5), 0)
+            _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            kernel = np.ones((9, 9), dtype=np.uint8)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                return grayscale
+            largest = max(contours, key=cv2.contourArea)
+            area = float(cv2.contourArea(largest))
+            if area < float(width * height) * 0.18:
+                return grayscale
+            rect = cv2.minAreaRect(largest)
+            points = cv2.boxPoints(rect)
+            ordered = self._order_points(points)
+            tl, tr, br, bl = ordered
+            target_width = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
+            target_height = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+            if target_width < width * 0.35 or target_height < height * 0.35:
+                return grayscale
+            destination = np.array(
+                [
+                    [0, 0],
+                    [target_width - 1, 0],
+                    [target_width - 1, target_height - 1],
+                    [0, target_height - 1],
+                ],
+                dtype="float32",
+            )
+            matrix = cv2.getPerspectiveTransform(ordered.astype("float32"), destination)
+            warped = cv2.warpPerspective(grayscale, matrix, (target_width, target_height), borderValue=255)
+            inset_x = max(0, int(target_width * 0.02))
+            inset_y = max(0, int(target_height * 0.02))
+            x0 = min(target_width, inset_x)
+            y0 = min(target_height, inset_y)
+            x1 = max(0, target_width - inset_x)
+            y1 = max(0, target_height - inset_y)
+            if x1 <= x0 or y1 <= y0:
+                return grayscale
+            return warped[y0:y1, x0:x1]
+        except Exception:
+            return grayscale
+
+    def _order_points(self, points: np.ndarray) -> np.ndarray:
+        rect = np.zeros((4, 2), dtype="float32")
+        sums = points.sum(axis=1)
+        rect[0] = points[np.argmin(sums)]
+        rect[2] = points[np.argmax(sums)]
+        diffs = np.diff(points, axis=1)
+        rect[1] = points[np.argmin(diffs)]
+        rect[3] = points[np.argmax(diffs)]
+        return rect
 
     def _resolution_bucket(self, width: int, height: int, dpi: int | None) -> str:
         min_side = min(width, height)

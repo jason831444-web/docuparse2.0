@@ -1178,6 +1178,68 @@ def test_vl_candidate_parser_parses_inspection_rows_without_lot_column():
     assert all("unit_price" not in item and "line_total" not in item for item in candidate["line_items"])
 
 
+def test_vl_candidate_parser_flags_foreign_script_item_noise_in_korean_manufacturing_doc():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "대성정공 생산관리",
+                "자재 이동 요청서",
+                "문서번호 MV-2026-0010",
+                "요청일 2026.06.18",
+                "출고창고 A-01 창고",
+                "입고창고 B-02 가공",
+                "No 품목 규격 수량 단위 이동사유",
+                "1 S45C PIN 8x60 200 EA 긴급 투입",
+                "2 番号 AL6061 10파이 50 EA 가공 대기",
+                "3 절삭유 4L 6 CAN 교체 소모품",
+                "내부 이동 문서로 금액/세액 없음.",
+            ]
+        ),
+        filename="internal-transfer-blurry.webp",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert "vl_candidate_foreign_script_item_noise" in candidate["issue_codes"]
+    assert candidate["document"]["document_number"] == "MV-2026-0010"
+
+
+def test_vl_candidate_parser_normalizes_blurry_manufacturing_transfer_ocr_noise():
+    candidate = VLCandidateParser().parse_text(
+        "\n".join(
+            [
+                "대성정공 생산관리",
+                "자재 이동 요청서",
+                "문명 MV.2026-0010",
+                "요청일 2026.06.18",
+                "No 图号 규격 수량 단위 이동시킴",
+                "1 S45C PIN BX60 200 EA 가공 대기",
+                "2 AL6061 환불 10박이 50 EA 규명 소모율",
+                "3 발사위 4L 6 CAN 공통 소모율",
+                "내부 이동 문서로 금액/세액 없음. 수량 확인 후 처리.",
+            ]
+        ),
+        filename="internal-transfer-blurry.webp",
+        validation={"status": "pass"},
+    )
+
+    assert candidate is not None
+    assert candidate["document"]["document_number"] == "MV-2026-0010"
+    assert candidate["line_item_count"] == 3
+    first, second, third = candidate["line_items"][:3]
+    assert first["item_name"] == "S45C PIN"
+    assert first["specification"] == "8X60"
+    assert first["quantity"] == 200
+    assert second["item_name"] == "환봉"
+    assert second["document_item_code"] == "AL6061"
+    assert second["specification"] == "10파이"
+    assert second["quantity"] == 50
+    assert third["item_name"] == "절삭유"
+    assert third["specification"] == "4L"
+    assert third["quantity"] == 6
+    assert third["unit"] == "CAN"
+
+
 def test_smoke_metadata_includes_structured_vl_candidate_without_line_item_promotion():
     metadata = build_docuparse_vl_candidate_metadata(
         {
