@@ -775,7 +775,13 @@ class DocumentProcessor:
                     setattr(parsed, attr, value)
         line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
         if line_items:
-            parsed.line_items = self._safe_vl_promoted_line_items(line_items)
+            preserve_signed_amount_rows = self._structured_or_parsed_return_credit_signal(structured, parsed)
+            parsed.line_items = self._safe_vl_promoted_line_items(
+                line_items,
+                preserve_signed_amount_rows=preserve_signed_amount_rows,
+            )
+            if preserve_signed_amount_rows:
+                parsed.line_items = self._restore_return_credit_visible_amounts(parsed.line_items, line_items)
 
     def _reconcile_vl_parsed_with_pdf_text_layer(
         self,
@@ -2266,6 +2272,24 @@ class DocumentProcessor:
         if re.search(r"(credit_note|크레딧|차감|credit\s+(?:note|memo))", text, flags=re.IGNORECASE):
             return "credit_note"
         return "return_note"
+
+    def _structured_or_parsed_return_credit_signal(self, structured: dict, parsed: object) -> bool:
+        candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}
+        values = [
+            candidate_doc.get("document_type"),
+            candidate_doc.get("document_subtype"),
+            candidate_doc.get("document_profile"),
+            candidate_doc.get("category"),
+            candidate_doc.get("document_number"),
+            getattr(parsed, "category", None),
+            getattr(parsed, "document_number", None),
+            *(getattr(parsed, "tags", None) or []),
+        ]
+        text = " ".join(str(value or "") for value in values)
+        return bool(
+            re.search(r"\b(?:return_note|credit_note|return_document|return_credit)\b", text, flags=re.IGNORECASE)
+            or re.search(r"^(?:RTN|RCM)[-_ ]?\d{4}", str(candidate_doc.get("document_number") or getattr(parsed, "document_number", "") or ""), flags=re.IGNORECASE)
+        )
 
     def _is_internal_transfer_parsed_document(self, parsed: object, raw_text: str) -> bool:
         doc_number = str(getattr(parsed, "document_number", "") or "")

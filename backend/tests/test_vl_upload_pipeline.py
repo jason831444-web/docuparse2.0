@@ -828,6 +828,42 @@ def test_vl_upload_pipeline_restores_return_credit_visible_amounts_after_matchin
     assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" not in restored[1].get("review_flags", [])
 
 
+def test_vl_upload_pipeline_preserves_signed_amounts_when_structured_candidate_updates_parsed_return_credit():
+    parsed = ParsedDocument(
+        document_type=DocumentType.general_document,
+        document_number="RCM-2026-0009",
+        category="credit_note",
+        tags=["return_document"],
+        line_items=[],
+    )
+    structured = {
+        "document": {
+            "document_type": "general_document",
+            "document_subtype": "credit_note",
+            "document_number": "RCM-2026-0009",
+        },
+        "line_items": [
+            {
+                "item_name": "AL6061 판재",
+                "specification": "3T 400x600",
+                "quantity": -2,
+                "unit_price": 18000,
+                "supply_amount": -36000,
+                "tax_amount": -3600,
+                "line_total": -39600,
+                "validation_warnings": ["line_total_not_visible_do_not_infer"],
+            }
+        ],
+    }
+
+    DocumentProcessor()._apply_vl_structured_candidate_to_parsed(parsed, structured)
+
+    assert parsed.line_items[0]["quantity"] == -2
+    assert parsed.line_items[0]["supply_amount"] == -36000
+    assert parsed.line_items[0]["tax_amount"] == -3600
+    assert parsed.line_items[0]["line_total"] == -39600
+
+
 def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching():
     processor = DocumentProcessor()
     parsed = ParsedDocument(
