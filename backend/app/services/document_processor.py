@@ -532,6 +532,8 @@ class DocumentProcessor:
                 selected = candidate
         if selected is not candidates[0] and reason == "single_candidate":
             reason = "higher_quality_score"
+        elif len(candidates) > 1 and selected is candidates[0] and reason == "single_candidate":
+            reason = self._vl_input_candidate_selection_reason(selected, candidates[1])
         return selected, reason
 
     def _compare_vl_input_candidates(self, candidate: dict, current: dict) -> int:
