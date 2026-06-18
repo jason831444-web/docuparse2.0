@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     processing_mode: str = "inline"
     queue_backend: str = "local"
+    document_processing_concurrency: int = Field(default=3, ge=1, le=16)
     ai_provider: str = "auto"
     ai_model: str = "gpt-4o-mini"
     openai_api_key: str | None = None

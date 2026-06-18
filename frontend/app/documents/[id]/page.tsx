@@ -9,10 +9,13 @@ import {
   AlertTriangle,
   Bot,
   CheckCheck,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileText,
   FolderKanban,
   Loader2,
+  Plus,
   RefreshCw,
   Save,
   ShieldCheck,
@@ -331,14 +334,14 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
       </CardHeader>
       <CardContent className="space-y-4">
         {isImage ? (
-          <div className="relative h-[72rem] w-full rounded-lg border bg-white">
+          <div className="relative h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white">
             <Image src={fileUrl} alt={document.original_filename} fill unoptimized className="object-contain" />
           </div>
         ) : isPdf ? (
           <iframe
             src={previewUrl}
             title={document.original_filename}
-            className="h-[72rem] w-full rounded-lg border bg-white"
+            className="h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white"
           />
         ) : (
           <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center">
@@ -484,6 +487,7 @@ export default function DocumentDetailPage() {
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const [approvalNote, setApprovalNote] = useState("");
+  const [activeLineItemIndex, setActiveLineItemIndex] = useState(0);
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
@@ -560,7 +564,7 @@ export default function DocumentDetailPage() {
       syncDocument(updated);
       toast.success("확정 완료로 변경했습니다");
     } catch (error) {
-      toast.error(error instanceof Error ? `확정 처리 실패: ${error.message}` : "확정 처리에 실패했습니다");
+      toast.error(error instanceof Error ? error.message : "확정 처리에 실패했습니다");
     } finally {
       setSaving(false);
     }
@@ -651,6 +655,7 @@ export default function DocumentDetailPage() {
       line_total: "",
     });
     form.setValue("line_items", items, { shouldDirty: true });
+    setActiveLineItemIndex(items.length - 1);
   }
 
   async function selectItemMasterCandidate(index: number, candidate: NonNullable<ManufacturingLineItem["item_master_candidates"]>[number]) {
@@ -691,6 +696,14 @@ export default function DocumentDetailPage() {
     form.setValue("line_items", items, { shouldDirty: true });
   }
 
+  const watchedLineItems = form.watch("line_items") ?? [];
+  useEffect(() => {
+    setActiveLineItemIndex((current) => {
+      if (!watchedLineItems.length) return 0;
+      return Math.min(Math.max(current, 0), watchedLineItems.length - 1);
+    });
+  }, [watchedLineItems.length]);
+
   const categoryInterpretation = useMemo(
     () => (document?.workflow_metadata?.category_interpretation ?? document?.ingestion_metadata?.category_interpretation ?? null) as Record<string, unknown> | null,
     [document]
@@ -724,7 +737,8 @@ export default function DocumentDetailPage() {
   const surfacedFields = readList(categoryInterpretation?.surfaced_fields);
   const isConfirmed = document.processing_status === "confirmed";
   const selectedCategory = form.watch("category") ?? "";
-  const lineItems = form.watch("line_items") ?? [];
+  const lineItems = watchedLineItems;
+  const activeLineItem = lineItems[activeLineItemIndex];
   const blockingIssues = blockingReviewIssues(document);
   const blockingIssueSummaryItems = reviewIssueSummaryItems(blockingIssues);
   const groupedBlockingIssueItems = groupedReviewIssues(blockingIssues);
@@ -853,7 +867,9 @@ export default function DocumentDetailPage() {
 
       <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <section className="space-y-6">
-          <OriginalPreviewCard document={document} isImage={isImage} />
+          <div className="xl:sticky xl:top-6">
+            <OriginalPreviewCard document={document} isImage={isImage} />
+          </div>
 
           <div className="flex flex-wrap gap-2">
             {detailTabs.map((tab) => (
@@ -980,7 +996,14 @@ export default function DocumentDetailPage() {
                   ["검토 상태", document.review_required ? "사람이 확인해야 합니다" : "자동 추출 완료"],
                   ["검토 진행", `${openIssueCount}개 열림 / ${resolvedIssueCount}개 해결`],
                   ["승인 일시", reviewMetadata.approved_at ? formatDateTime(reviewMetadata.approved_at) : null],
-                  ["검토 필요 항목", blockingIssueSummaryItems.length ? blockingIssueSummaryItems.join(", ") : "없음"],
+                  [
+                    "검토 필요 항목",
+                    blockingIssueSummaryItems.length
+                      ? blockingIssueSummaryItems.join(", ")
+                      : document.review_required
+                        ? "처리 경고 또는 참고 정보를 확인하세요"
+                        : "없음",
+                  ],
                 ]}
               />
               <div className="grid gap-2 rounded-lg border bg-white p-3">
@@ -997,6 +1020,14 @@ export default function DocumentDetailPage() {
               </div>
               {blockingIssues.length ? (
                 <div className="grid gap-2">
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+                    <p className="font-medium">검토 항목 버튼 안내</p>
+                    <p className="mt-1">
+                      <span className="font-semibold">해결</span>은 값을 직접 수정하거나 후보를 선택해 문제가 처리되었다는 뜻입니다.
+                      <span className="ml-1 font-semibold">무시</span>는 원본 확인 결과 업무상 문제 없다고 판단해 확정 차단에서 제외한다는 뜻입니다.
+                      두 선택 모두 기록에 남고, 이후 다시 검토 필요 상태로 되돌릴 수 있습니다.
+                    </p>
+                  </div>
                   {groupedBlockingIssueItems.map((group) => {
                     const issueKeys = group.issues.map((issue) => issue.key).filter((key): key is string => Boolean(key));
                     return (
@@ -1011,8 +1042,26 @@ export default function DocumentDetailPage() {
                         </div>
                         {issueKeys.length ? (
                           <div className="flex gap-1">
-                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => issueKeys.length === 1 ? setReviewIssueStatus(issueKeys[0], "resolved") : setReviewIssueGroupStatus(issueKeys, "resolved")}>해결</Button>
-                            <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => issueKeys.length === 1 ? setReviewIssueStatus(issueKeys[0], "ignored") : setReviewIssueGroupStatus(issueKeys, "ignored")}>무시</Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={saving}
+                              title="값을 수정하거나 후보를 선택해 이 검토 항목이 해결되었을 때 누릅니다."
+                              onClick={() => issueKeys.length === 1 ? setReviewIssueStatus(issueKeys[0], "resolved") : setReviewIssueGroupStatus(issueKeys, "resolved")}
+                            >
+                              해결
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={saving}
+                              title="원본 확인 결과 업무상 문제 없다고 판단해 확정 차단에서 제외할 때 누릅니다."
+                              onClick={() => issueKeys.length === 1 ? setReviewIssueStatus(issueKeys[0], "ignored") : setReviewIssueGroupStatus(issueKeys, "ignored")}
+                            >
+                              무시
+                            </Button>
                           </div>
                         ) : null}
                       </div>
@@ -1076,31 +1125,62 @@ export default function DocumentDetailPage() {
                     <p className="text-sm font-semibold">품목 정보</p>
                     <p className="mt-1 text-xs text-muted-foreground">품목명, 문서 품목코드, 내부 품목코드, 규격, 수량, 단가, 공급가액, 세액, 합계금액을 확인하세요.</p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={addLineItem}>품목 추가</Button>
+                  <Button type="button" variant="outline" size="sm" onClick={addLineItem}>
+                    <Plus className="size-4" />
+                    품목 추가
+                  </Button>
                 </div>
                 {lineItems.length ? (
                   <div className="grid gap-4">
-                    {lineItems.map((item, index) => (
-                      <div key={index} className="rounded-xl border bg-slate-50/50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-slate-50 px-3 py-2">
+                      <div>
+                        <p className="text-sm font-medium">현재 품목 {activeLineItemIndex + 1} / {lineItems.length}</p>
+                        <p className="text-xs text-muted-foreground">한 품목씩 확인하면 원본 문서를 보면서 수정하기 쉽습니다.</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={activeLineItemIndex <= 0}
+                          onClick={() => setActiveLineItemIndex((index) => Math.max(0, index - 1))}
+                        >
+                          <ChevronLeft className="size-4" />
+                          이전
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={activeLineItemIndex >= lineItems.length - 1}
+                          onClick={() => setActiveLineItemIndex((index) => Math.min(lineItems.length - 1, index + 1))}
+                        >
+                          다음
+                          <ChevronRight className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {activeLineItem ? (
+                      <div className="rounded-xl border bg-slate-50/50 p-4">
                         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-950">품목 {index + 1}</p>
-                            <p className="mt-1 break-words text-xs text-muted-foreground">{String(item.item_name || item.document_item_code || item.item_code || "품목명 미확인")}</p>
+                            <p className="text-sm font-semibold text-slate-950">품목 {activeLineItemIndex + 1}</p>
+                            <p className="mt-1 break-words text-xs text-muted-foreground">{String(activeLineItem.item_name || activeLineItem.document_item_code || activeLineItem.item_code || "품목명 미확인")}</p>
                           </div>
-                          <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>삭제</Button>
+                          <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(activeLineItemIndex)}>삭제</Button>
                         </div>
 
                         <div className="grid gap-3">
                           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                             {lineItemIdentityFields.map(([field, label]) => {
-                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(index, field);
+                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(activeLineItemIndex, field);
                               return (
                                 <LineItemField
                                   key={field}
-                                  index={index}
+                                  index={activeLineItemIndex}
                                   field={field}
                                   label={label}
-                                  item={item}
+                                  item={activeLineItem}
                                   low={low}
                                   blockingIssues={fieldBlockingIssues}
                                   infoIssues={fieldInfoIssues}
@@ -1112,14 +1192,14 @@ export default function DocumentDetailPage() {
 
                           <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
                             {lineItemAmountFields.map(([field, label]) => {
-                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(index, field);
+                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(activeLineItemIndex, field);
                               return (
                                 <LineItemField
                                   key={field}
-                                  index={index}
+                                  index={activeLineItemIndex}
                                   field={field}
                                   label={label}
-                                  item={item}
+                                  item={activeLineItem}
                                   low={low}
                                   blockingIssues={fieldBlockingIssues}
                                   infoIssues={fieldInfoIssues}
@@ -1132,25 +1212,25 @@ export default function DocumentDetailPage() {
 
                         <div className="mt-4 rounded-lg border bg-white p-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline" className={itemMasterStatusClass(item.item_master_match_status)}>
-                              {itemMasterStatusLabel(item.item_master_match_status)}
+                            <Badge variant="outline" className={itemMasterStatusClass(activeLineItem.item_master_match_status)}>
+                              {itemMasterStatusLabel(activeLineItem.item_master_match_status)}
                             </Badge>
-                            {item.item_master_match_confidence ? (
-                              <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(item.item_master_match_confidence) * 100)}%</span>
+                            {activeLineItem.item_master_match_confidence ? (
+                              <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(activeLineItem.item_master_match_confidence) * 100)}%</span>
                             ) : null}
                           </div>
-                          {item.item_master_candidates?.length ? (
+                          {activeLineItem.item_master_candidates?.length ? (
                             <div className="mt-3 grid gap-2">
                               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                                 <input
                                   type="checkbox"
-                                  checked={aliasSaveRows[index] ?? true}
-                                  onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [index]: event.target.checked })}
+                                  checked={aliasSaveRows[activeLineItemIndex] ?? true}
+                                  onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [activeLineItemIndex]: event.target.checked })}
                                 />
                                 이 선택을 별칭으로 저장
                               </label>
                               <div className="grid gap-2">
-                                {item.item_master_candidates.slice(0, 3).map((candidate) => (
+                                {activeLineItem.item_master_candidates.slice(0, 3).map((candidate) => (
                                   <div key={candidate.internal_item_code} className="rounded-lg border bg-white p-3 text-xs">
                                     <div className="flex flex-wrap items-start justify-between gap-2">
                                       <div className="min-w-0">
@@ -1158,7 +1238,7 @@ export default function DocumentDetailPage() {
                                         <p className="mt-1 break-words text-muted-foreground">{candidate.item_name} · {candidate.spec || "규격 없음"} · {candidate.unit || "단위 없음"}</p>
                                         <p className="mt-1 text-muted-foreground">후보 신뢰도 {Math.round(Number(candidate.score) * 100)}%</p>
                                       </div>
-                                      <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(index, candidate)}>
+                                      <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(activeLineItemIndex, candidate)}>
                                         선택
                                       </Button>
                                     </div>
@@ -1169,7 +1249,7 @@ export default function DocumentDetailPage() {
                           ) : null}
                         </div>
                       </div>
-                    ))}
+                    ) : null}
                   </div>
                 ) : (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">

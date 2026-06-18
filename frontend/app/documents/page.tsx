@@ -16,6 +16,9 @@ import type { DocumentListResponse, FolderSummary, ProcessingStatus } from "@/ty
 
 const statuses: Array<"" | ProcessingStatus> = ["", "uploaded", "queued", "processing", "ready", "needs_review", "confirmed", "failed"];
 const MAX_GLOBAL_SELECTION = 500;
+type DocumentListItem = DocumentListResponse["items"][number];
+type FlatDocumentGroup = { label: string; items: DocumentListItem[] };
+type NestedDocumentGroup = { label: string; count: number; children: FlatDocumentGroup[] };
 const statusLabels: Record<"" | ProcessingStatus, string> = {
   "": "전체 상태",
   uploaded: "업로드됨",
@@ -51,19 +54,20 @@ function DocumentsContent() {
   const [data, setData] = useState<DocumentListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"grid" | "list">("list");
-  const [grouping, setGrouping] = useState<DocumentGroupingMode>("document_type");
+  const [grouping, setGrouping] = useState<DocumentGroupingMode>("none");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set());
   const [selectionScopeDocuments, setSelectionScopeDocuments] = useState<DocumentListResponse["items"]>([]);
   const [selectingAllDocuments, setSelectingAllDocuments] = useState(false);
   const [allDocumentCount, setAllDocumentCount] = useState<number | null>(null);
   const [bulkExcelMode, setBulkExcelMode] = useState<"combined" | "party_tabs">("combined");
+  const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
     search: searchParams.get("search") ?? "",
     category: "",
     source_file_type: "",
     processing_status: "",
-    sort_by: "updated_at",
+    sort_by: "created_at",
     order: "desc"
   });
 
@@ -83,8 +87,10 @@ function DocumentsContent() {
     Object.entries(filters).forEach(([key, value]) => {
       if (value) next.set(key, value);
     });
+    next.set("page", String(page));
+    next.set("page_size", "100");
     return next;
-  }, [filters]);
+  }, [filters, page]);
 
   const loadDocuments = useCallback(() => {
     setLoading(true);
@@ -106,19 +112,24 @@ function DocumentsContent() {
 
   function setFilter(key: keyof typeof filters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
+    setPage(1);
   }
 
-  const groupLabel = useCallback((document: DocumentListResponse["items"][number]) => {
+  const documentTypeLabel = useCallback((document: DocumentListItem) => primaryCategoryLabel(document), []);
+  const partyLabel = useCallback((document: DocumentListItem) => document.customer_name || document.vendor_name || "거래처 미확인", []);
+
+  const groupLabel = useCallback((document: DocumentListItem) => {
+    if (grouping === "none") return "전체 문서";
     const type = primaryCategoryLabel(document);
-    const party = document.customer_name || document.vendor_name || "거래처 미확인";
+    const party = partyLabel(document);
     if (grouping === "party") return party;
     if (grouping === "party_type") return `${party} / ${type}`;
     if (grouping === "type_party") return `${type} / ${party}`;
     return type;
-  }, [grouping]);
+  }, [grouping, partyLabel]);
 
   const groupedItems = useMemo(() => {
-    return (data?.items || []).reduce<Array<{ label: string; items: DocumentListResponse["items"] }>>((groups, document) => {
+    return (data?.items || []).reduce<FlatDocumentGroup[]>((groups, document) => {
       const label = groupLabel(document);
       const group = groups.find((candidate) => candidate.label === label);
       if (group) group.items.push(document);
@@ -126,6 +137,27 @@ function DocumentsContent() {
       return groups;
     }, []);
   }, [data?.items, groupLabel]);
+  const nestedGroupedItems = useMemo<NestedDocumentGroup[]>(() => {
+    if (grouping !== "party_type" && grouping !== "type_party") return [];
+    const parentGroups: NestedDocumentGroup[] = [];
+    for (const document of data?.items || []) {
+      const parentLabel = grouping === "party_type" ? partyLabel(document) : documentTypeLabel(document);
+      const childLabel = grouping === "party_type" ? documentTypeLabel(document) : partyLabel(document);
+      let parent = parentGroups.find((candidate) => candidate.label === parentLabel);
+      if (!parent) {
+        parent = { label: parentLabel, count: 0, children: [] };
+        parentGroups.push(parent);
+      }
+      parent.count += 1;
+      let child = parent.children.find((candidate) => candidate.label === childLabel);
+      if (!child) {
+        child = { label: childLabel, items: [] };
+        parent.children.push(child);
+      }
+      child.items.push(document);
+    }
+    return parentGroups;
+  }, [data?.items, documentTypeLabel, grouping, partyLabel]);
   const duplicateHints = useMemo(() => duplicateUploadHints(data?.items || []), [data?.items]);
   const duplicateHintCount = useMemo(() => duplicateFilenameCount(data?.items || []), [data?.items]);
   const visibleDocuments = useMemo(() => data?.items || [], [data?.items]);
@@ -243,7 +275,7 @@ function DocumentsContent() {
       </div>
 
       <Card className="mb-6">
-        <CardContent className="grid gap-3 p-5 lg:grid-cols-[1.5fr_repeat(5,1fr)]">
+        <CardContent className="grid gap-3 p-5 lg:grid-cols-[1.5fr_repeat(6,1fr)]">
           <label className="relative">
             <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
             <Input className="pl-9" placeholder="파일명, 거래처명, 품목명, 문서번호로 검색" value={filters.search} onChange={(event) => setFilter("search", event.target.value)} />
@@ -261,8 +293,15 @@ function DocumentsContent() {
             {statuses.map((status) => <option key={status || "all"} value={status}>{statusLabels[status]}</option>)}
           </select>
           <select className="h-10 rounded-md border bg-white px-3 text-sm" value={filters.order} onChange={(event) => setFilter("order", event.target.value)}>
-            <option value="desc">최근 업로드 날짜순</option>
-            <option value="asc">오래된 업로드 날짜순</option>
+            <option value="desc">내림차순</option>
+            <option value="asc">오름차순</option>
+          </select>
+          <select className="h-10 rounded-md border bg-white px-3 text-sm" value={filters.sort_by} onChange={(event) => setFilter("sort_by", event.target.value)}>
+            <option value="created_at">전체 업로드순</option>
+            <option value="updated_at">최근 수정순</option>
+            <option value="extracted_date">문서 날짜순</option>
+            <option value="extracted_amount">금액순</option>
+            <option value="title">제목순</option>
           </select>
           <select
             className="h-10 rounded-md border bg-white px-3 text-sm"
@@ -336,24 +375,55 @@ function DocumentsContent() {
         </div>
       ) : data?.items.length ? (
         <div className="space-y-5">
-          {groupedItems.map((group) => (
-            <section key={group.label} className="space-y-3">
-              <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3">
-                <h2 className="font-semibold">{group.label}</h2>
-                <span className="text-sm text-muted-foreground">{group.items.length}건</span>
-              </div>
-              <DocumentList
-                documents={group.items}
-                view={view}
-                duplicateHintsOverride={duplicateHints}
-                selected={selectedDocuments}
-                onSelectedChange={setSelectedDocuments}
-                selectionScopeDocuments={selectionScopeById}
-                onChanged={() => api.list(params).then(setData)}
-                returnTo="/documents"
-              />
-            </section>
-          ))}
+          <PaginationBar page={page} total={data.total} pageSize={data.page_size} onPageChange={setPage} />
+          {grouping === "party_type" || grouping === "type_party" ? (
+            nestedGroupedItems.map((group) => (
+              <section key={group.label} className="space-y-3 rounded-xl border bg-slate-50/50 p-3">
+                <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3">
+                  <h2 className="font-semibold">{group.label}</h2>
+                  <span className="text-sm text-muted-foreground">{group.count}건</span>
+                </div>
+                {group.children.map((child) => (
+                  <div key={`${group.label}:${child.label}`} className="space-y-3">
+                    <div className="flex items-center justify-between px-2">
+                      <h3 className="text-sm font-semibold text-slate-700">{child.label}</h3>
+                      <span className="text-xs text-muted-foreground">{child.items.length}건</span>
+                    </div>
+                    <DocumentList
+                      documents={child.items}
+                      view={view}
+                      duplicateHintsOverride={duplicateHints}
+                      selected={selectedDocuments}
+                      onSelectedChange={setSelectedDocuments}
+                      selectionScopeDocuments={selectionScopeById}
+                      onChanged={() => api.list(params).then(setData)}
+                      returnTo="/documents"
+                    />
+                  </div>
+                ))}
+              </section>
+            ))
+          ) : (
+            groupedItems.map((group) => (
+              <section key={group.label} className="space-y-3">
+                {grouping !== "none" ? <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3">
+                  <h2 className="font-semibold">{group.label}</h2>
+                  <span className="text-sm text-muted-foreground">{group.items.length}건</span>
+                </div> : null}
+                <DocumentList
+                  documents={group.items}
+                  view={view}
+                  duplicateHintsOverride={duplicateHints}
+                  selected={selectedDocuments}
+                  onSelectedChange={setSelectedDocuments}
+                  selectionScopeDocuments={selectionScopeById}
+                  onChanged={() => api.list(params).then(setData)}
+                  returnTo="/documents"
+                />
+              </section>
+            ))
+          )}
+          <PaginationBar page={page} total={data.total} pageSize={data.page_size} onPageChange={setPage} />
         </div>
       ) : (
         <Card>
@@ -361,6 +431,37 @@ function DocumentsContent() {
         </Card>
       )}
     </main>
+  );
+}
+
+function PaginationBar({
+  page,
+  total,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const start = total ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(total, page * pageSize);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3 text-sm">
+      <span className="text-muted-foreground">
+        전체 {total}건 중 {start}-{end}건 표시 · {page}/{totalPages}페이지
+      </span>
+      <div className="flex items-center gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(Math.max(1, page - 1))}>
+          이전
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(Math.min(totalPages, page + 1))}>
+          다음
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -376,7 +477,7 @@ async function loadAllDocumentPages(limit = MAX_GLOBAL_SELECTION) {
     const params = new URLSearchParams({
       page: String(page),
       page_size: String(Math.min(pageSize, remaining)),
-      sort_by: "updated_at",
+      sort_by: "created_at",
       order: "desc",
     });
     const response = await api.list(params);

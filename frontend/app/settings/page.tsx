@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
 
 export default function SettingsPage() {
-  const [grouping, setGrouping] = useState<DocumentGroupingMode>("document_type");
+  const [grouping, setGrouping] = useState<DocumentGroupingMode>("none");
 
   useEffect(() => {
     setGrouping(loadDocumentGroupingMode());
@@ -44,6 +44,9 @@ export default function SettingsPage() {
               <select className="h-10 rounded-md border bg-white px-3 text-sm" value={grouping} onChange={(event) => updateGrouping(event.target.value as DocumentGroupingMode)}>
                 {Object.entries(documentGroupingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
+              <span className="text-xs font-normal text-muted-foreground">
+                거래처별 → 문서 유형별을 선택하면 회사 폴더 아래에 발주서, 납품서, 세금계산서처럼 다시 나눠서 볼 수 있습니다.
+              </span>
             </label>
             <label className="grid gap-2 text-sm font-medium">
               기본 보기 방식

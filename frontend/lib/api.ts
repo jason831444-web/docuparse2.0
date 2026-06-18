@@ -28,6 +28,18 @@ const HEALTH_URL = API_BASE.startsWith("/")
     ? `${API_BASE.slice(0, -4)}/health`
     : `${API_BASE}/health`;
 
+export class ApiRequestError extends Error {
+  detail: unknown;
+  status: number;
+
+  constructor(message: string, detail: unknown, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.detail = detail;
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -35,7 +47,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail ?? "요청에 실패했습니다"));
+    const detail = error.detail ?? "요청에 실패했습니다";
+    throw new ApiRequestError(humanReadableApiError(detail), detail, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -188,4 +201,79 @@ function downloadBlob(blob: Blob, filename: string) {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+}
+
+function humanReadableApiError(detail: unknown) {
+  if (typeof detail === "string") return detail;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return "요청에 실패했습니다";
+  const record = detail as Record<string, unknown>;
+  const message = typeof record.message === "string" ? record.message : null;
+  const blocking = Array.isArray(record.blocking) ? record.blocking.map(String) : [];
+  const warnings = Array.isArray(record.warnings) ? record.warnings.map(String) : [];
+  if (message === "Approval blocked by unresolved review issues." || blocking.length) {
+    const readableBlocks = blocking.map(readableApprovalBlock).filter(Boolean);
+    const readableWarnings = warnings.map(readableApprovalWarning).filter(Boolean);
+    const lines = [
+      "아직 해결되지 않은 검토 항목이 있어 확정할 수 없습니다.",
+      ...readableBlocks.map((item) => `- ${item}`),
+      ...readableWarnings.map((item) => `- 참고: ${item}`),
+      "문서 검토 영역에서 값을 수정한 뒤 ‘해결’을 누르거나, 업무상 문제 없으면 ‘무시’를 선택하세요.",
+    ];
+    return lines.join("\n");
+  }
+  if (message) return message;
+  return JSON.stringify(detail);
+}
+
+function readableApprovalBlock(value: string) {
+  const normalized = value.replace(/^unresolved:/, "");
+  const [code, field, index] = normalized.split(":");
+  const itemNo = index && /^\d+$/.test(index) ? `${Number(index) + 1}번째 품목 ` : "";
+  const label = approvalIssueLabel(code);
+  const fieldLabel = approvalFieldLabel(field);
+  return `${itemNo}${label}${fieldLabel ? ` (${fieldLabel})` : ""}`;
+}
+
+function readableApprovalWarning(value: string) {
+  return approvalIssueLabel(value);
+}
+
+function approvalIssueLabel(code?: string) {
+  const labels: Record<string, string> = {
+    missing_document_number: "문서번호를 확인해야 합니다.",
+    missing_vendor_name: "공급업체를 확인해야 합니다.",
+    missing_customer_name: "고객사를 확인해야 합니다.",
+    missing_line_items: "품목 정보가 없습니다.",
+    missing_item_name: "품목명이 비어 있습니다.",
+    missing_quantity: "수량이 비어 있습니다.",
+    missing_price_or_total: "단가 또는 금액을 확인해야 합니다.",
+    amount_mismatch: "문서 총액과 품목 합계가 맞지 않습니다.",
+    invalid_line_amount: "품목 금액 계산을 확인해야 합니다.",
+    item_code_name_conflict: "품목명과 내부 품목코드가 서로 맞지 않을 수 있습니다.",
+    internal_item_unmatched: "사내 품목마스터에서 맞는 내부 품목코드를 찾지 못했습니다.",
+    internal_item_ambiguous: "사내 품목마스터 후보가 여러 개라 선택이 필요합니다.",
+    item_matching_skipped: "품목마스터가 없어 내부 품목코드 매칭을 확인해야 합니다.",
+    subtotal_tax_total_mismatch: "공급가액, 세액, 합계금액이 맞지 않습니다.",
+    tax_amount_fields_missing: "세금계산서 금액 필드를 확인해야 합니다.",
+    return_document_misclassified_as_delivery_note: "반품/차감 문서가 납품서로 분류되어 확인이 필요합니다.",
+    missing_total: "문서 총액을 확인해야 합니다.",
+    related_document_missing: "연결할 원문서 번호를 확인해야 합니다.",
+    amount_direction_requires_review: "반품/차감 금액 방향을 확인해야 합니다.",
+  };
+  return labels[code || ""] || (code ? code.replaceAll("_", " ") : "검토 항목을 확인해야 합니다.");
+}
+
+function approvalFieldLabel(field?: string) {
+  const labels: Record<string, string> = {
+    document: "문서 전체",
+    total_amount: "총액",
+    statement_summary: "정산 요약",
+    "line_items.item_name": "품목명",
+    "line_items.item_code": "문서 품목코드",
+    "line_items.internal_item_code": "내부 품목코드",
+    "line_items.quantity": "수량",
+    "line_items.unit_price": "단가",
+    "line_items.line_total": "합계금액",
+  };
+  return labels[field || ""] || null;
 }

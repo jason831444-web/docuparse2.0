@@ -33,7 +33,7 @@ from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 
 
 logger = logging.getLogger(__name__)
-_PROCESSING_SEMAPHORE = threading.BoundedSemaphore(3)
+_PROCESSING_SEMAPHORE = threading.BoundedSemaphore(get_settings().document_processing_concurrency)
 
 
 def _safe_remote_upload_metadata(value: Any) -> dict[str, Any]:
