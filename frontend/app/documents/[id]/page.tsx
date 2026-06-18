@@ -325,39 +325,41 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
   const fileUrl = documentFileUrl(document.file_url);
   const previewUrl = isPdf ? `${fileUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH` : fileUrl;
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0">
+    <Card className="overflow-hidden xl:flex xl:h-[calc(100vh-7rem)] xl:flex-col">
+      <CardHeader className="flex-row items-center justify-between space-y-0 xl:shrink-0">
         <CardTitle>원본 문서</CardTitle>
         <Button asChild variant="outline" size="sm">
           <a href={fileUrl} target="_blank" rel="noreferrer">원본 열기</a>
         </Button>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
         {isImage ? (
-          <div className="relative h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white">
+          <div className="relative h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white xl:min-h-0 xl:max-h-none xl:flex-1">
             <Image src={fileUrl} alt={document.original_filename} fill unoptimized className="object-contain" />
           </div>
         ) : isPdf ? (
           <iframe
             src={previewUrl}
             title={document.original_filename}
-            className="h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white"
+            className="h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white xl:min-h-0 xl:max-h-none xl:flex-1"
           />
         ) : (
-          <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center">
+          <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center xl:flex-1">
             <FileText className="mb-3 size-10 text-primary" />
             <p className="font-semibold">{document.original_filename}</p>
             <p className="mt-1 text-sm text-muted-foreground">{document.mime_type}</p>
           </div>
         )}
-        <InfoGrid
-          items={[
-            ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
-            ["추출 방식", extractionMethodLabel(document)],
-            ["업로드 날짜", formatDateTime(document.created_at)],
-            ["최근 수정", formatDateTime(document.updated_at)],
-          ]}
-        />
+        <div className="xl:shrink-0">
+          <InfoGrid
+            items={[
+              ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
+              ["추출 방식", extractionMethodLabel(document)],
+              ["업로드 날짜", formatDateTime(document.created_at)],
+              ["최근 수정", formatDateTime(document.updated_at)],
+            ]}
+          />
+        </div>
       </CardContent>
     </Card>
   );
@@ -872,12 +874,12 @@ export default function DocumentDetailPage() {
         </Card>
       ) : null}
 
-      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <section className="space-y-6">
-          <div className="xl:sticky xl:top-6">
-            <OriginalPreviewCard document={document} isImage={isImage} />
-          </div>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-6 xl:h-[calc(100vh-7rem)] xl:grid-cols-[minmax(420px,1fr)_minmax(520px,0.95fr)] xl:items-stretch xl:overflow-hidden">
+        <section className="xl:h-full xl:min-h-0">
+          <OriginalPreviewCard document={document} isImage={isImage} />
+        </section>
 
+        <section className="flex min-w-0 flex-col gap-6 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pb-6 xl:pr-2">
           <div className="flex flex-wrap gap-2">
             {detailTabs.map((tab) => (
               <button
@@ -975,9 +977,7 @@ export default function DocumentDetailPage() {
               </CardContent>
             </Card>
           ) : null}
-        </section>
 
-        <section className="flex flex-col gap-6">
           <TaxonomyPolicyCard document={document} />
           <QualityDiagnosisCard document={document} />
           <WorkflowPanel document={document} />
