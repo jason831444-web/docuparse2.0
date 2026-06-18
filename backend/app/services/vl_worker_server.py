@@ -286,6 +286,23 @@ def _analyze_path(
                 schema_metadata.update({"used": True, "transport": "paddleocr_predict_prompt"})
                 text = str(schema_json.get("raw_text") or text)
                 tables = _tables_from_schema_payload(schema_json, source="vl_schema_prompt")
+            elif schema_metadata.get("attempted") and text.strip():
+                schema_metadata["repair_attempted"] = True
+                repaired, repair_error = _run_llama_schema_json_repair(text, settings)
+                if repaired and _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair"):
+                    schema_metadata.update(
+                        {
+                            "used": True,
+                            "transport": "paddleocr_predict_text_schema_repair",
+                            "repair_used": True,
+                            "table_source": "vl_schema_prompt_repair",
+                        }
+                    )
+                    text = str(repaired.get("raw_text") or text)
+                    tables = _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair")
+                    output = [{"text": text, "structured_json": repaired, "source_output": output}]
+                else:
+                    schema_metadata["repair_error"] = repair_error
         validation = validate_output_text(text, [])
         if not tables:
             tables = _extract_structured_tables(text, output, original_filename=original_filename or path.name)
@@ -447,7 +464,7 @@ def _run_direct_llama_schema_prompt(image_path: Path, settings: Any) -> tuple[di
     body = {
         "model": getattr(settings, "paddleocr_vl_gguf_model_file", "PaddleOCR-VL-1.6-GGUF.gguf"),
         "temperature": 0,
-        "max_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+        "max_tokens": max(int(getattr(settings, "paddleocr_vl_gguf_n_predict", 512) or 512), 1024),
         "response_format": {"type": "json_object"},
         "messages": [
             {
@@ -484,7 +501,7 @@ def _run_llama_schema_json_repair(content: str, settings: Any) -> tuple[dict[str
     body = {
         "model": getattr(settings, "paddleocr_vl_gguf_model_file", "PaddleOCR-VL-1.6-GGUF.gguf"),
         "temperature": 0,
-        "max_tokens": getattr(settings, "paddleocr_vl_gguf_n_predict", 512),
+        "max_tokens": max(int(getattr(settings, "paddleocr_vl_gguf_n_predict", 512) or 512), 1024),
         "response_format": {"type": "json_object"},
         "messages": [
             {

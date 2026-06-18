@@ -132,6 +132,16 @@ class _FakeSchemaRepairResponse:
         }
 
 
+class _FakeBadSchemaRepairResponse:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return {"choices": [{"message": {"content": "아직 JSON이 아닙니다"}}]}
+
+
 class _FakePipeline:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
@@ -526,3 +536,64 @@ def test_vl_worker_repairs_non_json_schema_prompt_into_table_json(monkeypatch, t
     assert row["document_item_code"] == "BRK-SUS"
     assert row["received_quantity"] == 20
     assert len(calls) == 2
+
+
+def test_vl_worker_repairs_paddle_vlm_text_into_table_json_before_table_extractor(monkeypatch, tmp_path: Path):
+    calls: list[dict] = []
+    fake_pipeline = _FakeInspectionPipeline()
+    monkeypatch.setattr(
+        vl_worker_server,
+        "get_settings",
+        lambda: SimpleNamespace(
+            upload_dir=tmp_path,
+            paddleocr_vl_gguf_n_predict=256,
+            paddleocr_vl_gguf_model_dir=tmp_path,
+            paddleocr_vl_gguf_model_file="model.gguf",
+            paddleocr_vl_gguf_mmproj_file="mmproj.gguf",
+            paddleocr_vl_gguf_server_url="http://localhost:8080/v1",
+            paddleocr_vl_gguf_concurrency=1,
+            paddleocr_vl_gguf_max_pages=1,
+            paddleocr_vl_gguf_timeout_seconds=30,
+            paddleocr_vl_gguf_schema_prompt_enabled=True,
+            paddleocr_vl_gguf_direct_schema_prompt_enabled=True,
+        ),
+    )
+
+    def fake_post(url: str, **kwargs):
+        calls.append({"url": url, "json": kwargs.get("json")})
+        if len(calls) == 1:
+            return _FakeNonJsonSchemaPromptResponse()
+        if len(calls) == 2:
+            return _FakeBadSchemaRepairResponse()
+        assert "베어링 하우징" in kwargs["json"]["messages"][0]["content"]
+        return _FakeSchemaRepairResponse()
+
+    def fail_table_extractor(*_args, **_kwargs):
+        raise AssertionError("heuristic table extractor should not run when VLM text repair succeeds")
+
+    monkeypatch.setattr(vl_worker_server, "_get_pipeline", lambda: fake_pipeline)
+    monkeypatch.setattr("app.services.vl_worker_server.requests.post", fake_post)
+    monkeypatch.setattr(vl_worker_server, "_extract_structured_tables", fail_table_extractor)
+    monkeypatch.setattr(vl_worker_server, "extract_text", lambda output: output[0]["text"])
+    monkeypatch.setattr(
+        vl_worker_server,
+        "validate_output_text",
+        lambda text, expected_terms: {"ok": True, "status": "pass", "matched_terms": ["입고"]},
+    )
+
+    response = TestClient(vl_worker_server.app).post(
+        "/analyze-upload",
+        files={"file": ("incoming-inspection.jpg", b"fake-jpeg-fixture", "image/jpeg")},
+        data={"original_filename": "incoming-inspection.jpg"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["schema_prompt"]["used"] is True
+    assert payload["schema_prompt"]["transport"] == "paddleocr_predict_text_schema_repair"
+    assert payload["schema_prompt"]["repair_used"] is True
+    assert payload["tables"][0]["source"] == "vl_schema_prompt_repair"
+    assert payload["tables"][0]["rows"][0]["item_name"] == "스테인리스 브라켓"
+    assert fake_pipeline.calls
+    assert len(calls) == 3
