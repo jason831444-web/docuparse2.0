@@ -774,6 +774,60 @@ def test_vl_upload_pipeline_classifies_return_credit_category_from_visible_text(
     assert processor._return_or_credit_category(parsed, raw_text) == "credit_note"
 
 
+def test_vl_upload_pipeline_restores_return_credit_visible_amounts_after_matching():
+    final_items = [
+        {
+            "item_name": "AL6061 판재 3T",
+            "source_item_name": "AL6061 판재 3T",
+            "specification": "400x600",
+            "quantity": -2,
+            "unit_price": 18000,
+            "validation_warnings": ["unit_not_visible", "vl_amount_suppressed_due_to_hidden_or_unverified_column"],
+            "review_flags": ["vl_amount_suppressed_due_to_hidden_or_unverified_column"],
+            "item_master_match_status": "unmatched",
+        },
+        {
+            "item_name": "반품 운송비",
+            "source_item_name": "반품 운송비",
+            "quantity": 1,
+            "unit_price": 5000,
+            "validation_warnings": ["unit_not_visible", "vl_amount_suppressed_due_to_hidden_or_unverified_column"],
+            "review_flags": ["vl_amount_suppressed_due_to_hidden_or_unverified_column"],
+            "item_master_match_status": "unmatched",
+        },
+    ]
+    parsed_items = [
+        {
+            "item_name": "AL6061 판재 3T",
+            "specification": "400x600",
+            "quantity": -2,
+            "unit_price": 18000,
+            "supply_amount": -36000,
+            "tax_amount": -3600,
+            "line_total": -39600,
+        },
+        {
+            "item_name": "반품 운송비",
+            "quantity": 1,
+            "unit_price": 5000,
+            "supply_amount": 5000,
+            "tax_amount": 500,
+            "line_total": 5500,
+        },
+    ]
+
+    restored = DocumentProcessor()._restore_return_credit_visible_amounts(final_items, parsed_items)
+
+    assert restored[0]["supply_amount"] == -36000
+    assert restored[0]["tax_amount"] == -3600
+    assert restored[0]["line_total"] == -39600
+    assert restored[1]["supply_amount"] == 5000
+    assert restored[1]["tax_amount"] == 500
+    assert restored[1]["line_total"] == 5500
+    assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" not in restored[0].get("validation_warnings", [])
+    assert "vl_amount_suppressed_due_to_hidden_or_unverified_column" not in restored[1].get("review_flags", [])
+
+
 def test_vl_promoted_candidate_overrides_reparsed_vl_text_before_item_matching():
     processor = DocumentProcessor()
     parsed = ParsedDocument(

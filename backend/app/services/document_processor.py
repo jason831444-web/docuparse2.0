@@ -272,6 +272,13 @@ class DocumentProcessor:
                         ),
                     )
                 )
+                if preserve_return_credit_amounts:
+                    document.line_items = sanitize_for_postgres(
+                        self._restore_return_credit_visible_amounts(
+                            document.line_items or [],
+                            getattr(parsed, "line_items", None) or [],
+                        )
+                    )
             document.title = self._clean_final_title(document.title, interpretation)
             document.merchant_name = self._clean_final_merchant(document.merchant_name)
             if interpretation.summary_hint:
@@ -1259,6 +1266,72 @@ class DocumentProcessor:
             if value is not None and value < 0:
                 return True
         return False
+
+    def _restore_return_credit_visible_amounts(
+        self,
+        line_items: list[dict],
+        parsed_line_items: list[dict],
+    ) -> list[dict]:
+        parsed_candidates = [dict(item) for item in parsed_line_items or [] if isinstance(item, dict)]
+        if not parsed_candidates:
+            return line_items or []
+        restored_items: list[dict] = []
+        used_indexes: set[int] = set()
+        for item in line_items or []:
+            safe_item = dict(item)
+            match_index, parsed_item = self._match_return_credit_visible_amount_source(safe_item, parsed_candidates, used_indexes)
+            if parsed_item:
+                used_indexes.add(match_index)
+                for field in ("supply_amount", "tax_amount", "line_total"):
+                    if parsed_item.get(field) not in (None, "", []) and safe_item.get(field) in (None, "", []):
+                        safe_item[field] = parsed_item.get(field)
+                if any(safe_item.get(field) not in (None, "", []) for field in ("supply_amount", "tax_amount", "line_total")):
+                    self._remove_review_code(safe_item, "vl_amount_suppressed_due_to_hidden_or_unverified_column")
+            restored_items.append(safe_item)
+        return restored_items
+
+    def _match_return_credit_visible_amount_source(
+        self,
+        item: dict[str, Any],
+        parsed_candidates: list[dict],
+        used_indexes: set[int],
+    ) -> tuple[int, dict | None]:
+        item_name = self._row_match_text(item.get("source_item_name") or item.get("item_name"))
+        item_spec = self._row_match_text(item.get("specification") or item.get("spec"))
+        quantity = self._vl_decimal(item.get("quantity"))
+        unit_price = self._vl_decimal(item.get("unit_price"))
+        for index, candidate in enumerate(parsed_candidates):
+            if index in used_indexes:
+                continue
+            candidate_name = self._row_match_text(candidate.get("source_item_name") or candidate.get("item_name"))
+            candidate_spec = self._row_match_text(candidate.get("specification") or candidate.get("spec"))
+            if item_name and candidate_name and item_name != candidate_name:
+                continue
+            if item_spec and candidate_spec and item_spec != candidate_spec:
+                continue
+            candidate_quantity = self._vl_decimal(candidate.get("quantity"))
+            candidate_unit_price = self._vl_decimal(candidate.get("unit_price"))
+            if quantity is not None and candidate_quantity is not None and quantity != candidate_quantity:
+                continue
+            if unit_price is not None and candidate_unit_price is not None and unit_price != candidate_unit_price:
+                continue
+            if any(candidate.get(field) not in (None, "", []) for field in ("supply_amount", "tax_amount", "line_total")):
+                return index, candidate
+        return -1, None
+
+    def _row_match_text(self, value: Any) -> str:
+        text = str(value or "").lower().strip()
+        text = text.replace("×", "x").replace("*", "x")
+        text = re.sub(r"[^0-9a-z가-힣x]+", "", text)
+        return text
+
+    def _remove_review_code(self, item: dict[str, Any], code: str) -> None:
+        for field in ("validation_warnings", "review_flags", "issue_codes"):
+            values = [str(value) for value in item.get(field) or [] if str(value) != code]
+            if values:
+                item[field] = sorted(set(values))
+            else:
+                item.pop(field, None)
 
     def _line_items_for_extraction_method(
         self,
