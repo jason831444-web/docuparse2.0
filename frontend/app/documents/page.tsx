@@ -1,8 +1,9 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Download, Grid2X2, Rows3, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, Building2, ChevronRight, Download, FileText, Folder, FolderOpen, Grid2X2, Rows3, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DocumentList, duplicateUploadHints } from "@/components/document-list";
@@ -19,6 +20,15 @@ const MAX_GLOBAL_SELECTION = 500;
 type DocumentListItem = DocumentListResponse["items"][number];
 type FlatDocumentGroup = { label: string; items: DocumentListItem[] };
 type NestedDocumentGroup = { label: string; count: number; children: FlatDocumentGroup[] };
+type DocumentViewMode = "folders" | "list" | "grid";
+type FolderNodeKind = "mode" | "party" | "document_type";
+type FolderNode = {
+  id: string;
+  label: string;
+  kind: FolderNodeKind;
+  documents: DocumentListItem[];
+  children: FolderNode[];
+};
 const statusLabels: Record<"" | ProcessingStatus, string> = {
   "": "전체 상태",
   uploaded: "업로드됨",
@@ -53,8 +63,9 @@ function DocumentsContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<DocumentListResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"grid" | "list">("list");
+  const [view, setView] = useState<DocumentViewMode>("folders");
   const [grouping, setGrouping] = useState<DocumentGroupingMode>("none");
+  const [folderPathIds, setFolderPathIds] = useState<string[]>([]);
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set());
   const [selectionScopeDocuments, setSelectionScopeDocuments] = useState<DocumentListResponse["items"]>([]);
@@ -161,6 +172,11 @@ function DocumentsContent() {
   const duplicateHints = useMemo(() => duplicateUploadHints(data?.items || []), [data?.items]);
   const duplicateHintCount = useMemo(() => duplicateFilenameCount(data?.items || []), [data?.items]);
   const visibleDocuments = useMemo(() => data?.items || [], [data?.items]);
+  const folderRoots = useMemo(() => buildDocumentFolderRoots(visibleDocuments, grouping, partyLabel, documentTypeLabel), [documentTypeLabel, grouping, partyLabel, visibleDocuments]);
+  const activeFolderNode = useMemo(() => findFolderNodeByPath(folderRoots, folderPathIds), [folderPathIds, folderRoots]);
+  const activeFolderChildren = activeFolderNode ? activeFolderNode.children : folderRoots;
+  const activeFolderDocuments = activeFolderNode && !activeFolderNode.children.length ? activeFolderNode.documents : [];
+  const folderBreadcrumb = useMemo(() => buildFolderBreadcrumb(folderRoots, folderPathIds), [folderPathIds, folderRoots]);
   const totalDocumentCount = allDocumentCount ?? data?.total ?? visibleDocuments.length;
   const selectionScopeById = useMemo(() => {
     const combined = new Map<string, DocumentListResponse["items"][number]>();
@@ -198,6 +214,12 @@ function DocumentsContent() {
   function clearSelectedDocuments() {
     setSelectedDocuments(new Set());
     setSelectionScopeDocuments([]);
+  }
+
+  function updateGrouping(value: DocumentGroupingMode) {
+    setGrouping(value);
+    saveDocumentGroupingMode(value);
+    setFolderPathIds([]);
   }
 
   function selectedExportParams(extra?: Record<string, string>) {
@@ -268,6 +290,7 @@ function DocumentsContent() {
           <Button asChild variant="outline"><a href={api.exportCsvUrl()}><Download className="size-4" /> 전체 CSV</a></Button>
           <Button asChild variant="outline"><a href={api.exportExcelUrl()}><Download className="size-4" /> 전체 Excel</a></Button>
           <div className="flex rounded-md border bg-white p-1">
+            <Button type="button" variant={view === "folders" ? "default" : "ghost"} size="sm" onClick={() => setView("folders")} title="폴더 보기"><FolderOpen className="size-4" /></Button>
             <Button type="button" variant={view === "list" ? "default" : "ghost"} size="sm" onClick={() => setView("list")}><Rows3 className="size-4" /></Button>
             <Button type="button" variant={view === "grid" ? "default" : "ghost"} size="sm" onClick={() => setView("grid")}><Grid2X2 className="size-4" /></Button>
           </div>
@@ -307,9 +330,7 @@ function DocumentsContent() {
             className="h-10 rounded-md border bg-white px-3 text-sm"
             value={grouping}
             onChange={(event) => {
-              const value = event.target.value as DocumentGroupingMode;
-              setGrouping(value);
-              saveDocumentGroupingMode(value);
+              updateGrouping(event.target.value as DocumentGroupingMode);
             }}
           >
             {Object.entries(documentGroupingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -376,7 +397,25 @@ function DocumentsContent() {
       ) : data?.items.length ? (
         <div className="space-y-5">
           <PaginationBar page={page} total={data.total} pageSize={data.page_size} onPageChange={setPage} />
-          {grouping === "party_type" || grouping === "type_party" ? (
+          {view === "folders" ? (
+            <DocumentFolderExplorer
+              roots={folderRoots}
+              pathIds={folderPathIds}
+              breadcrumb={folderBreadcrumb}
+              currentNode={activeFolderNode}
+              folderChildren={activeFolderChildren}
+              documents={activeFolderDocuments}
+              duplicateHints={duplicateHints}
+              selected={selectedDocuments}
+              onSelectedChange={setSelectedDocuments}
+              selectionScopeDocuments={selectionScopeById}
+              onOpen={(id) => setFolderPathIds([...folderPathIds, id])}
+              onBack={() => setFolderPathIds(folderPathIds.slice(0, -1))}
+              onRoot={() => setFolderPathIds([])}
+              onCrumb={(index) => setFolderPathIds(folderPathIds.slice(0, index + 1))}
+              onChanged={() => api.list(params).then(setData)}
+            />
+          ) : grouping === "party_type" || grouping === "type_party" ? (
             nestedGroupedItems.map((group) => (
               <section key={group.label} className="space-y-3 rounded-xl border bg-slate-50/50 p-3">
                 <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3">
@@ -431,6 +470,131 @@ function DocumentsContent() {
         </Card>
       )}
     </main>
+  );
+}
+
+function DocumentFolderExplorer({
+  roots,
+  pathIds,
+  breadcrumb,
+  currentNode,
+  folderChildren,
+  documents,
+  duplicateHints,
+  selected,
+  onSelectedChange,
+  selectionScopeDocuments,
+  onOpen,
+  onBack,
+  onRoot,
+  onCrumb,
+  onChanged,
+}: {
+  roots: FolderNode[];
+  pathIds: string[];
+  breadcrumb: FolderNode[];
+  currentNode?: FolderNode;
+  folderChildren: FolderNode[];
+  documents: DocumentListItem[];
+  duplicateHints: ReturnType<typeof duplicateUploadHints>;
+  selected: Set<string>;
+  onSelectedChange: (selected: Set<string>) => void;
+  selectionScopeDocuments: DocumentListItem[];
+  onOpen: (id: string) => void;
+  onBack: () => void;
+  onRoot: () => void;
+  onCrumb: (index: number) => void;
+  onChanged: () => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border bg-white">
+      <div className="border-b bg-slate-50/70 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <button type="button" className="font-medium text-primary hover:underline" onClick={onRoot}>문서</button>
+              {breadcrumb.map((item, index) => (
+                <span key={item.id} className="flex items-center gap-2">
+                  <ChevronRight className="size-4" />
+                  <button type="button" className="font-medium text-slate-900 hover:text-primary" onClick={() => onCrumb(index)}>
+                    {item.label}
+                  </button>
+                </span>
+              ))}
+            </div>
+            <h2 className="mt-1 text-lg font-semibold">{currentNode?.label ?? "폴더 보기"}</h2>
+            <p className="text-sm text-muted-foreground">
+              {currentNode ? `${currentNode.documents.length}건 문서 · ${currentNode.children.length}개 하위 폴더` : "회사별 또는 문서유형별 폴더를 열어 탐색합니다."}
+            </p>
+          </div>
+          {pathIds.length ? (
+            <Button type="button" variant="outline" size="sm" onClick={onBack}>
+              <ArrowLeft className="size-4" />
+              상위 폴더
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {folderChildren.length ? (
+        <div className="grid gap-x-7 gap-y-8 p-6 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+          {folderChildren.map((node) => (
+            <FinderFolderIcon key={node.id} node={node} onOpen={() => onOpen(node.id)} />
+          ))}
+        </div>
+      ) : documents.length ? (
+        <div className="space-y-5 p-5">
+          <div className="grid gap-x-7 gap-y-8 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+            {documents.map((document) => (
+              <FinderDocumentIcon key={document.id} document={document} />
+            ))}
+          </div>
+          <DocumentList
+            documents={documents}
+            view="list"
+            duplicateHintsOverride={duplicateHints}
+            selected={selected}
+            onSelectedChange={onSelectedChange}
+            selectionScopeDocuments={selectionScopeDocuments}
+            onChanged={onChanged}
+            returnTo="/documents"
+          />
+        </div>
+      ) : (
+        <div className="p-10 text-center text-muted-foreground">
+          {roots.length ? "이 폴더에는 아직 문서가 없습니다." : "표시할 문서 폴더가 없습니다."}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FinderFolderIcon({ node, onOpen }: { node: FolderNode; onOpen: () => void }) {
+  const caption = node.children.length ? `${node.children.length}개 폴더` : `${node.documents.length}건`;
+  const Icon = node.kind === "party" ? Building2 : node.kind === "document_type" ? FileText : FolderOpen;
+  return (
+    <button type="button" className="group flex min-w-0 flex-col items-center text-center" onClick={onOpen}>
+      <span className="relative grid h-20 w-24 place-items-center rounded-xl bg-sky-100 text-sky-700 shadow-sm ring-1 ring-sky-200 transition group-hover:-translate-y-0.5 group-hover:bg-sky-200 group-hover:shadow-md">
+        <span className="absolute left-3 top-[-7px] h-4 w-10 rounded-t-lg bg-sky-200 ring-1 ring-sky-200" />
+        <Folder className="size-12 fill-sky-300 stroke-sky-600" />
+        <Icon className="absolute bottom-3 right-4 size-4 rounded bg-white/75 p-0.5 text-sky-700" />
+      </span>
+      <span className="mt-2 line-clamp-2 min-h-10 max-w-28 break-words text-sm font-medium leading-tight text-slate-900">{node.label}</span>
+      <span className="text-xs text-muted-foreground">{caption}</span>
+    </button>
+  );
+}
+
+function FinderDocumentIcon({ document }: { document: DocumentListItem }) {
+  const title = document.document_number || document.title || document.original_filename;
+  return (
+    <Link href={`/documents/${document.id}?from=${encodeURIComponent("/documents")}`} className="group flex min-w-0 flex-col items-center text-center">
+      <span className="grid h-20 w-16 place-items-center rounded-lg border bg-white shadow-sm transition group-hover:-translate-y-0.5 group-hover:shadow-md">
+        <FileText className="size-9 text-slate-500" />
+      </span>
+      <span className="mt-2 line-clamp-2 min-h-10 max-w-28 break-words text-sm font-medium leading-tight text-slate-900">{title}</span>
+      <span className="max-w-28 truncate text-xs text-muted-foreground">{statusLabels[document.processing_status] ?? document.processing_status}</span>
+    </Link>
   );
 }
 
@@ -505,4 +669,110 @@ function duplicateFilenameCount(documents: DocumentListResponse["items"]) {
 
 function duplicateFilenameKey(value?: string | null) {
   return (value || "").normalize("NFKC").replace(/\s+/g, "").trim().toLowerCase() || null;
+}
+
+function buildDocumentFolderRoots(
+  documents: DocumentListItem[],
+  grouping: DocumentGroupingMode,
+  partyLabel: (document: DocumentListItem) => string,
+  documentTypeLabel: (document: DocumentListItem) => string,
+) {
+  if (grouping === "party") return buildSingleLevelFolders(documents, partyLabel, "party");
+  if (grouping === "document_type") return buildSingleLevelFolders(documents, documentTypeLabel, "document_type");
+  if (grouping === "party_type") return buildNestedFolders(documents, partyLabel, documentTypeLabel, "party", "document_type");
+  if (grouping === "type_party") return buildNestedFolders(documents, documentTypeLabel, partyLabel, "document_type", "party");
+  return [
+    {
+      id: "party_type",
+      label: "거래처별",
+      kind: "mode" as const,
+      documents,
+      children: buildNestedFolders(documents, partyLabel, documentTypeLabel, "party", "document_type", "party_type"),
+    },
+    {
+      id: "type_party",
+      label: "문서유형별",
+      kind: "mode" as const,
+      documents,
+      children: buildNestedFolders(documents, documentTypeLabel, partyLabel, "document_type", "party", "type_party"),
+    },
+  ];
+}
+
+function buildSingleLevelFolders(
+  documents: DocumentListItem[],
+  labeler: (document: DocumentListItem) => string,
+  kind: Exclude<FolderNodeKind, "mode">,
+  prefix: string = kind,
+): FolderNode[] {
+  return Array.from(groupDocumentsForFolders(documents, labeler).entries())
+    .sort(sortFolderEntries)
+    .map(([label, items]) => ({
+      id: `${prefix}:${stableFolderKey(label)}`,
+      label,
+      kind,
+      documents: items,
+      children: [],
+    }));
+}
+
+function buildNestedFolders(
+  documents: DocumentListItem[],
+  firstLabeler: (document: DocumentListItem) => string,
+  secondLabeler: (document: DocumentListItem) => string,
+  firstKind: Exclude<FolderNodeKind, "mode">,
+  secondKind: Exclude<FolderNodeKind, "mode">,
+  prefix: string = `${firstKind}_${secondKind}`,
+): FolderNode[] {
+  return Array.from(groupDocumentsForFolders(documents, firstLabeler).entries())
+    .sort(sortFolderEntries)
+    .map(([label, items]) => ({
+      id: `${prefix}:${stableFolderKey(label)}`,
+      label,
+      kind: firstKind,
+      documents: items,
+      children: buildSingleLevelFolders(items, secondLabeler, secondKind, `${prefix}:${stableFolderKey(label)}`),
+    }));
+}
+
+function groupDocumentsForFolders(documents: DocumentListItem[], labeler: (document: DocumentListItem) => string) {
+  const groups = new Map<string, DocumentListItem[]>();
+  for (const document of documents) {
+    const label = labeler(document);
+    const items = groups.get(label) ?? [];
+    items.push(document);
+    groups.set(label, items);
+  }
+  return groups;
+}
+
+function sortFolderEntries(a: [string, DocumentListItem[]], b: [string, DocumentListItem[]]) {
+  return b[1].length - a[1].length || a[0].localeCompare(b[0]);
+}
+
+function findFolderNodeByPath(roots: FolderNode[], pathIds: string[]) {
+  let current: FolderNode | undefined;
+  let nodes = roots;
+  for (const id of pathIds) {
+    current = nodes.find((node) => node.id === id);
+    if (!current) return undefined;
+    nodes = current.children;
+  }
+  return current;
+}
+
+function buildFolderBreadcrumb(roots: FolderNode[], pathIds: string[]) {
+  const breadcrumb: FolderNode[] = [];
+  let nodes = roots;
+  for (const id of pathIds) {
+    const current = nodes.find((node) => node.id === id);
+    if (!current) break;
+    breadcrumb.push(current);
+    nodes = current.children;
+  }
+  return breadcrumb;
+}
+
+function stableFolderKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9가-힣_ -]/gi, "").slice(0, 80) || "unknown";
 }

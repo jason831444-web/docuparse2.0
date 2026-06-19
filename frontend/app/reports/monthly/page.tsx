@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Download, FileSpreadsheet, RefreshCcw } from "lucide-react";
+import { AlertTriangle, Download, FileSpreadsheet, LineChart, RefreshCcw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -137,43 +137,7 @@ export default function MonthlyReportPage() {
             <MetricCard label="금액 없는 수량 문서" value={report.summary.no_price_documents ?? 0} />
           </section>
 
-          <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <HorizontalBarChart
-              title="거래처별 거래 금액 그래프"
-              description={selectedParty ? "선택한 거래처 기준 집계입니다." : "금액 기준 상위 거래처를 한눈에 봅니다."}
-              rows={report.by_party.slice(0, 8).map((row) => ({
-                label: row.name,
-                value: row.total_amount,
-                displayValue: formatMoney(row.total_amount, "KRW"),
-                caption: `${row.document_count}건`,
-              }))}
-            />
-            <HorizontalBarChart
-              title="품목별 금액 그래프"
-              description="품목별 총 금액 기준 상위 항목입니다."
-              rows={report.by_item.slice(0, 8).map((row) => ({
-                label: row.spec ? `${row.item_name} · ${row.spec}` : row.item_name,
-                value: row.total_amount,
-                displayValue: formatMoney(row.total_amount, "KRW"),
-                caption: `수량 ${row.quantity}`,
-              }))}
-            />
-          </section>
-
-          <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <StatusChart report={report} />
-            <HorizontalBarChart
-              title="문서 유형별 업무량 그래프"
-              description="문서 유형별 처리 건수를 비교합니다."
-              rows={(report.by_document_type ?? []).slice(0, 8).map((row) => ({
-                label: titleCaseLabel(row.document_type),
-                value: row.document_count,
-                displayValue: `${row.document_count}건`,
-                caption: `검수 ${row.verified_documents} · 대기 ${row.pending_documents}`,
-              }))}
-              valueKind="count"
-            />
-          </section>
+          <DateTrendChart report={report} />
 
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <ReportTable
@@ -253,99 +217,118 @@ function MetricCard({ label, value, tone }: { label: string; value: string | num
   );
 }
 
-function HorizontalBarChart({
-  title,
-  description,
-  rows,
-  valueKind = "money",
-}: {
-  title: string;
-  description: string;
-  rows: Array<{ label: string; value: number; displayValue: string; caption?: string }>;
-  valueKind?: "money" | "count";
-}) {
-  const maxValue = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 0);
+function DateTrendChart({ report }: { report: MonthlyReport }) {
+  const rows = (report.by_date ?? []).filter((row) => row.document_count || row.total_amount || row.pending_documents || row.verified_documents);
+  const chartRows = rows.length ? rows : (report.by_date ?? []);
+  const width = 920;
+  const height = 260;
+  const padding = { left: 54, right: 26, top: 26, bottom: 48 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const maxAmount = Math.max(...chartRows.map((row) => Number(row.total_amount) || 0), 0);
+  const maxCount = Math.max(...chartRows.map((row) => Number(row.document_count) || 0), 1);
+  const amountPoints = chartRows.map((row, index) => pointFor(index, chartRows.length, Number(row.total_amount) || 0, maxAmount || 1, padding, innerWidth, innerHeight));
+  const countPoints = chartRows.map((row, index) => pointFor(index, chartRows.length, Number(row.document_count) || 0, maxCount, padding, innerWidth, innerHeight));
+  const amountPath = buildPolylinePath(amountPoints);
+  const countPath = buildPolylinePath(countPoints);
+  const amountAreaPath = amountPoints.length
+    ? `${amountPath} L ${amountPoints[amountPoints.length - 1].x} ${padding.top + innerHeight} L ${amountPoints[0].x} ${padding.top + innerHeight} Z`
+    : "";
+  const xLabels = compactDateLabels(chartRows.map((row) => row.date));
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <BarChart3 className="size-4 text-primary" />
-          {title}
+          <LineChart className="size-4 text-primary" />
+          날짜별 문서 처리 추이
         </CardTitle>
-        <p className="text-sm text-muted-foreground">{description}</p>
+        <p className="text-sm text-muted-foreground">
+          선택한 기간의 날짜별 문서 수와 검수 완료 문서 금액 흐름을 함께 봅니다.
+        </p>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {rows.length ? rows.map((row, index) => {
-          const value = Number(row.value) || 0;
-          const width = maxValue ? Math.max(4, Math.round((Math.abs(value) / maxValue) * 100)) : 0;
-          const negative = value < 0;
-          return (
-            <div key={`${row.label}-${index}`} className="grid gap-1.5">
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="min-w-0 truncate font-medium text-slate-800">{row.label}</span>
-                <span className={negative ? "shrink-0 font-semibold text-red-700" : "shrink-0 font-semibold text-slate-900"}>
-                  {row.displayValue}
-                </span>
-              </div>
-              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className={`h-full rounded-full ${negative ? "bg-red-500" : valueKind === "count" ? "bg-blue-500" : "bg-emerald-500"}`}
-                  style={{ width: `${width}%` }}
-                />
-              </div>
-              {row.caption ? <p className="text-[11px] text-muted-foreground">{row.caption}</p> : null}
+      <CardContent>
+        {chartRows.length ? (
+          <div className="overflow-x-auto">
+            <svg className="min-w-[720px] rounded-lg border bg-white" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="날짜별 문서 처리 추이 그래프">
+              <defs>
+                <linearGradient id="amountTrendFill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.26" />
+                  <stop offset="100%" stopColor="#10b981" stopOpacity="0.03" />
+                </linearGradient>
+              </defs>
+              {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+                const y = padding.top + innerHeight * ratio;
+                return <line key={ratio} x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="#e2e8f0" strokeDasharray={ratio === 1 ? "0" : "4 4"} />;
+              })}
+              <text x={padding.left} y={18} className="fill-slate-500 text-[11px]">금액</text>
+              <text x={width - padding.right - 34} y={18} className="fill-slate-500 text-[11px]">문서 수</text>
+              {amountAreaPath ? <path d={amountAreaPath} fill="url(#amountTrendFill)" /> : null}
+              {amountPath ? <path d={amountPath} fill="none" stroke="#10b981" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" /> : null}
+              {countPath ? <path d={countPath} fill="none" stroke="#2563eb" strokeDasharray="5 5" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" /> : null}
+              {chartRows.map((row, index) => {
+                const amountPoint = amountPoints[index];
+                const countPoint = countPoints[index];
+                return (
+                  <g key={row.date}>
+                    <circle cx={amountPoint.x} cy={amountPoint.y} r="4" fill="#10b981">
+                      <title>{`${formatDate(row.date)} 거래금액 ${formatMoney(row.total_amount, "KRW")}`}</title>
+                    </circle>
+                    <circle cx={countPoint.x} cy={countPoint.y} r="3.5" fill="#2563eb">
+                      <title>{`${formatDate(row.date)} 문서 ${row.document_count}건 · 검수 ${row.verified_documents}건 · 대기 ${row.pending_documents}건`}</title>
+                    </circle>
+                  </g>
+                );
+              })}
+              {xLabels.map((label) => (
+                <text key={label.index} x={pointFor(label.index, chartRows.length, 0, 1, padding, innerWidth, innerHeight).x} y={height - 19} textAnchor="middle" className="fill-slate-500 text-[11px]">
+                  {label.text}
+                </text>
+              ))}
+              <text x={padding.left} y={height - 7} className="fill-slate-400 text-[10px]">날짜</text>
+            </svg>
+            <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><span className="size-2.5 rounded-full bg-emerald-500" />검수 완료 거래금액</span>
+              <span className="flex items-center gap-1"><span className="size-2.5 rounded-full bg-blue-600" />전체 문서 수</span>
+              <span>금액 없는 수량 문서는 금액선에는 반영하지 않습니다.</span>
             </div>
-          );
-        }) : (
-          <p className="rounded-lg border bg-slate-50 p-6 text-sm text-muted-foreground">그래프로 표시할 데이터가 없습니다.</p>
+          </div>
+        ) : (
+          <p className="rounded-lg border bg-slate-50 p-6 text-sm text-muted-foreground">날짜별로 표시할 데이터가 없습니다.</p>
         )}
       </CardContent>
     </Card>
   );
 }
 
-function StatusChart({ report }: { report: MonthlyReport }) {
-  const rows = [
-    { label: "검수 완료", value: report.summary.verified_documents, className: "bg-emerald-500" },
-    { label: "미검수/대기", value: report.summary.pending_documents, className: "bg-amber-500" },
-    { label: "확인 필요", value: report.summary.documents_with_errors, className: "bg-red-500" },
-    { label: "금액 없는 수량 문서", value: report.summary.no_price_documents ?? 0, className: "bg-slate-500" },
-  ];
-  const total = Math.max(report.summary.total_documents, rows.reduce((sum, row) => sum + row.value, 0), 1);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <BarChart3 className="size-4 text-primary" />
-          문서 처리 상태 그래프
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">기간 내 문서 처리 상태를 비교합니다.</p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex h-4 overflow-hidden rounded-full bg-slate-100">
-          {rows.map((row) => (
-            <span
-              key={row.label}
-              className={row.className}
-              style={{ width: `${Math.max(0, Math.round((row.value / total) * 100))}%` }}
-              title={`${row.label} ${row.value}건`}
-            />
-          ))}
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {rows.map((row) => (
-            <div key={row.label} className="flex items-center justify-between rounded-md border bg-white px-3 py-2 text-sm">
-              <span className="flex items-center gap-2">
-                <span className={`size-2.5 rounded-full ${row.className}`} />
-                {row.label}
-              </span>
-              <span className="font-semibold">{row.value}건</span>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
+function pointFor(
+  index: number,
+  length: number,
+  value: number,
+  maxValue: number,
+  padding: { left: number; top: number },
+  innerWidth: number,
+  innerHeight: number,
+) {
+  const x = padding.left + (length <= 1 ? innerWidth / 2 : (index / (length - 1)) * innerWidth);
+  const y = padding.top + innerHeight - (maxValue ? Math.min(1, Math.max(0, value / maxValue)) * innerHeight : 0);
+  return { x, y };
+}
+
+function buildPolylinePath(points: Array<{ x: number; y: number }>) {
+  if (!points.length) return "";
+  return points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+}
+
+function compactDateLabels(dates: string[]) {
+  if (!dates.length) return [];
+  const target = Math.min(6, dates.length);
+  const step = Math.max(1, Math.floor((dates.length - 1) / Math.max(target - 1, 1)));
+  const indexes = new Set<number>([0, dates.length - 1]);
+  for (let index = 0; index < dates.length; index += step) indexes.add(index);
+  return Array.from(indexes)
+    .sort((a, b) => a - b)
+    .map((index) => ({ index, text: dates[index].slice(5).replace("-", ".") }));
 }
 
 function ReportTable({ title, description, headers, rows }: { title: string; description: string; headers: string[]; rows: Array<Array<string | number>> }) {

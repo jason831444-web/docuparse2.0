@@ -196,6 +196,32 @@ def test_report_groups_by_document_type_and_review_status():
     assert report["summary"]["review_required_documents"] == 1
 
 
+def test_report_includes_daily_timeline_rows():
+    service = MonthlyReportService()
+    documents = [
+        _document(document_number="PO-10", issue_date=date(2026, 6, 10), extracted_amount=Decimal("1000")),
+        _document(document_number="PO-11", issue_date=date(2026, 6, 11), extracted_amount=Decimal("2000")),
+        _document(document_number="PEND-11", issue_date=date(2026, 6, 11), processing_status=ProcessingStatus.needs_review),
+    ]
+
+    report = service.build_for_range(
+        documents,
+        start_date=date(2026, 6, 10),
+        end_date=date(2026, 6, 13),
+        period="custom",
+    )
+
+    by_date = {row["date"]: row for row in report["by_date"]}
+    assert list(by_date) == ["2026-06-10", "2026-06-11", "2026-06-12"]
+    assert by_date["2026-06-10"]["document_count"] == 1
+    assert by_date["2026-06-10"]["total_amount"] == 1000
+    assert by_date["2026-06-11"]["document_count"] == 2
+    assert by_date["2026-06-11"]["verified_documents"] == 1
+    assert by_date["2026-06-11"]["pending_documents"] == 1
+    assert by_date["2026-06-11"]["total_amount"] == 2000
+    assert by_date["2026-06-12"]["document_count"] == 0
+
+
 def test_monthly_report_exports_xlsx_and_csv():
     pytest.importorskip("openpyxl")
     service = MonthlyReportService()
@@ -211,6 +237,7 @@ def test_monthly_report_exports_xlsx_and_csv():
     assert "By Party" in workbook_xml
     assert "By Item" in workbook_xml
     assert "By Document Type" in workbook_xml
+    assert "By Date" in workbook_xml
     assert "Issues" in workbook_xml
     assert "Summary" in csv
     assert "By Party" in csv

@@ -483,6 +483,16 @@ export interface MonthlyReportDocumentTypeRow {
   no_price_documents: number;
 }
 
+export interface MonthlyReportDateRow {
+  date: string;
+  document_count: number;
+  verified_documents: number;
+  pending_documents: number;
+  total_amount: number;
+  review_required_documents: number;
+  no_price_documents: number;
+}
+
 export interface MonthlyReportIssueRow {
   document_id?: string | null;
   document_type?: string | null;
@@ -505,6 +515,7 @@ export interface MonthlyReport {
   by_party: MonthlyReportPartyRow[];
   by_item: MonthlyReportItemRow[];
   by_document_type?: MonthlyReportDocumentTypeRow[];
+  by_date?: MonthlyReportDateRow[];
   top_parties: MonthlyReportPartyRow[];
   top_items: MonthlyReportItemRow[];
   issues: {

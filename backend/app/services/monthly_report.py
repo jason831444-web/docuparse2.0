@@ -47,6 +47,7 @@ class MonthlyReportService:
         by_party: dict[str, dict[str, Any]] = {}
         by_item: dict[tuple[str, str], dict[str, Any]] = {}
         by_document_type: dict[str, dict[str, Any]] = {}
+        by_date = self._date_series(range_documents, start_date, end_date)
         missing_required_fields: list[dict[str, Any]] = []
         calculation_mismatches: list[dict[str, Any]] = []
         pending_issue_rows: list[dict[str, Any]] = []
@@ -146,6 +147,7 @@ class MonthlyReportService:
             "by_party": [self._json_row(row) for row in by_party_rows],
             "by_item": [self._json_row(row) for row in by_item_rows],
             "by_document_type": [self._json_row(row) for row in by_document_type_rows],
+            "by_date": [self._json_row(row) for row in by_date],
             "top_parties": [self._json_row(row) for row in by_party_rows[:5]],
             "top_items": [self._json_row(row) for row in by_item_rows[:10]],
             "issues": issues,
@@ -158,6 +160,7 @@ class MonthlyReportService:
             pd.DataFrame(report.get("by_party") or []).to_excel(writer, index=False, sheet_name="By Party")
             pd.DataFrame(report.get("by_item") or []).to_excel(writer, index=False, sheet_name="By Item")
             pd.DataFrame(report.get("by_document_type") or []).to_excel(writer, index=False, sheet_name="By Document Type")
+            pd.DataFrame(report.get("by_date") or []).to_excel(writer, index=False, sheet_name="By Date")
             pd.DataFrame(self._issue_rows(report)).to_excel(writer, index=False, sheet_name="Issues")
         return buffer.getvalue()
 
@@ -170,6 +173,8 @@ class MonthlyReportService:
             rows.append({"section": "By Item", **row})
         for row in report.get("by_document_type") or []:
             rows.append({"section": "By Document Type", **row})
+        for row in report.get("by_date") or []:
+            rows.append({"section": "By Date", **row})
         for row in self._issue_rows(report):
             rows.append({"section": "Issues", **row})
         buffer = io.StringIO()
@@ -177,11 +182,11 @@ class MonthlyReportService:
         return buffer.getvalue()
 
     def _belongs_to_month(self, document: Document, year: int, month: int) -> bool:
-        value = document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
+        value = self._document_date_value(document)
         return bool(value and value.year == year and value.month == month)
 
     def _belongs_to_range(self, document: Document, start_date: date, end_date: date) -> bool:
-        value = document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
+        value = self._document_date_value(document)
         return bool(value and start_date <= value < end_date)
 
     def _date_from_datetime(self, value: datetime | None) -> date | None:
@@ -200,8 +205,11 @@ class MonthlyReportService:
         return re.sub(r"\s+", "", self._clean_text(value) or "").casefold()
 
     def _document_date(self, document: Document) -> str | None:
-        value = document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
+        value = self._document_date_value(document)
         return value.isoformat() if value else None
+
+    def _document_date_value(self, document: Document) -> date | None:
+        return document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
 
     def _document_amount(self, document: Document) -> Decimal | None:
         explicit_amount = self._decimal(document.extracted_amount)
@@ -298,6 +306,43 @@ class MonthlyReportService:
             if issue.get("document_id")
         }
         return len(ids)
+
+    def _date_series(self, documents: list[Document], start_date: date, end_date: date) -> list[dict[str, Any]]:
+        rows: dict[date, dict[str, Any]] = {}
+        cursor = start_date
+        while cursor < end_date:
+            rows[cursor] = {
+                "date": cursor.isoformat(),
+                "document_count": 0,
+                "verified_documents": 0,
+                "pending_documents": 0,
+                "total_amount": Decimal("0"),
+                "review_required_documents": 0,
+                "no_price_documents": 0,
+            }
+            cursor = date.fromordinal(cursor.toordinal() + 1)
+
+        for document in documents:
+            document_date = self._document_date_value(document)
+            if document_date is None:
+                continue
+            row = rows.get(document_date)
+            if row is None:
+                continue
+            row["document_count"] += 1
+            if self._is_verified(document):
+                row["verified_documents"] += 1
+                amount = self._document_amount(document)
+                if amount is not None:
+                    row["total_amount"] += amount
+            else:
+                row["pending_documents"] += 1
+            if document.review_required:
+                row["review_required_documents"] += 1
+            if not self._amount_required(document):
+                row["no_price_documents"] += 1
+
+        return [rows[key] for key in sorted(rows)]
 
     def _summary_row(self, report: dict[str, Any]) -> dict[str, Any]:
         summary = report.get("summary") or {}
