@@ -246,25 +246,26 @@ def test_vl_upload_pipeline_uses_original_image_by_default(tmp_path):
     )
 
     assert worker.calls[0][1] == "DOC-010_internal_transfer_blurry_uncropped_photo.webp"
-    assert worker.calls[0][0] != source_path
-    assert worker.calls[0][0].name.endswith("-vl-light-page.png")
+    assert worker.calls[0][0] == source_path
     assert metadata is not None
-    assert metadata["vl_preprocess_mode"] == "light_page_preprocess"
-    assert metadata["vl_preprocess_input"]["variant_name"] == "light_page_preprocess"
-    assert metadata["vl_preprocess_policy"]["selected_mode"] == "light_page_preprocess"
-    assert metadata["vl_preprocess_policy"]["reason"] == "scan_light_page_minimal_default"
-    assert metadata["vl_preprocess_policy"]["upscale_factor"] == 2.2
-    assert metadata["vl_preprocess_policy"]["contrast_mode"] == "weak_background_normalization_clahe"
+    assert metadata["vl_preprocess_mode"] == "original"
+    assert metadata["vl_preprocess_input"]["variant_name"] == "original"
+    assert metadata["vl_preprocess_policy"]["selected_mode"] == "original"
+    assert metadata["vl_preprocess_policy"]["reason"] == "scan_original_safe_default"
+    assert metadata["vl_preprocess_policy"]["upscale_factor"] is None
+    assert metadata["vl_preprocess_policy"]["contrast_mode"] is None
+    assert metadata["vl_preprocess_policy"]["light_page_preprocess"]["used"] is False
+    assert metadata["vl_preprocess_policy"]["light_page_preprocess"]["skip_reason"] == "debug_candidate_not_used_by_default"
     assert metadata["vl_preprocess_policy"]["current_standard"]["used"] is False
     assert metadata["vl_preprocess_policy"]["current_standard"]["skip_reason"] == "legacy_debug_only_not_used_by_default"
     assert "vl_input_candidate_comparison" not in metadata
-    assert metadata["vl_provider_metadata"]["input_variant"]["variant_name"] == "light_page_preprocess"
+    assert metadata["vl_provider_metadata"]["input_variant"]["variant_name"] == "original"
     assert "input_candidate_comparison" not in metadata["vl_provider_metadata"]
     assert metadata["vl_candidate_summary"]["parsed_line_item_count"] == 3
     assert "vl_candidate_preprocessed_retry_requires_review" not in metadata["vl_candidate_summary"]["issue_codes"]
 
 
-def test_vl_upload_pipeline_uses_light_page_for_low_contrast_photo(tmp_path):
+def test_vl_upload_pipeline_uses_contrast_only_for_low_contrast_photo(tmp_path):
     text = """
     납품서
     문서번호 DN-2026-0003
@@ -284,8 +285,8 @@ def test_vl_upload_pipeline_uses_light_page_for_low_contrast_photo(tmp_path):
     processor = _processor(worker)
     source_path = tmp_path / "delivery-photo.jpg"
     _write_test_image(source_path, color=(96, 93, 90))
-    light_path = tmp_path / "delivery-photo-vl-light-page.png"
-    light_path.write_bytes(b"processed")
+    contrast_path = tmp_path / "delivery-photo-vl-contrast-only.png"
+    contrast_path.write_bytes(b"processed")
     processor._safe_quality_for_vl_input = lambda _path: {
         "likely_scan_type": "photo",
         "overall_quality_score": 0.52,
@@ -295,20 +296,12 @@ def test_vl_upload_pipeline_uses_light_page_for_low_contrast_photo(tmp_path):
         "has_skewed_pages": False,
         "pages": [{"contrast_score": 0.08, "blur_score": 42.0}],
     }
-    processor.image_preprocessor.prepare_light_page_vl_input = lambda image_path, output_dir, quality=None, avoid_page_crop=False: {
-        "variant_name": "light_page_preprocess",
+    processor.image_preprocessor.prepare_contrast_only_vl_input = lambda image_path, output_dir: {
+        "variant_name": "contrast_only",
         "original_path": str(image_path),
-        "processed_path": str(light_path),
-        "operations": ["full_page_upscale_2.2x", "weak_page_local_contrast"],
-        "warnings": ["no_binarization_applied"],
-        "metadata": {
-            "page_crop_applied": False,
-            "page_crop_confidence": 0.0,
-            "deskew_applied": False,
-            "upscale_factor": 2.2,
-            "contrast_mode": "weak_background_normalization_clahe",
-            "skipped_reasons": ["page_outline_confidence_too_low"],
-        },
+        "processed_path": str(contrast_path),
+        "operations": ["full_page_preserved", "contrast_only_no_crop", "full_page_light_local_contrast"],
+        "warnings": ["no_crop_applied_preserve_full_document", "no_sharpen_or_denoise_applied"],
     }
     document = _document(
         original_filename="delivery-photo.jpg",
@@ -323,12 +316,12 @@ def test_vl_upload_pipeline_uses_light_page_for_low_contrast_photo(tmp_path):
         document.workflow_metadata,
     )
 
-    assert worker.calls == [(light_path, "delivery-photo.jpg")]
+    assert worker.calls == [(contrast_path, "delivery-photo.jpg")]
     assert metadata is not None
-    assert metadata["vl_preprocess_mode"] == "light_page_preprocess"
-    assert metadata["vl_preprocess_input"]["variant_name"] == "light_page_preprocess"
-    assert metadata["vl_preprocess_policy"]["selected_mode"] == "light_page_preprocess"
-    assert metadata["vl_preprocess_policy"]["reason"] == "photo_or_low_contrast_light_page_preprocess_default"
+    assert metadata["vl_preprocess_mode"] == "contrast_only"
+    assert metadata["vl_preprocess_input"]["variant_name"] == "contrast_only"
+    assert metadata["vl_preprocess_policy"]["selected_mode"] == "contrast_only"
+    assert metadata["vl_preprocess_policy"]["reason"] == "photo_low_contrast_contrast_only_no_crop"
     assert metadata["vl_preprocess_policy"]["page_crop_applied"] is False
 
 
@@ -360,14 +353,13 @@ def test_vl_upload_pipeline_keeps_original_when_hidden_column_risk(tmp_path):
     )
 
     assert worker.calls[0][1] == "hidden-column.jpg"
-    assert worker.calls[0][0] != source_path
-    assert worker.calls[0][0].name.endswith("-vl-light-page.png")
+    assert worker.calls[0][0] == source_path
     assert metadata is not None
-    assert metadata["vl_preprocess_mode"] == "light_page_preprocess"
+    assert metadata["vl_preprocess_mode"] == "original"
     assert metadata["vl_preprocess_policy"]["hidden_cropped_guardrail"] is True
-    assert metadata["vl_preprocess_policy"]["reason"] == "hidden_or_cropped_column_risk_crop_free_light_page"
+    assert metadata["vl_preprocess_policy"]["reason"] == "hidden_or_cropped_column_risk_preserve_original_visible_frame"
     assert metadata["vl_preprocess_policy"]["page_crop_applied"] is False
-    assert "hidden_or_cropped_column_risk_skip_page_crop" in metadata["vl_preprocess_policy"]["skipped_reasons"]
+    assert "hidden_or_cropped_column_risk_skip_preprocess" in metadata["vl_preprocess_policy"]["skipped_reasons"]
 
 
 def test_final_business_safety_blocks_pos_summary_rows_from_manufacturing_items():

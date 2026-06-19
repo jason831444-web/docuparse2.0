@@ -426,7 +426,7 @@ class DocumentProcessor:
         available_candidates = ["original"]
         policy: dict[str, Any] = {
             "selected_mode": "original",
-            "reason": "default_original_vl_input",
+            "reason": "default_original_raw_text_preservation",
             "available_candidates": available_candidates,
             "hidden_cropped_guardrail": False,
             "page_crop_applied": False,
@@ -435,6 +435,11 @@ class DocumentProcessor:
             "upscale_factor": None,
             "contrast_mode": None,
             "skipped_reasons": [],
+            "light_page_preprocess": {
+                "available": suffix in image_suffixes,
+                "used": False,
+                "skip_reason": "debug_candidate_not_used_by_default",
+            },
             "current_standard": {
                 "available": suffix in image_suffixes,
                 "used": False,
@@ -457,7 +462,7 @@ class DocumentProcessor:
             })
             return self._original_vl_input_variant(stored_path, policy, operations=["original_file"])
 
-        available_candidates.extend(["light_page_preprocess", "contrast_only", "current_standard_debug"])
+        available_candidates.extend(["contrast_only", "light_page_preprocess_debug", "current_standard_debug"])
         quality = self._safe_quality_for_vl_input(stored_path)
         if quality:
             policy["quality_summary"] = self._vl_preprocess_quality_summary(quality)
@@ -471,17 +476,25 @@ class DocumentProcessor:
         )
         if hidden_or_cropped:
             policy.update({
-                "selected_mode": "light_page_preprocess",
-                "reason": "hidden_or_cropped_column_risk_crop_free_light_page",
+                "selected_mode": "original",
+                "reason": "hidden_or_cropped_column_risk_preserve_original_visible_frame",
                 "hidden_cropped_guardrail": True,
+                "skipped_reasons": ["hidden_or_cropped_column_risk_skip_preprocess"],
             })
-            return self._light_page_vl_input_variant(stored_path, document, policy, quality, avoid_page_crop=True)
+            return self._original_vl_input_variant(stored_path, policy, operations=["original_vl_input_hidden_cropped_guardrail"])
+
+        if self._should_use_contrast_only_for_vl(quality):
+            policy.update({
+                "selected_mode": "contrast_only",
+                "reason": "photo_low_contrast_contrast_only_no_crop",
+            })
+            return self._contrast_only_vl_input_variant(stored_path, document, policy)
 
         policy.update({
-            "selected_mode": "light_page_preprocess",
-            "reason": self._light_page_vl_reason_from_quality(quality),
+            "selected_mode": "original",
+            "reason": self._original_vl_reason_from_quality(quality),
         })
-        return self._light_page_vl_input_variant(stored_path, document, policy, quality, avoid_page_crop=False)
+        return self._original_vl_input_variant(stored_path, policy)
 
     def _light_page_vl_input_variant(
         self,
@@ -515,6 +528,31 @@ class DocumentProcessor:
             "selected_mode": "original",
             "reason": "light_page_preprocess_unavailable_fallback_original",
             "light_page_error": variant.get("error"),
+        })
+        return self._original_vl_input_variant(stored_path, policy)
+
+    def _contrast_only_vl_input_variant(
+        self,
+        stored_path: Path,
+        document: Document,
+        policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        output_dir = self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id)
+        variant = self.image_preprocessor.prepare_contrast_only_vl_input(stored_path, output_dir)
+        policy.update({
+            "page_crop_applied": False,
+            "page_crop_confidence": 0.0,
+            "deskew_applied": False,
+            "upscale_factor": None,
+            "contrast_mode": "contrast_only_weak_background_normalization_clahe",
+        })
+        if variant.get("processed_path"):
+            variant["vl_preprocess_policy"] = policy
+            return variant
+        policy.update({
+            "selected_mode": "original",
+            "reason": "contrast_only_unavailable_fallback_original",
+            "contrast_only_error": variant.get("error"),
         })
         return self._original_vl_input_variant(stored_path, policy)
 
