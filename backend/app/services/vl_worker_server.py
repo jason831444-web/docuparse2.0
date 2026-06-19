@@ -21,6 +21,12 @@ import requests
 
 from app.core.config import get_settings
 from app.scripts.smoke_paddleocr_vl_gguf import build_docuparse_vl_candidate_metadata, extract_text, validate_output_text
+from app.services.canonical_schema import (
+    canonical_field_for_header,
+    canonicalize_official_table_row,
+    expected_column_groups,
+    inspection_header_or_note,
+)
 
 
 app = FastAPI(title="Docparse PaddleOCR-VL GGUF Worker")
@@ -840,40 +846,7 @@ def _official_table_document_type_for_quality(table_type: str, text: str, origin
 
 
 def _official_table_expected_column_groups(document_type: str) -> list[tuple[str, set[str]]]:
-    if document_type == "inspection_report":
-        return [
-            ("품명", {"item_name"}),
-            ("Lot/Code", {"lot_code", "document_item_code"}),
-            ("입고수량", {"received_quantity"}),
-            ("합격수량 또는 판정", {"accepted_quantity", "result"}),
-            ("불량수량 또는 비고", {"defective_quantity", "note"}),
-            ("검사항목", {"inspection_item"}),
-            ("판정", {"result"}),
-            ("비고", {"note"}),
-        ]
-    if document_type == "delivery_note":
-        return [
-            ("품명", {"item_name"}),
-            ("규격", {"specification"}),
-            ("수량", {"quantity", "delivered_quantity", "requested_quantity"}),
-            ("단위", {"unit"}),
-            ("비고", {"note"}),
-        ]
-    if document_type in {"invoice", "transaction_statement", "purchase_order", "quotation"}:
-        return [
-            ("품명", {"item_name"}),
-            ("규격", {"specification"}),
-            ("수량", {"quantity"}),
-            ("단가", {"unit_price"}),
-            ("공급가액", {"supply_amount"}),
-            ("세액", {"tax_amount"}),
-            ("합계", {"line_total"}),
-        ]
-    return [
-        ("품명", {"item_name"}),
-        ("규격", {"specification"}),
-        ("수량", {"quantity", "delivered_quantity", "requested_quantity"}),
-    ]
+    return expected_column_groups(document_type)
 
 
 def _official_parsing_blocks(output: Any) -> list[dict[str, Any]]:
@@ -1009,106 +982,11 @@ def _guess_official_table_type(
 
 
 def _canonical_row_from_official_table(columns: list[str], raw_row: list[str], table_type: str) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "raw_cells": {columns[index] if index < len(columns) else f"column_{index + 1}": value for index, value in enumerate(raw_row)}
-    }
-    for index, value in enumerate(raw_row):
-        header = columns[index] if index < len(columns) else ""
-        canonical = _canonical_field_for_header(header)
-        cell = _clean_cell(value)
-        if not canonical or cell in (None, ""):
-            continue
-        if canonical in {
-            "no",
-            "quantity",
-            "received_quantity",
-            "accepted_quantity",
-            "defective_quantity",
-            "requested_quantity",
-            "delivered_quantity",
-        }:
-            parsed = _int_text(cell)
-            if parsed is not None:
-                row[canonical] = parsed
-            else:
-                row.setdefault("review_flags", []).append(f"{canonical}_parse_review_required")
-                row[canonical] = cell
-        elif canonical in {"unit_price", "supply_amount", "tax_amount", "line_total"}:
-            if table_type == "incoming_inspection":
-                row.setdefault("review_flags", []).append("inspection_report_amount_field_removed")
-                continue
-            parsed = _int_text(cell)
-            row[canonical] = parsed if parsed is not None else cell
-        else:
-            row[canonical] = re.sub(r"조건부\s*합격|조건부합격", "조건부 합격", cell).strip() if canonical == "result" else cell
-    if table_type == "incoming_inspection":
-        for amount_field in ("unit_price", "supply_amount", "tax_amount", "line_total", "subtotal", "total", "currency"):
-            row.pop(amount_field, None)
-        row.setdefault("review_flags", []).append("paddleocrvl_official_table_review_required")
-        row.setdefault("review_flags", []).append("vl_schema_prompt_inspection_review_required")
-        row.update(_split_official_inspection_item_fields(row))
-        if not row.get("item_name") or _inspection_header_or_note(str(row.get("item_name"))):
-            return {}
-        row["review_flags"] = sorted(set(str(flag) for flag in row.get("review_flags") or [] if flag))
-    elif not row.get("item_name"):
-        return {}
-    return row
+    return canonicalize_official_table_row(columns, raw_row, table_type)
 
 
 def _canonical_field_for_header(header: str) -> str | None:
-    normalized = re.sub(r"[\s_:/()-]+", "", str(header or "").casefold())
-    mapping = {
-        "no": "no",
-        "번호": "no",
-        "품명": "item_name",
-        "품목": "item_name",
-        "품목명": "item_name",
-        "제품명": "item_name",
-        "item": "item_name",
-        "itemname": "item_name",
-        "description": "item_name",
-        "규격": "specification",
-        "모델명": "specification",
-        "spec": "specification",
-        "specification": "specification",
-        "lot": "lot_code",
-        "lotcode": "document_item_code",
-        "lotno": "lot_code",
-        "code": "document_item_code",
-        "품목코드": "document_item_code",
-        "문서품목코드": "document_item_code",
-        "입고수량": "received_quantity",
-        "합격": "accepted_quantity",
-        "합격수량": "accepted_quantity",
-        "불량": "defective_quantity",
-        "불량수량": "defective_quantity",
-        "검사항목": "inspection_item",
-        "판정": "result",
-        "결과": "result",
-        "비고": "note",
-        "remark": "note",
-        "remarks": "note",
-        "note": "note",
-        "수량": "quantity",
-        "qty": "quantity",
-        "quantity": "quantity",
-        "납품수량": "delivered_quantity",
-        "요청수량": "requested_quantity",
-        "발주수량": "requested_quantity",
-        "단위": "unit",
-        "unit": "unit",
-        "단가": "unit_price",
-        "unitprice": "unit_price",
-        "공급가액": "supply_amount",
-        "세액": "tax_amount",
-        "합계": "line_total",
-        "합계금액": "line_total",
-        "금액": "line_total",
-        "amount": "line_total",
-        "linetotal": "line_total",
-        "tax": "tax_amount",
-    }
-    return mapping.get(normalized)
+    return canonical_field_for_header(header)
 
 
 def _split_official_inspection_item_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -1318,13 +1196,7 @@ def _normalized_table_lines(text: str) -> list[str]:
 
 
 def _inspection_header_or_note(line: str) -> bool:
-    compact = re.sub(r"\s+", "", line)
-    if re.search(r"^(No|번호)?품목(?:명)?규격입고수량합격(?:수량)?불량(?:수량)?판정", compact, flags=re.IGNORECASE):
-        return True
-    return bool(
-        re.search(r"(검사의견|금액항목없음|금액정보없음|문서번호|검사일|협력사|검사자|품질팀)", compact)
-        and not re.match(r"^\d{1,3}\s+", line)
-    )
+    return inspection_header_or_note(line)
 
 
 def _parse_incoming_inspection_line(line: str) -> dict[str, Any] | None:

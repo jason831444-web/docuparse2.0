@@ -8,40 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.document import Document, ExportTemplate
+from app.services.canonical_schema import get_exportable_fields
 
 
-SOURCE_FIELD_OPTIONS = [
-    {"value": "document_type", "label": "문서 유형", "group": "문서"},
-    {"value": "document_number", "label": "문서번호", "group": "문서"},
-    {"value": "document_date", "label": "거래일자", "group": "문서"},
-    {"value": "due_date", "label": "납기일/기한", "group": "문서"},
-    {"value": "supplier_name", "label": "공급업체", "group": "문서"},
-    {"value": "customer_name", "label": "거래처/고객사", "group": "문서"},
-    {"value": "total_amount", "label": "문서 합계", "group": "문서"},
-    {"value": "tax_amount", "label": "문서 세액", "group": "문서"},
-    {"value": "currency", "label": "통화", "group": "문서"},
-    {"value": "review_status", "label": "검토 상태", "group": "문서"},
-    {"value": "source_filename", "label": "원본 파일명", "group": "문서"},
-    {"value": "created_at", "label": "업로드일시", "group": "문서"},
-    {"value": "line_items.item_name", "label": "품목명", "group": "품목 행"},
-    {"value": "line_items.specification", "label": "규격", "group": "품목 행"},
-    {"value": "line_items.item_code", "label": "품목코드", "group": "품목 행"},
-    {"value": "line_items.internal_item_code", "label": "내부 품목코드", "group": "품목 행"},
-    {"value": "line_items.quantity", "label": "수량", "group": "품목 행"},
-    {"value": "line_items.unit", "label": "단위", "group": "품목 행"},
-    {"value": "line_items.unit_price", "label": "단가", "group": "품목 행"},
-    {"value": "line_items.supply_amount", "label": "공급가액", "group": "품목 행"},
-    {"value": "line_items.tax_amount", "label": "세액", "group": "품목 행"},
-    {"value": "line_items.line_total", "label": "합계", "group": "품목 행"},
-    {"value": "line_items.note", "label": "비고", "group": "품목 행"},
-    {"value": "line_items.lot_code", "label": "Lot/Code", "group": "품목 행"},
-    {"value": "line_items.received_quantity", "label": "입고수량", "group": "품목 행"},
-    {"value": "line_items.accepted_quantity", "label": "합격수량", "group": "품목 행"},
-    {"value": "line_items.defective_quantity", "label": "불량수량", "group": "품목 행"},
-    {"value": "line_items.inspection_result", "label": "검사판정", "group": "품목 행"},
-    {"value": "__blank__", "label": "빈 컬럼", "group": "사용자 지정"},
-    {"value": "__static__", "label": "고정값 컬럼", "group": "사용자 지정"},
-]
+SOURCE_FIELD_OPTIONS = get_exportable_fields()
 
 
 DEFAULT_TEMPLATES = [
