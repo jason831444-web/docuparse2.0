@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { FileSpreadsheet } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
@@ -25,6 +28,25 @@ export default function SettingsPage() {
         <p className="mt-2 text-muted-foreground">문서 목록과 검토 업무의 기본 표시 방식을 설정합니다.</p>
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>출력 템플릿</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg border bg-white p-4">
+              <FileSpreadsheet className="mt-1 size-5 text-primary" />
+              <div>
+                <p className="font-semibold">Excel/CSV 컬럼 양식 관리</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  더존 업로드용, 회계팀 검토용처럼 컬럼명과 순서를 저장하고 내보내기에 적용합니다.
+                </p>
+              </div>
+            </div>
+            <Button asChild>
+              <Link href="/settings/export-templates">Export Templates 관리</Link>
+            </Button>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>문서 목록 설정</CardTitle>

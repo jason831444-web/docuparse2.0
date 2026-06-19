@@ -10,7 +10,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 
-from app.models.document import Document
+from app.models.document import Document, ExportTemplate
+from app.services.export_templates import documents_to_template_rows
 from app.services.document_taxonomy import DocumentTaxonomyService
 from app.services.vl_candidate_validation import VLCandidateValidationGate
 
@@ -67,26 +68,27 @@ def serialize_document(document: Document) -> dict:
     return data
 
 
-def documents_to_csv(documents: list[Document]) -> str:
-    rows = documents_to_erp_rows(documents)
-    frame = pd.DataFrame(rows).drop(columns=["거래처 탭"], errors="ignore")
+def documents_to_csv(documents: list[Document], template: ExportTemplate | None = None) -> str:
+    rows = documents_to_template_rows(documents, template) if template else documents_to_erp_rows(documents)
+    frame = pd.DataFrame(rows).drop(columns=["거래처 탭", "_party_tab"], errors="ignore")
     buffer = io.StringIO()
     frame.to_csv(buffer, index=False)
     return buffer.getvalue()
 
 
-def documents_to_excel(documents: list[Document], sheet_mode: str = "combined") -> bytes:
-    rows = documents_to_erp_rows(documents)
+def documents_to_excel(documents: list[Document], sheet_mode: str = "combined", template: ExportTemplate | None = None) -> bytes:
+    rows = documents_to_template_rows(documents, template) if template else documents_to_erp_rows(documents)
     frame = pd.DataFrame(rows)
     buffer = io.BytesIO()
     try:
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             if sheet_mode == "party_tabs" and rows:
-                grouped = frame.groupby(frame["거래처 탭"].fillna("미분류"), dropna=False)
+                party_column = "_party_tab" if "_party_tab" in frame.columns else "거래처 탭"
+                grouped = frame.groupby(frame[party_column].fillna("미분류"), dropna=False)
                 for name, group in grouped:
-                    group.drop(columns=["거래처 탭"], errors="ignore").to_excel(writer, index=False, sheet_name=_excel_sheet_name(str(name)))
+                    group.drop(columns=["거래처 탭", "_party_tab"], errors="ignore").to_excel(writer, index=False, sheet_name=_excel_sheet_name(str(name)))
             else:
-                frame.drop(columns=["거래처 탭"], errors="ignore").to_excel(writer, index=False, sheet_name="erp_ready_data")
+                frame.drop(columns=["거래처 탭", "_party_tab"], errors="ignore").to_excel(writer, index=False, sheet_name="erp_ready_data")
         return buffer.getvalue()
     except ModuleNotFoundError:
         return _minimal_xlsx(rows, sheet_mode=sheet_mode)
@@ -662,7 +664,7 @@ def _minimal_xlsx(rows: list[dict], sheet_mode: str = "combined") -> bytes:
     if sheet_mode == "party_tabs" and rows:
         grouped: dict[str, list[dict]] = {}
         for row in rows:
-            grouped.setdefault(str(row.get("거래처 탭") or "미분류"), []).append(row)
+            grouped.setdefault(str(row.get("_party_tab") or row.get("거래처 탭") or "미분류"), []).append(row)
         sheets = [(_excel_sheet_name(name), group) for name, group in grouped.items()]
     else:
         sheets = [("erp_ready_data", rows)]
@@ -679,7 +681,7 @@ def _minimal_xlsx(rows: list[dict], sheet_mode: str = "combined") -> bytes:
 
 
 def _xlsx_sheet_xml(rows: list[dict]) -> str:
-    visible_rows = [{key: value for key, value in row.items() if key != "거래처 탭"} for row in rows]
+    visible_rows = [{key: value for key, value in row.items() if key not in {"거래처 탭", "_party_tab"}} for row in rows]
     headers = list(visible_rows[0].keys()) if visible_rows else list(documents_to_erp_rows([])[0].keys()) if False else ["문서유형", "공급업체", "고객사", "문서번호"]
     table = [headers] + [[row.get(header, "") for header in headers] for row in visible_rows]
     row_xml = []

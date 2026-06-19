@@ -218,6 +218,38 @@ export interface ProviderHealth {
   };
 }
 
+export interface ExportTemplateColumn {
+  header: string;
+  source_field: string;
+  column_type?: "field" | "static" | "blank" | string;
+  static_value?: string | null;
+}
+
+export interface ExportTemplateRecord {
+  id: string;
+  name: string;
+  description?: string | null;
+  scope: string;
+  is_default: boolean;
+  columns: ExportTemplateColumn[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExportTemplatePayload {
+  name: string;
+  description?: string | null;
+  scope?: string;
+  is_default?: boolean;
+  columns: ExportTemplateColumn[];
+}
+
+export interface ExportTemplateSourceField {
+  value: string;
+  label: string;
+  group: string;
+}
+
 export interface DocumentRecord {
   id: string;
   original_filename: string;

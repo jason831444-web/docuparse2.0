@@ -7,6 +7,9 @@ import type {
   DocumentRecord,
   DocumentStats,
   DocumentUpdate,
+  ExportTemplatePayload,
+  ExportTemplateRecord,
+  ExportTemplateSourceField,
   FolderSummary,
   CreateItemAliasPayload,
   CreateItemMasterPayload,
@@ -133,6 +136,19 @@ export const api = {
     const query = new URLSearchParams(params);
     query.set("format", format);
     return `${API_BASE}/reports/monthly/export?${query.toString()}`;
+  },
+  exportTemplates: {
+    list: () => request<ExportTemplateRecord[]>("/export-templates", { cache: "no-store" }),
+    sourceFields: () => request<ExportTemplateSourceField[]>("/export-templates/source-fields", { cache: "no-store" }),
+    get: (id: string) => request<ExportTemplateRecord>(`/export-templates/${id}`, { cache: "no-store" }),
+    create: (payload: ExportTemplatePayload) =>
+      request<ExportTemplateRecord>("/export-templates", { method: "POST", body: JSON.stringify(payload) }),
+    update: (id: string, payload: Partial<ExportTemplatePayload>) =>
+      request<ExportTemplateRecord>(`/export-templates/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+    remove: async (id: string) => {
+      const response = await fetch(`${API_BASE}/export-templates/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("출력 템플릿을 삭제하지 못했습니다");
+    },
   },
   itemMaster: {
     list: (params: URLSearchParams) => request<ItemMasterListResponse>(`/item-master/items?${params.toString()}`, { cache: "no-store" }),

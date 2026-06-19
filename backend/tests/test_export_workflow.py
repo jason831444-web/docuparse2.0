@@ -7,7 +7,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from app.models.document import Document, DocumentType, ProcessingStatus
+from app.models.document import Document, DocumentType, ExportTemplate, ProcessingStatus
 from app.services.export import document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
 
 
@@ -36,6 +36,56 @@ def test_export_uses_only_documents_passed_by_caller():
 
     assert "INV-1" in csv
     assert "INV-2" not in csv
+
+
+def test_csv_export_applies_custom_template_columns_and_line_rows():
+    document = _document("INV-1", "네오팩토리", Decimal("100"))
+    document.line_items = [
+        {"item_name": "S45C PIN", "specification": "8X60", "quantity": 2, "note": "입고대기"},
+        {"item_name": "SUS 볼트", "specification": "M5X20", "quantity": 5, "note": "정상"},
+    ]
+    template = ExportTemplate(
+        name="현장 검토용",
+        template_columns=[
+            {"header": "거래일자", "source_field": "document_date"},
+            {"header": "거래처", "source_field": "customer_name"},
+            {"header": "품목", "source_field": "line_items.item_name"},
+            {"header": "규격", "source_field": "line_items.specification"},
+            {"header": "수량", "source_field": "line_items.quantity"},
+            {"header": "빈칸", "source_field": "__blank__"},
+            {"header": "창고", "source_field": "__static__", "column_type": "static", "static_value": "A-01"},
+        ],
+    )
+
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document], template=template))))
+
+    assert list(rows[0].keys()) == ["거래일자", "거래처", "품목", "규격", "수량", "빈칸", "창고"]
+    assert len(rows) == 2
+    assert rows[0]["품목"] == "S45C PIN"
+    assert rows[1]["품목"] == "SUS 볼트"
+    assert rows[0]["빈칸"] == ""
+    assert rows[0]["창고"] == "A-01"
+
+
+def test_excel_export_applies_template_headers_and_party_tabs():
+    docs = [_document("INV-1", "네오팩토리", Decimal("100")), _document("INV-2", "오성테크", Decimal("200"))]
+    template = ExportTemplate(
+        name="더존 업로드용",
+        template_columns=[
+            {"header": "거래처", "source_field": "customer_name"},
+            {"header": "품목명", "source_field": "line_items.item_name"},
+            {"header": "없는필드", "source_field": "line_items.not_a_field"},
+        ],
+    )
+
+    with ZipFile(BytesIO(documents_to_excel(docs, sheet_mode="party_tabs", template=template))) as archive:
+        xml_payload = "\n".join(archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".xml"))
+
+    assert "네오팩토리" in xml_payload
+    assert "오성테크" in xml_payload
+    assert "품목명" in xml_payload
+    assert "없는필드" in xml_payload
+    assert "거래처 탭" not in xml_payload
 
 
 def test_excel_export_can_split_by_party_tabs():

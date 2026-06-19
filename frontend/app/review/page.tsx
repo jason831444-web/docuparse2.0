@@ -10,11 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, requiresReviewExportConfirmation, reviewIssueDescription, reviewIssueSummary, reviewIssueSummaryItems } from "@/lib/utils";
-import type { DocumentListResponse, DocumentRecord, ManufacturingLineItem } from "@/types/document";
+import type { DocumentListResponse, DocumentRecord, ExportTemplateRecord, ManufacturingLineItem } from "@/types/document";
 
 export default function ReviewPage() {
   const [data, setData] = useState<DocumentListResponse | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
+  const [exportTemplateId, setExportTemplateId] = useState("");
 
   const load = useCallback(() => {
     api.review().then(setData).catch(() => setData(null));
@@ -22,6 +24,12 @@ export default function ReviewPage() {
 
   useEffect(() => {
     load();
+    api.exportTemplates.list()
+      .then((items) => {
+        setExportTemplates(items);
+        setExportTemplateId((current) => current || items.find((item) => item.is_default)?.id || "");
+      })
+      .catch(() => setExportTemplates([]));
   }, [load]);
 
   const rows = useMemo(() => {
@@ -48,6 +56,7 @@ export default function ReviewPage() {
     if (selectedDocuments.some(requiresReviewExportConfirmation) && !window.confirm("검토 필요 문서를 내보냅니다. 업무데이터 확정 전 review_required와 경고 정보를 확인해야 합니다. 계속할까요?")) return;
     const params = new URLSearchParams({ sheet_mode: "combined" });
     selectedIds.forEach((id) => params.append("document_ids", id));
+    if (exportTemplateId) params.set("template_id", exportTemplateId);
     window.location.href = api.exportExcelUrl(params);
   }
 
@@ -100,7 +109,16 @@ export default function ReviewPage() {
               <p>{selected.size}개 문서 선택됨</p>
               <p className="mt-1">검토 필요 문서를 내보내면 업무데이터 확정 전 확인해야 할 review_required와 경고 정보가 함께 포함됩니다.</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm"
+                value={exportTemplateId}
+                onChange={(event) => setExportTemplateId(event.target.value)}
+                aria-label="출력 템플릿"
+              >
+                <option value="">기본 출력</option>
+                {exportTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+              </select>
               <Button type="button" variant="outline" disabled={!selected.size} onClick={exportSelected}>선택 문서 Excel</Button>
               <Button asChild type="button"><Link href="/documents">문서 목록에서 더 보기</Link></Button>
             </div>

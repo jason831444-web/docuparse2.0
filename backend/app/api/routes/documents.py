@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
-from app.models.document import CategoryFolder, Document, DocumentType, ProcessingStatus
+from app.models.document import CategoryFolder, Document, DocumentType, ExportTemplate, ProcessingStatus
 from app.schemas.document import (
     ActivitySummary,
     BulkDocumentRequest,
@@ -410,10 +410,12 @@ def export_csv(
     document_ids: list[UUID] | None = Query(default=None),
     document_type: DocumentType | None = None,
     category: str | None = Query(default=None, max_length=120),
+    template_id: UUID | None = None,
 ) -> Response:
     documents = _export_documents(db, document_ids=document_ids, document_type=document_type, category=category)
+    template = _export_template(db, template_id)
     return Response(
-        documents_to_csv(documents),
+        documents_to_csv(documents, template=template),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=docparse-documents.csv"},
     )
@@ -426,10 +428,12 @@ def export_excel(
     document_type: DocumentType | None = None,
     category: str | None = Query(default=None, max_length=120),
     sheet_mode: str = Query(default="combined", pattern="^(combined|party_tabs)$"),
+    template_id: UUID | None = None,
 ) -> Response:
     documents = _export_documents(db, document_ids=document_ids, document_type=document_type, category=category)
+    template = _export_template(db, template_id)
     return Response(
-        documents_to_excel(documents, sheet_mode=sheet_mode),
+        documents_to_excel(documents, sheet_mode=sheet_mode, template=template),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=docparse-manufacturing-documents.xlsx"},
     )
@@ -705,6 +709,15 @@ def _export_documents(
     if document_ids and not documents:
         raise HTTPException(status_code=404, detail="No matching documents found.")
     return documents
+
+
+def _export_template(db: Session, template_id: UUID | None) -> ExportTemplate | None:
+    if not template_id:
+        return None
+    template = db.get(ExportTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="출력 템플릿을 찾을 수 없습니다.")
+    return template
 
 
 def _document_calendar_dates(document: Document) -> list[tuple[str, str, date]]:

@@ -109,6 +109,20 @@ class CategoryFolder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ExportTemplate(Base):
+    __tablename__ = "export_templates"
+    __table_args__ = (UniqueConstraint("name", "scope", name="uq_export_templates_name_scope"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope: Mapped[str] = mapped_column(String(40), default="global", nullable=False, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    template_columns: Mapped[list[dict]] = mapped_column("columns", JSONB, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ItemMaster(Base):
     __tablename__ = "item_masters"
     __table_args__ = (UniqueConstraint("internal_item_code", name="uq_item_masters_internal_item_code"),)

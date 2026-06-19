@@ -9,7 +9,7 @@ import { DocumentRow } from "@/components/document-row";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { requiresReviewExportConfirmation } from "@/lib/utils";
-import type { DocumentRecord } from "@/types/document";
+import type { DocumentRecord, ExportTemplateRecord } from "@/types/document";
 
 type DuplicateHint = {
   count: number;
@@ -40,6 +40,8 @@ export function DocumentList({
   const selected = controlledSelected ?? uncontrolledSelected;
   const setSelected = onSelectedChange ?? setUncontrolledSelected;
   const [excelMode, setExcelMode] = useState<"combined" | "party_tabs">("combined");
+  const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
+  const [exportTemplateId, setExportTemplateId] = useState("");
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const allSelected = documents.length > 0 && documents.every((document) => selected.has(document.id));
   const scopedDocuments = selectionScopeDocuments ?? documents;
@@ -52,6 +54,15 @@ export function DocumentList({
     const visibleIds = new Set(documents.map((document) => document.id));
     setUncontrolledSelected((current) => new Set(Array.from(current).filter((id) => visibleIds.has(id))));
   }, [controlledSelected, documents]);
+
+  useEffect(() => {
+    api.exportTemplates.list()
+      .then((items) => {
+        setExportTemplates(items);
+        setExportTemplateId((current) => current || items.find((item) => item.is_default)?.id || "");
+      })
+      .catch(() => setExportTemplates([]));
+  }, []);
 
   function updateSelected(updater: (current: Set<string>) => Set<string>) {
     setSelected(updater(selected));
@@ -88,6 +99,7 @@ export function DocumentList({
   function selectedExportParams(extra?: Record<string, string>) {
     const params = new URLSearchParams();
     selectedIds.forEach((id) => params.append("document_ids", id));
+    if (exportTemplateId) params.set("template_id", exportTemplateId);
     Object.entries(extra || {}).forEach(([key, value]) => {
       if (value) params.set(key, value);
     });
@@ -141,6 +153,15 @@ export function DocumentList({
           >
             <option value="combined">통합 시트형</option>
             <option value="party_tabs">거래처별 탭</option>
+          </select>
+          <select
+            className="h-8 rounded-md border bg-white px-2 text-xs"
+            value={exportTemplateId}
+            onChange={(event) => setExportTemplateId(event.target.value)}
+            aria-label="출력 템플릿"
+          >
+            <option value="">기본 출력</option>
+            {exportTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
           </select>
           <Button type="button" variant="outline" size="sm" disabled={!selected.size} onClick={() => exportSelected("xlsx")}>
             <Download className="size-4" />

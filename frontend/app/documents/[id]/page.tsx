@@ -38,7 +38,7 @@ import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
-import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
+import type { DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
@@ -363,14 +363,22 @@ function QualityDiagnosisCard({ document }: { document: DocumentRecord }) {
 function ErpReadinessBanner({
   document,
   openIssueCount,
+  exportTemplates,
+  selectedExportTemplateId,
+  onExportTemplateChange,
 }: {
   document: DocumentRecord;
   openIssueCount: number;
+  exportTemplates: ExportTemplateRecord[];
+  selectedExportTemplateId: string;
+  onExportTemplateChange: (value: string) => void;
 }) {
   const readiness = getErpReadinessStatus(document);
   const summary = getErpReadinessSummary(document);
   const schedule = getDocumentScheduleDate(document);
   const layoutDebug = layoutDebugMetadata(document);
+  const exportParams = new URLSearchParams({ document_ids: document.id });
+  if (selectedExportTemplateId) exportParams.set("template_id", selectedExportTemplateId);
   const toneClass = {
     success: "border-emerald-300 bg-emerald-50 text-emerald-950",
     warning: "border-amber-300 bg-amber-50 text-amber-950",
@@ -391,25 +399,35 @@ function ErpReadinessBanner({
             {layoutDebug?.bbox_candidate_summary?.uncertain_count ? <Badge className="border-amber-400 bg-white text-amber-800">OCR 위치 기반 후보 {layoutDebug.bbox_candidate_summary.uncertain_count}건</Badge> : null}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 lg:justify-end">
-          <Button asChild variant="outline">
-            <a href={api.exportExcelUrl(new URLSearchParams({ document_ids: document.id }))}>
-              <Download className="size-4" />
-              Excel 내보내기
-            </a>
-          </Button>
-          <Button asChild variant="outline">
-            <a href={api.exportCsvUrl(new URLSearchParams({ document_ids: document.id }))}>
-              <Download className="size-4" />
-              CSV 내보내기
-            </a>
-          </Button>
-          <Button asChild variant="outline">
-            <a href={api.exportJsonUrl(document.id)}>
-              <Download className="size-4" />
-              JSON 보기
-            </a>
-          </Button>
+        <div className="flex flex-col gap-2 lg:min-w-80">
+          <label className="grid gap-1 text-xs font-medium">
+            출력 템플릿
+            <select
+              className="h-9 rounded-md border bg-white px-3 text-sm text-slate-900"
+              value={selectedExportTemplateId}
+              onChange={(event) => onExportTemplateChange(event.target.value)}
+            >
+              <option value="">기본 출력</option>
+              {exportTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <Button asChild variant="outline">
+              <a href={api.exportExcelUrl(exportParams)}>
+                <Download className="size-4" />
+                Excel 다운로드
+              </a>
+            </Button>
+            <Button asChild variant="outline">
+              <a href={api.exportCsvUrl(exportParams)}>
+                <Download className="size-4" />
+                CSV 다운로드
+              </a>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/settings/export-templates">템플릿 관리</Link>
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -417,27 +435,70 @@ function ErpReadinessBanner({
 }
 
 function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
+  const [fitMode, setFitMode] = useState<"page" | "width" | "actual">("page");
+  const [zoom, setZoom] = useState(100);
   const isPdf = document.mime_type === "application/pdf";
   const fileUrl = documentFileUrl(document.file_url);
-  const previewUrl = isPdf ? `${fileUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH` : fileUrl;
+  const pdfHash = fitMode === "actual"
+    ? `toolbar=0&navpanes=0&scrollbar=1&zoom=${zoom}`
+    : `toolbar=0&navpanes=0&scrollbar=1&view=${fitMode === "page" ? "Fit" : "FitH"}`;
+  const previewUrl = isPdf ? `${fileUrl}#${pdfHash}` : fileUrl;
+  const zoomLabel = fitMode === "actual" ? `${zoom}%` : fitMode === "width" ? "너비 맞춤" : "페이지 맞춤";
   return (
-    <Card className="overflow-hidden xl:flex xl:h-[calc(100vh-7rem)] xl:flex-col">
-      <CardHeader className="flex-row items-center justify-between space-y-0 xl:shrink-0">
+    <Card className="overflow-hidden xl:flex xl:h-[calc(100vh-6rem)] xl:flex-col">
+      <CardHeader className="gap-3 space-y-0 xl:shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3">
         <CardTitle>원본 문서</CardTitle>
         <Button asChild variant="outline" size="sm">
           <a href={fileUrl} target="_blank" rel="noreferrer">원본 열기</a>
         </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            ["page", "페이지 맞춤"],
+            ["width", "너비 맞춤"],
+            ["actual", "100%"],
+          ].map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              variant={fitMode === value ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                setFitMode(value as "page" | "width" | "actual");
+                if (value === "actual") setZoom(100);
+              }}
+            >
+              {label}
+            </Button>
+          ))}
+          <Button type="button" variant="outline" size="sm" disabled={fitMode !== "actual"} onClick={() => setZoom((value) => Math.max(50, value - 25))}>-</Button>
+          <span className="min-w-20 text-center text-xs font-medium text-muted-foreground">{zoomLabel}</span>
+          <Button type="button" variant="outline" size="sm" disabled={fitMode !== "actual"} onClick={() => setZoom((value) => Math.min(250, value + 25))}>+</Button>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+      <CardContent className="space-y-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
         {isImage ? (
-          <div className="relative h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white xl:min-h-0 xl:max-h-none xl:flex-1">
-            <Image src={fileUrl} alt={document.original_filename} fill unoptimized className="object-contain" />
+          <div className="relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1">
+            {fitMode === "page" ? (
+              <Image src={fileUrl} alt={document.original_filename} fill unoptimized className="object-contain p-2" />
+            ) : (
+              <div className={fitMode === "width" ? "flex min-h-full items-start justify-center bg-white" : "inline-block min-h-full min-w-full bg-white p-2"}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={fileUrl}
+                  alt={document.original_filename}
+                  className={fitMode === "width" ? "h-auto w-full max-w-none object-contain" : "h-auto max-w-none"}
+                  style={fitMode === "actual" ? { width: `${zoom}%` } : undefined}
+                />
+              </div>
+            )}
           </div>
         ) : isPdf ? (
           <iframe
             src={previewUrl}
             title={document.original_filename}
-            className="h-[calc(100vh-10rem)] min-h-[34rem] max-h-[52rem] w-full rounded-lg border bg-white xl:min-h-0 xl:max-h-none xl:flex-1"
+            className="h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full rounded-lg border bg-white xl:min-h-0 xl:max-h-none xl:flex-1"
           />
         ) : (
           <div className="flex min-h-72 flex-col items-center justify-center rounded-lg border bg-white p-8 text-center xl:flex-1">
@@ -446,7 +507,9 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
             <p className="mt-1 text-sm text-muted-foreground">{document.mime_type}</p>
           </div>
         )}
-        <div className="xl:shrink-0">
+        <details className="xl:shrink-0">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">파일 정보</summary>
+          <div className="mt-3">
           <InfoGrid
             items={[
               ["파일 형식", titleCaseLabel(document.source_file_type || "unknown")],
@@ -455,7 +518,8 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
               ["최근 수정", formatDateTime(document.updated_at)],
             ]}
           />
-        </div>
+          </div>
+        </details>
       </CardContent>
     </Card>
   );
@@ -602,6 +666,8 @@ export default function DocumentDetailPage() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("extracted");
   const [categories, setCategories] = useState<FolderSummary[]>([]);
+  const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
+  const [selectedExportTemplateId, setSelectedExportTemplateId] = useState("");
   const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const [approvalNote, setApprovalNote] = useState("");
   const [activeLineItemIndex, setActiveLineItemIndex] = useState(0);
@@ -622,6 +688,12 @@ export default function DocumentDetailPage() {
       .catch((error) => toast.error(error instanceof Error ? error.message : "문서를 불러오지 못했습니다"))
       .finally(() => setLoading(false));
     api.categories().then(setCategories).catch(() => setCategories([]));
+    api.exportTemplates.list()
+      .then((items) => {
+        setExportTemplates(items);
+        setSelectedExportTemplateId((current) => current || items.find((item) => item.is_default)?.id || "");
+      })
+      .catch(() => setExportTemplates([]));
   }, [params.id, syncDocument]);
 
   async function onSubmit(values: DocumentUpdate & { tags_text: string }) {
@@ -979,7 +1051,13 @@ export default function DocumentDetailPage() {
         </div>
       </div>
 
-      <ErpReadinessBanner document={document} openIssueCount={openIssueCount} />
+      <ErpReadinessBanner
+        document={document}
+        openIssueCount={openIssueCount}
+        exportTemplates={exportTemplates}
+        selectedExportTemplateId={selectedExportTemplateId}
+        onExportTemplateChange={setSelectedExportTemplateId}
+      />
 
       <div className="mb-6 grid gap-4 lg:grid-cols-3">
         <Card>
