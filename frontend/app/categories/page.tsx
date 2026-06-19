@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { BellRing, CheckCircle2, FolderKanban, LoaderCircle, Plus } from "lucide-react";
+import { BellRing, CheckCircle2, ChevronRight, Folder, FolderKanban, LayoutGrid, ListTree, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { FolderCard } from "@/components/folder-card";
@@ -12,15 +13,25 @@ import { api } from "@/lib/api";
 import type { FolderSummary } from "@/types/document";
 
 type FolderTreeNode = FolderSummary & { children: FolderSummary[] };
+type FolderViewMode = "folders" | "list";
+type FolderTreeRow = FolderSummary & { level: number; parentLabel: string | null };
 
 export default function CategoriesPage() {
   const [folders, setFolders] = useState<FolderSummary[]>([]);
   const [label, setLabel] = useState("");
   const [parent, setParent] = useState("");
+  const [viewMode, setViewMode] = useState<FolderViewMode>("folders");
 
   useEffect(() => {
     load();
+    const savedViewMode = window.localStorage.getItem("docparse.folderViewMode");
+    if (savedViewMode === "folders" || savedViewMode === "list") setViewMode(savedViewMode);
   }, []);
+
+  function changeViewMode(mode: FolderViewMode) {
+    setViewMode(mode);
+    window.localStorage.setItem("docparse.folderViewMode", mode);
+  }
 
   function load() {
     api.categories().then(setFolders).catch(() => setFolders([]));
@@ -63,6 +74,7 @@ export default function CategoriesPage() {
     .sort((a, b) => b.count - a.count || b.needs_review - a.needs_review || a.label.localeCompare(b.label));
   const emptyCustomFolders = folders.filter((folder) => folder.custom && folder.count === 0);
   const folderTree = buildFolderTree(folders);
+  const folderRows = flattenFolderTree(folderTree);
 
   return (
     <main className="shell py-8">
@@ -142,52 +154,66 @@ export default function CategoriesPage() {
 
       {folderTree.length ? (
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-semibold">폴더 트리</h2>
-            <p className="text-sm text-muted-foreground">상위 폴더 안에서 다시 문서 유형별로 나눠 볼 수 있습니다</p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">폴더 구조</h2>
+              <p className="text-sm text-muted-foreground">맥북 폴더처럼 열어보거나, 목록으로 한 번에 비교할 수 있습니다</p>
+            </div>
+            <FolderViewToggle value={viewMode} onChange={changeViewMode} />
           </div>
-          <div className="grid gap-4">
-            {folderTree.map((folder) => (
-              <div key={folder.value} className="rounded-xl border bg-slate-50/70 p-3">
-                <FolderCard
-                  folder={folder}
-                  href={`/categories/${encodeURIComponent(folder.value)}`}
-                  onDelete={folder.custom && folder.count === 0 ? () => deleteFolder(folder) : undefined}
-                />
-                {folder.children.length ? (
-                  <div className="mt-3 grid gap-3 border-l-2 border-slate-200 pl-4 md:grid-cols-2 xl:grid-cols-3">
-                    {folder.children.map((child) => (
-                      <FolderCard
-                        key={child.value}
-                        folder={child}
-                        href={`/categories/${encodeURIComponent(child.value)}`}
-                        onDelete={child.custom && child.count === 0 ? () => deleteFolder(child) : undefined}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
+          {viewMode === "folders" ? (
+            <div className="grid gap-4">
+              {folderTree.map((folder) => (
+                <div key={folder.value} className="rounded-xl border bg-slate-50/70 p-3">
+                  <FolderCard
+                    folder={folder}
+                    href={`/categories/${encodeURIComponent(folder.value)}`}
+                    onDelete={folder.custom && folder.count === 0 ? () => deleteFolder(folder) : undefined}
+                  />
+                  {folder.children.length ? (
+                    <div className="mt-3 grid gap-3 border-l-2 border-slate-200 pl-4 md:grid-cols-2 xl:grid-cols-3">
+                      {folder.children.map((child) => (
+                        <FolderCard
+                          key={child.value}
+                          folder={child}
+                          href={`/categories/${encodeURIComponent(child.value)}`}
+                          onDelete={child.custom && child.count === 0 ? () => deleteFolder(child) : undefined}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <FolderListView rows={folderRows} onDelete={deleteFolder} />
+          )}
         </section>
       ) : null}
 
       {activeFolders.length && !folderTree.length ? (
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-semibold">사용 중인 문서 유형</h2>
-            <p className="text-sm text-muted-foreground">문서 수와 검토 필요 상태 기준으로 정렬됩니다</p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">사용 중인 문서 유형</h2>
+              <p className="text-sm text-muted-foreground">문서 수와 검토 필요 상태 기준으로 정렬됩니다</p>
+            </div>
+            <FolderViewToggle value={viewMode} onChange={changeViewMode} />
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {activeFolders.map((folder) => (
-              <FolderCard
-                key={folder.value}
-                folder={folder}
-                href={`/categories/${encodeURIComponent(folder.value)}`}
-                onDelete={folder.custom && folder.count === 0 ? () => deleteFolder(folder) : undefined}
-              />
-            ))}
-          </div>
+          {viewMode === "folders" ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {activeFolders.map((folder) => (
+                <FolderCard
+                  key={folder.value}
+                  folder={folder}
+                  href={`/categories/${encodeURIComponent(folder.value)}`}
+                  onDelete={folder.custom && folder.count === 0 ? () => deleteFolder(folder) : undefined}
+                />
+              ))}
+            </div>
+          ) : (
+            <FolderListView rows={activeFolders.map((folder) => ({ ...folder, level: 0, parentLabel: null }))} onDelete={deleteFolder} />
+          )}
         </section>
       ) : null}
 
@@ -217,6 +243,94 @@ export default function CategoriesPage() {
   );
 }
 
+function FolderViewToggle({ value, onChange }: { value: FolderViewMode; onChange: (mode: FolderViewMode) => void }) {
+  return (
+    <div className="inline-flex rounded-lg border bg-white p-1">
+      <Button
+        type="button"
+        variant={value === "folders" ? "default" : "ghost"}
+        size="sm"
+        onClick={() => onChange("folders")}
+        className="gap-1.5"
+      >
+        <LayoutGrid className="size-4" />
+        폴더형
+      </Button>
+      <Button
+        type="button"
+        variant={value === "list" ? "default" : "ghost"}
+        size="sm"
+        onClick={() => onChange("list")}
+        className="gap-1.5"
+      >
+        <ListTree className="size-4" />
+        목록형
+      </Button>
+    </div>
+  );
+}
+
+function FolderListView({ rows, onDelete }: { rows: FolderTreeRow[]; onDelete: (folder: FolderSummary) => void }) {
+  return (
+    <Card className="overflow-hidden">
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="border-b bg-slate-50 text-xs text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3 text-left font-medium">폴더</th>
+                <th className="px-4 py-3 text-left font-medium">상위 폴더</th>
+                <th className="px-4 py-3 text-right font-medium">문서</th>
+                <th className="px-4 py-3 text-right font-medium">검토 필요</th>
+                <th className="px-4 py-3 text-right font-medium">확정 완료</th>
+                <th className="px-4 py-3 text-right font-medium">처리 중</th>
+                <th className="px-4 py-3 text-right font-medium">작업</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((folder) => (
+                <tr key={folder.value} className="bg-white hover:bg-slate-50">
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/categories/${encodeURIComponent(folder.value)}`}
+                      className="flex min-w-0 items-center gap-2 font-medium text-slate-900"
+                      style={{ paddingLeft: `${folder.level * 1.25}rem` }}
+                    >
+                      {folder.level ? <ChevronRight className="size-4 shrink-0 text-slate-400" /> : null}
+                      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-amber-50 text-amber-700">
+                        <Folder className="size-4 fill-amber-100" />
+                      </span>
+                      <span className="truncate">{folder.label}</span>
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{folder.parentLabel || "-"}</td>
+                  <td className="px-4 py-3 text-right font-semibold">{folder.count}</td>
+                  <td className="px-4 py-3 text-right text-amber-700">{folder.needs_review}</td>
+                  <td className="px-4 py-3 text-right text-emerald-700">{folder.confirmed}</td>
+                  <td className="px-4 py-3 text-right text-primary">{folder.processing}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end gap-2">
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/categories/${encodeURIComponent(folder.value)}`}>열기</Link>
+                      </Button>
+                      {folder.custom && folder.count === 0 ? (
+                        <Button type="button" variant="outline" size="sm" onClick={() => onDelete(folder)}>
+                          <Trash2 className="size-4" />
+                          삭제
+                        </Button>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function buildFolderTree(folders: FolderSummary[]): FolderTreeNode[] {
   const byValue = new Map(folders.map((folder) => [folder.value, folder]));
   const roots: FolderTreeNode[] = [];
@@ -228,4 +342,15 @@ function buildFolderTree(folders: FolderSummary[]): FolderTreeNode[] {
     roots.push({ ...folder, children });
   }
   return roots.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+function flattenFolderTree(nodes: FolderTreeNode[]): FolderTreeRow[] {
+  const rows: FolderTreeRow[] = [];
+  for (const node of nodes) {
+    rows.push({ ...node, level: 0, parentLabel: null });
+    for (const child of node.children) {
+      rows.push({ ...child, level: 1, parentLabel: node.label });
+    }
+  }
+  return rows;
 }
