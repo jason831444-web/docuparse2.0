@@ -40,15 +40,15 @@ def _document(**kwargs) -> Document:
 def test_approval_blocks_unresolved_critical_issue_until_resolved():
     document = _document(workflow_metadata={
         "taxonomy": {"document_profile": "priced_document", "document_profiles": ["priced_document"], "amount_required": True, "party_required": True},
-        "normalized_review_issues": [{"code": "internal_item_ambiguous", "message_ko": "품목 후보 확인 필요", "field": "line_items.internal_item_code", "item_index": 0}],
+        "normalized_review_issues": [{"code": "missing_quantity", "message_ko": "수량 확인 필요", "field": "line_items.quantity", "item_index": 0}],
     })
 
     blocked = approve_document(document)
     assert blocked.ok is False
-    assert any("internal_item_ambiguous" in item for item in blocked.blocking)
+    assert any("missing_quantity" in item for item in blocked.blocking)
     assert document.workflow_metadata["review"]["review_state"] == "blocked"
 
-    update_issue_status(document, "internal_item_ambiguous:line_items.internal_item_code:0", "resolved", "Confirmed candidate")
+    update_issue_status(document, "missing_quantity:line_items.quantity:0", "resolved", "Confirmed quantity")
     approved = approve_document(document, approval_note="확인 완료")
 
     assert approved.ok is True
@@ -56,13 +56,30 @@ def test_approval_blocks_unresolved_critical_issue_until_resolved():
     assert document.workflow_metadata["review"]["approval_note"] == "확인 완료"
 
 
+def test_internal_item_matching_issues_do_not_block_approval():
+    document = _document(workflow_metadata={
+        "taxonomy": {"document_profile": "priced_document", "document_profiles": ["priced_document"], "amount_required": True, "party_required": True},
+        "normalized_review_issues": [
+            {"code": "internal_item_ambiguous", "message_ko": "품목 후보 확인 필요", "field": "line_items.internal_item_code", "item_index": 0},
+            {"code": "internal_item_unmatched", "message_ko": "품목마스터 미매칭", "field": "line_items.internal_item_code", "item_index": 1},
+            {"code": "item_matching_skipped", "message_ko": "품목마스터 없음", "field": "line_items.internal_item_code", "item_index": 2},
+        ],
+    })
+
+    validation = approve_document(document, approval_note="내부코드 없이 업무데이터 확정")
+
+    assert validation.ok is True
+    assert not validation.blocking
+    assert document.workflow_metadata["review"]["approved"] is True
+
+
 def test_approval_error_payload_is_user_facing_korean_without_raw_codes():
     document = _document(workflow_metadata={
         "taxonomy": {"document_profile": "priced_document", "document_profiles": ["priced_document"], "amount_required": True, "party_required": True},
         "normalized_review_issues": [{
-            "code": "internal_item_ambiguous",
-            "message_ko": "1번째 품목의 내부 품목코드 후보를 선택해야 합니다.",
-            "field": "line_items.internal_item_code",
+            "code": "missing_quantity",
+            "message_ko": "1번째 품목의 수량을 확인해야 합니다.",
+            "field": "line_items.quantity",
             "item_index": 0,
         }],
     })
@@ -71,14 +88,14 @@ def test_approval_error_payload_is_user_facing_korean_without_raw_codes():
     payload = approval_error_payload(document, validation)
 
     assert payload["message_ko"] == "아직 해결되지 않은 검토 항목이 있어 확정할 수 없습니다."
-    assert payload["blocking"] == ["1번째 품목의 내부 품목코드 후보를 선택해야 합니다."]
-    assert payload["blocking_details"][0]["field_label_ko"] == "내부 품목코드"
+    assert payload["blocking"] == ["1번째 품목의 수량을 확인해야 합니다."]
+    assert payload["blocking_details"][0]["field_label_ko"] == "수량"
     assert payload["blocking_details"][0]["item_label_ko"] == "1번째 품목"
     assert "해결" in payload["action_ko"]
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "Approval blocked" not in serialized
     assert "unresolved:" not in serialized
-    assert "internal_item_ambiguous" not in serialized
+    assert "missing_quantity" not in serialized
 
 
 def test_no_price_document_can_be_approved_without_total_or_currency():

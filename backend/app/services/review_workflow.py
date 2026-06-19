@@ -19,9 +19,6 @@ CRITICAL_ISSUE_CODES = {
     "amount_mismatch",
     "invalid_line_amount",
     "item_code_name_conflict",
-    "internal_item_unmatched",
-    "internal_item_ambiguous",
-    "item_matching_skipped",
 }
 
 
@@ -51,7 +48,7 @@ ISSUE_LABELS_KO: dict[str, str] = {
     "item_code_name_conflict": "품목명과 내부 품목코드가 서로 맞지 않을 수 있습니다.",
     "internal_item_unmatched": "사내 품목마스터에서 맞는 내부 품목코드를 찾지 못했습니다.",
     "internal_item_ambiguous": "사내 품목마스터 후보가 여러 개라 선택이 필요합니다.",
-    "item_matching_skipped": "품목마스터가 없어 내부 품목코드 매칭을 확인해야 합니다.",
+    "item_matching_skipped": "품목마스터가 없어 내부 품목코드 매칭을 건너뛰었습니다.",
     "subtotal_tax_total_mismatch": "공급가액, 세액, 합계금액이 맞지 않습니다.",
     "tax_amount_fields_missing": "세금계산서 금액 필드를 확인해야 합니다.",
     "return_document_misclassified_as_delivery_note": "반품/차감 문서가 납품서로 분류되어 확인이 필요합니다.",
@@ -85,9 +82,9 @@ FIELD_LABELS_KO: dict[str, str] = {
 
 
 ACTION_LABELS_KO: dict[str, str] = {
-    "internal_item_unmatched": "품목마스터에서 해당 품목을 선택하거나 새 품목/별칭을 등록한 뒤 해결로 표시하세요.",
-    "internal_item_ambiguous": "원본과 품목 후보를 비교해 맞는 내부 품목코드를 선택한 뒤 해결로 표시하세요.",
-    "item_matching_skipped": "품목마스터를 등록하거나 이 문서는 품목코드 없이 처리해도 되는지 확인하세요.",
+    "internal_item_unmatched": "필요하면 내부 품목코드를 직접 입력하거나 후보를 선택하세요. 내부코드 없이 처리해도 되는 문서라면 그대로 확정할 수 있습니다.",
+    "internal_item_ambiguous": "필요하면 원본과 품목 후보를 비교해 맞는 내부 품목코드를 선택하세요. 내부코드는 보조 정보라 확정 필수값은 아닙니다.",
+    "item_matching_skipped": "품목마스터가 없으면 내부 품목코드 없이 처리됩니다. 필요할 때만 품목마스터를 등록하세요.",
     "missing_quantity": "원본 문서에서 수량을 확인해 입력하거나, 빈 칸이 맞다면 무시로 표시하세요.",
     "missing_item_name": "원본 문서에서 품목명을 확인해 입력하세요.",
     "missing_price_or_total": "원본 문서에 단가/금액이 있는지 확인하고, 금액 없는 문서라면 무시로 표시하세요.",

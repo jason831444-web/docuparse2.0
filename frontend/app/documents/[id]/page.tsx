@@ -1243,7 +1243,7 @@ export default function DocumentDetailPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold">품목 정보</p>
-                    <p className="mt-1 text-xs text-muted-foreground">품목명, 문서 품목코드, 내부 품목코드, 규격, 수량, 단가, 공급가액, 세액, 합계금액을 확인하세요.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">품목명, 규격, 수량 등 문서에 보이는 업무데이터를 확인하세요. 내부 품목코드는 보조 정보이며 필요할 때만 입력하거나 후보를 선택하면 됩니다.</p>
                   </div>
                   <Button type="button" variant="outline" size="sm" onClick={addLineItem}>
                     <Plus className="size-4" />

@@ -61,6 +61,27 @@ assert.equal(isBlockingReviewIssue({
   severity: "warning",
 }), true);
 
+assert.equal(isBlockingReviewIssue({
+  code: "internal_item_unmatched",
+  message_ko: "내부 품목코드를 찾지 못했습니다.",
+  field: "line_items.internal_item_code",
+  severity: "warning",
+}), false);
+
+assert.equal(isBlockingReviewIssue({
+  code: "internal_item_ambiguous",
+  message_ko: "내부 품목코드 후보가 여러 개입니다.",
+  field: "line_items.internal_item_code",
+  severity: "warning",
+}), false);
+
+assert.equal(isBlockingReviewIssue({
+  code: "item_matching_skipped",
+  message_ko: "품목마스터가 없습니다.",
+  field: "line_items.internal_item_code",
+  severity: "warning",
+}), false);
+
 assert.equal(reviewIssueSummary({
   code: "amount_direction_requires_review",
   message_ko: "반품/차감 문서는 금액의 차감 방향과 원문서 반영 방식을 확인해야 합니다.",
