@@ -180,3 +180,53 @@ def test_contrast_only_vl_input_avoids_crop_denoise_and_sharpen(tmp_path):
     assert not any("crop" in operation and "no_crop" not in operation for operation in operations)
     assert not any("sharpen" in operation for operation in operations)
     assert not any("denoise" in operation for operation in operations)
+
+
+def test_light_page_vl_input_preserves_source_and_reports_policy_metadata(tmp_path):
+    image = Image.new("RGB", (900, 1300), (66, 62, 58))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(130, 95), (785, 135), (810, 1170), (105, 1135)], fill=(224, 222, 216))
+    draw.text((220, 210), "발주서", fill=(45, 45, 45))
+    draw.text((220, 430), "S45C PIN 8X60 120 EA", fill=(55, 55, 55))
+    draw.text((220, 1090), "하단 비고: 검수 후 입고", fill=(55, 55, 55))
+    source = tmp_path / "purchase-order-photo.jpg"
+    image.save(source)
+    before_bytes = source.read_bytes()
+
+    variant = ImagePreprocessor().prepare_light_page_vl_input(
+        source,
+        tmp_path / "variants",
+        quality={"pages": [{"skew_angle_estimate": 0.0, "blur_score": 80.0}]},
+    )
+
+    assert source.read_bytes() == before_bytes
+    assert variant["variant_name"] == "light_page_preprocess"
+    assert variant["processed_path"]
+    assert Path(variant["processed_path"]).exists()
+    assert Path(variant["processed_path"]) != source
+    assert "full_page_upscale_2.2x" in variant["operations"]
+    assert "weak_page_local_contrast" in variant["operations"] or "weak_autocontrast_cutoff_1" in variant["operations"]
+    assert "no_binarization_applied" in variant["warnings"]
+    assert variant["metadata"]["upscale_factor"] == 2.2
+    assert variant["metadata"]["contrast_mode"] == "weak_background_normalization_clahe"
+
+
+def test_light_page_vl_input_skips_page_crop_when_hidden_risk(tmp_path):
+    image = Image.new("RGB", (900, 1300), (58, 55, 52))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((120, 100, 785, 1160), fill=(230, 230, 226))
+    draw.text((210, 210), "거래명세서", fill=(45, 45, 45))
+    source = tmp_path / "hidden-risk-photo.jpg"
+    image.save(source)
+
+    variant = ImagePreprocessor().prepare_light_page_vl_input(
+        source,
+        tmp_path / "variants",
+        quality={"pages": [{"skew_angle_estimate": 0.0, "blur_score": 90.0}]},
+        avoid_page_crop=True,
+    )
+
+    assert variant["variant_name"] == "light_page_preprocess"
+    assert variant["metadata"]["page_crop_applied"] is False
+    assert "hidden_or_cropped_column_risk_skip_page_crop" in variant["metadata"]["skipped_reasons"]
+    assert "hidden_cropped_guardrail_no_page_crop_or_perspective" in variant["warnings"]

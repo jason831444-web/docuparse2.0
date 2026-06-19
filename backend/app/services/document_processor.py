@@ -408,6 +408,7 @@ class DocumentProcessor:
             "warnings": list(input_variant.get("warnings") or []),
             "processed_path_present": bool(input_variant.get("processed_path")),
             "error": input_variant.get("error"),
+            "metadata": input_variant.get("metadata") if isinstance(input_variant.get("metadata"), dict) else {},
         }
         if isinstance(input_variant.get("vl_preprocess_policy"), dict):
             metadata["vl_preprocess_policy"] = input_variant["vl_preprocess_policy"]
@@ -428,6 +429,12 @@ class DocumentProcessor:
             "reason": "default_original_vl_input",
             "available_candidates": available_candidates,
             "hidden_cropped_guardrail": False,
+            "page_crop_applied": False,
+            "page_crop_confidence": 0.0,
+            "deskew_applied": False,
+            "upscale_factor": None,
+            "contrast_mode": None,
+            "skipped_reasons": [],
             "current_standard": {
                 "available": suffix in image_suffixes,
                 "used": False,
@@ -450,7 +457,7 @@ class DocumentProcessor:
             })
             return self._original_vl_input_variant(stored_path, policy, operations=["original_file"])
 
-        available_candidates.append("contrast_only")
+        available_candidates.extend(["light_page_preprocess", "contrast_only", "current_standard_debug"])
         quality = self._safe_quality_for_vl_input(stored_path)
         if quality:
             policy["quality_summary"] = self._vl_preprocess_quality_summary(quality)
@@ -464,32 +471,50 @@ class DocumentProcessor:
         )
         if hidden_or_cropped:
             policy.update({
-                "selected_mode": "original",
-                "reason": "hidden_or_cropped_column_risk_original_required",
+                "selected_mode": "light_page_preprocess",
+                "reason": "hidden_or_cropped_column_risk_crop_free_light_page",
                 "hidden_cropped_guardrail": True,
             })
-            return self._original_vl_input_variant(stored_path, policy)
-
-        if self._should_use_contrast_only_for_vl(quality):
-            output_dir = self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id)
-            variant = self.image_preprocessor.prepare_contrast_only_vl_input(stored_path, output_dir)
-            if variant.get("processed_path"):
-                policy.update({
-                    "selected_mode": "contrast_only",
-                    "reason": "photo_or_low_contrast_light_contrast_only",
-                })
-                variant["vl_preprocess_policy"] = policy
-                return variant
-            policy.update({
-                "selected_mode": "original",
-                "reason": "contrast_only_unavailable_fallback_original",
-                "contrast_only_error": variant.get("error"),
-            })
-            return self._original_vl_input_variant(stored_path, policy)
+            return self._light_page_vl_input_variant(stored_path, document, policy, quality, avoid_page_crop=True)
 
         policy.update({
+            "selected_mode": "light_page_preprocess",
+            "reason": self._light_page_vl_reason_from_quality(quality),
+        })
+        return self._light_page_vl_input_variant(stored_path, document, policy, quality, avoid_page_crop=False)
+
+    def _light_page_vl_input_variant(
+        self,
+        stored_path: Path,
+        document: Document,
+        policy: dict[str, Any],
+        quality: dict[str, Any] | None,
+        *,
+        avoid_page_crop: bool,
+    ) -> dict[str, Any]:
+        output_dir = self.settings.upload_dir / "vl_preprocess_inputs" / str(document.id)
+        variant = self.image_preprocessor.prepare_light_page_vl_input(
+            stored_path,
+            output_dir,
+            quality=quality,
+            avoid_page_crop=avoid_page_crop,
+        )
+        metadata = variant.get("metadata") if isinstance(variant.get("metadata"), dict) else {}
+        policy.update({
+            "page_crop_applied": bool(metadata.get("page_crop_applied")),
+            "page_crop_confidence": metadata.get("page_crop_confidence"),
+            "deskew_applied": bool(metadata.get("deskew_applied")),
+            "upscale_factor": metadata.get("upscale_factor"),
+            "contrast_mode": metadata.get("contrast_mode"),
+            "skipped_reasons": list(metadata.get("skipped_reasons") or []),
+        })
+        if variant.get("processed_path"):
+            variant["vl_preprocess_policy"] = policy
+            return variant
+        policy.update({
             "selected_mode": "original",
-            "reason": self._original_vl_reason_from_quality(quality),
+            "reason": "light_page_preprocess_unavailable_fallback_original",
+            "light_page_error": variant.get("error"),
         })
         return self._original_vl_input_variant(stored_path, policy)
 
@@ -552,6 +577,16 @@ class DocumentProcessor:
         if scan_type in {"scan", "digital_pdf", "unknown"}:
             return f"{scan_type}_original_safe_default"
         return "quality_does_not_require_contrast_only_original_selected"
+
+    def _light_page_vl_reason_from_quality(self, quality: dict[str, Any] | None) -> str:
+        if not isinstance(quality, dict):
+            return "quality_unavailable_light_page_safe_default"
+        scan_type = quality.get("likely_scan_type") or "unknown"
+        if scan_type in {"scan", "digital_pdf", "unknown"}:
+            return f"{scan_type}_light_page_minimal_default"
+        if self._should_use_contrast_only_for_vl(quality):
+            return "photo_or_low_contrast_light_page_preprocess_default"
+        return "image_upload_light_page_preprocess_default"
 
     def _vl_primary_normalized_document(
         self,
