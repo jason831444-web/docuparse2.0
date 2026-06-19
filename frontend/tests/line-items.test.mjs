@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { cleanLineItemValue, cleanLineItems } from "../lib/line-items.ts";
+import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, normalizeCustomLineItemField } from "../lib/line-items.ts";
 
 assert.equal(cleanLineItemValue("quantity", "확인 필요"), "");
 assert.equal(cleanLineItemValue("quantity", "의 수량이 비어 있습니다."), "");
@@ -22,9 +22,9 @@ const [item] = cleanLineItems([
   },
 ]);
 
-assert.equal(item.item_code, "");
-assert.equal(item.internal_item_code, "");
-assert.equal(item.quantity, "");
+assert.equal(item.item_code, undefined);
+assert.equal(item.internal_item_code, undefined);
+assert.equal(item.quantity, undefined);
 assert.equal(item.unit_price, "300");
 assert.equal(item.supply_amount, "450000");
 assert.equal(item.tax_amount, "45000");
@@ -43,12 +43,33 @@ const [malformed] = cleanLineItems([
   },
 ]);
 
-assert.equal(malformed.item_code, "");
-assert.equal(malformed.internal_item_code, "");
+assert.equal(malformed.item_code, undefined);
+assert.equal(malformed.internal_item_code, undefined);
 assert.equal(malformed.quantity, "1");
 assert.equal(malformed.unit_price, "42000");
 assert.equal(malformed.supply_amount, "4200");
 assert.equal(malformed.tax_amount, "46200");
 assert.equal(malformed.line_total, "4200");
+
+const [dynamicOnly] = cleanLineItems([
+  {
+    item_name: "S45C PIN",
+    quantity: "120",
+    unit_price: "",
+    supply_amount: null,
+    검사자: "이지훈",
+  },
+]);
+
+assert.deepEqual(Object.keys(dynamicOnly).sort(), ["item_name", "quantity", "source_item_name", "검사자"].sort());
+assert.equal(dynamicOnly.item_name, "S45C PIN");
+assert.equal(dynamicOnly.quantity, "120");
+assert.equal(dynamicOnly.검사자, "이지훈");
+
+assert.deepEqual(lineItemDisplayFields({ item_name: "S45C PIN", quantity: "120", custom_note: "" }), ["item_name", "quantity", "custom_note"]);
+assert.deepEqual(lineItemDisplayFields({}, ["quantity"]), ["quantity"]);
+assert.equal(lineItemAddableFields({ item_name: "S45C PIN" }).includes("item_name"), false);
+assert.equal(lineItemAddableFields({ item_name: "S45C PIN" }).includes("quantity"), true);
+assert.equal(normalizeCustomLineItemField(" 검사자 / 담당 "), "검사자_담당");
 
 console.log("line item sanitation tests passed");

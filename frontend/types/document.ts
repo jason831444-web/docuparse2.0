@@ -272,6 +272,7 @@ export interface DocumentRecord {
 }
 
 export interface ManufacturingLineItem {
+  [key: string]: unknown;
   item_name?: string | null;
   item_code?: string | null;
   document_item_code?: string | null;

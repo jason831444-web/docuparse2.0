@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
-import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
+import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { DocumentRecord, DocumentUpdate, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
@@ -63,22 +63,6 @@ function itemMasterStatusClass(status: string | null | undefined) {
   if (status === "unmatched" || status === "skipped_no_item_master") return "border-slate-300 bg-slate-50 text-slate-700";
   return "border-slate-200 bg-white text-slate-600";
 }
-
-const lineItemIdentityFields: Array<[keyof ManufacturingLineItem, string]> = [
-  ["item_name", "품목명"],
-  ["item_code", "문서 품목코드"],
-  ["internal_item_code", "내부 품목코드"],
-  ["specification", "규격"],
-];
-
-const lineItemAmountFields: Array<[keyof ManufacturingLineItem, string]> = [
-  ["quantity", "수량"],
-  ["unit", "단위"],
-  ["unit_price", "단가"],
-  ["supply_amount", "공급가액"],
-  ["tax_amount", "세액"],
-  ["line_total", "합계금액"],
-];
 
 function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string } {
   const businessFields = (document.workflow_metadata?.business_fields ?? {}) as Record<string, unknown>;
@@ -486,22 +470,34 @@ function LineItemField({
   blockingIssues,
   infoIssues,
   onChange,
+  onRemove,
 }: {
   index: number;
-  field: keyof ManufacturingLineItem;
+  field: string;
   label: string;
   item: ManufacturingLineItem;
   low: boolean;
   blockingIssues: ReturnType<typeof blockingReviewIssues>;
   infoIssues: ReturnType<typeof informationalReviewIssues>;
-  onChange: (index: number, field: keyof ManufacturingLineItem, value: string) => void;
+  onChange: (index: number, field: string, value: string) => void;
+  onRemove: (index: number, field: string) => void;
 }) {
   const visibleInfoIssues = infoIssues.slice(0, 2);
   const hiddenInfoCount = Math.max(0, infoIssues.length - visibleInfoIssues.length);
   return (
-    <label className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
-      {label}
+    <div className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={`line-item-${index}-${field}`}>{label}</label>
+        <button
+          type="button"
+          className="text-[11px] font-normal text-slate-500 underline-offset-4 hover:text-red-600 hover:underline"
+          onClick={() => onRemove(index, field)}
+        >
+          필드 삭제
+        </button>
+      </div>
       <Input
+        id={`line-item-${index}-${field}`}
         aria-label={`${index + 1}행 ${label}`}
         className={low ? "border-amber-400 bg-amber-50" : ""}
         value={String(item?.[field] ?? "")}
@@ -526,7 +522,7 @@ function LineItemField({
           ) : null}
         </div>
       ) : low ? <p className="text-[11px] text-amber-700">확인 필요</p> : null}
-    </label>
+    </div>
   );
 }
 
@@ -609,6 +605,8 @@ export default function DocumentDetailPage() {
   const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const [approvalNote, setApprovalNote] = useState("");
   const [activeLineItemIndex, setActiveLineItemIndex] = useState(0);
+  const [lineItemFieldSelections, setLineItemFieldSelections] = useState<Record<number, string>>({});
+  const [customLineItemFields, setCustomLineItemFields] = useState<Record<number, string>>({});
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
@@ -755,28 +753,47 @@ export default function DocumentDetailPage() {
     }
   }
 
-  function updateLineItem(index: number, field: keyof ManufacturingLineItem, value: string) {
+  function updateLineItem(index: number, field: string, value: string) {
     const items = [...(form.getValues("line_items") || [])];
-    items[index] = { ...(items[index] || {}), [field]: cleanLineItemValue(field, value) };
+    const current = { ...(items[index] || {}) };
+    const cleaned = cleanLineItemValue(field, value);
+    current[field] = cleaned;
+    items[index] = current;
     form.setValue("line_items", items, { shouldDirty: true });
   }
 
   function addLineItem() {
     const items = [...(form.getValues("line_items") || [])];
-    items.push({
-      item_name: "",
-      item_code: "",
-      internal_item_code: "",
-      specification: "",
-      quantity: "",
-      unit: "",
-      unit_price: "",
-      supply_amount: "",
-      tax_amount: "",
-      line_total: "",
-    });
+    items.push({});
     form.setValue("line_items", items, { shouldDirty: true });
     setActiveLineItemIndex(items.length - 1);
+  }
+
+  function addLineItemField(index: number, field: string) {
+    const normalizedField = normalizeCustomLineItemField(field);
+    if (!normalizedField) {
+      toast.error("추가할 필드명을 입력하세요");
+      return;
+    }
+    const items = [...(form.getValues("line_items") || [])];
+    const current = { ...(items[index] || {}) };
+    if (Object.prototype.hasOwnProperty.call(current, normalizedField)) {
+      toast.error("이미 있는 필드입니다");
+      return;
+    }
+    current[normalizedField] = "";
+    items[index] = current;
+    form.setValue("line_items", items, { shouldDirty: true });
+    setLineItemFieldSelections((state) => ({ ...state, [index]: "" }));
+    setCustomLineItemFields((state) => ({ ...state, [index]: "" }));
+  }
+
+  function removeLineItemField(index: number, field: string) {
+    const items = [...(form.getValues("line_items") || [])];
+    const current = { ...(items[index] || {}) };
+    delete current[field];
+    items[index] = current;
+    form.setValue("line_items", items, { shouldDirty: true });
   }
 
   async function selectItemMasterCandidate(index: number, candidate: NonNullable<ManufacturingLineItem["item_master_candidates"]>[number]) {
@@ -864,6 +881,11 @@ export default function DocumentDetailPage() {
   const blockingIssueSummaryItems = reviewIssueSummaryItems(blockingIssues);
   const groupedBlockingIssueItems = groupedReviewIssues(blockingIssues);
   const infoIssues = informationalReviewIssues(document);
+  const activeLineItemReviewFields = [...blockingIssues, ...infoIssues]
+    .filter((issue) => issue.item_index === activeLineItemIndex && typeof issue.field === "string" && issue.field.startsWith("line_items."))
+    .map((issue) => String(issue.field).replace(/^line_items\./, ""));
+  const activeLineItemFields = activeLineItem ? lineItemDisplayFields(activeLineItem, activeLineItemReviewFields) : [];
+  const activeLineItemAddableFields = activeLineItem ? lineItemAddableFields(activeLineItem) : [];
   const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
   const displayTitle = documentDisplayTitle(document);
@@ -871,7 +893,7 @@ export default function DocumentDetailPage() {
   const reviewIssueProgress = reviewIssueProgressCounts(reviewMetadata, blockingIssues.length);
   const openIssueCount = reviewIssueProgress.open;
   const resolvedIssueCount = reviewIssueProgress.resolved;
-  function lineItemFieldState(index: number, field: keyof ManufacturingLineItem) {
+  function lineItemFieldState(index: number, field: string) {
     const itemCode = `item_${index + 1}`;
     const structuredLowCodes = [
       field === "item_code" ? `missing_item_code:${itemCode}` : null,
@@ -1290,43 +1312,75 @@ export default function DocumentDetailPage() {
                           <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(activeLineItemIndex)}>삭제</Button>
                         </div>
 
-                        <div className="grid gap-3">
-                          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                            {lineItemIdentityFields.map(([field, label]) => {
-                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(activeLineItemIndex, field);
-                              return (
-                                <LineItemField
-                                  key={field}
-                                  index={activeLineItemIndex}
-                                  field={field}
-                                  label={label}
-                                  item={activeLineItem}
-                                  low={low}
-                                  blockingIssues={fieldBlockingIssues}
-                                  infoIssues={fieldInfoIssues}
-                                  onChange={updateLineItem}
-                                />
-                              );
-                            })}
-                          </div>
+                        <div className="grid gap-4">
+                          {activeLineItemFields.length ? (
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                              {activeLineItemFields.map((field) => {
+                                const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(activeLineItemIndex, field);
+                                return (
+                                  <LineItemField
+                                    key={field}
+                                    index={activeLineItemIndex}
+                                    field={field}
+                                    label={lineItemFieldLabel(field)}
+                                    item={activeLineItem}
+                                    low={low}
+                                    blockingIssues={fieldBlockingIssues}
+                                    infoIssues={fieldInfoIssues}
+                                    onChange={updateLineItem}
+                                    onRemove={removeLineItemField}
+                                  />
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="rounded-lg border border-dashed bg-white p-4 text-sm text-muted-foreground">
+                              이 품목에 저장된 필드가 없습니다. 원본에 보이는 품목명, 수량, 규격 등을 아래에서 추가하세요.
+                            </div>
+                          )}
 
-                          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
-                            {lineItemAmountFields.map(([field, label]) => {
-                              const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(activeLineItemIndex, field);
-                              return (
-                                <LineItemField
-                                  key={field}
-                                  index={activeLineItemIndex}
-                                  field={field}
-                                  label={label}
-                                  item={activeLineItem}
-                                  low={low}
-                                  blockingIssues={fieldBlockingIssues}
-                                  infoIssues={fieldInfoIssues}
-                                  onChange={updateLineItem}
-                                />
-                              );
-                            })}
+                          <div className="grid gap-3 rounded-lg border bg-white p-3">
+                            <div>
+                              <p className="text-xs font-semibold text-slate-800">필드 추가</p>
+                              <p className="mt-1 text-[11px] text-muted-foreground">원본에는 있지만 자동 추출되지 않은 품목 정보를 직접 추가할 수 있습니다.</p>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                              <select
+                                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                                value={lineItemFieldSelections[activeLineItemIndex] ?? ""}
+                                onChange={(event) => setLineItemFieldSelections({ ...lineItemFieldSelections, [activeLineItemIndex]: event.target.value })}
+                              >
+                                <option value="">추가할 표준 필드 선택</option>
+                                {activeLineItemAddableFields.map((field) => (
+                                  <option key={field} value={field}>{lineItemFieldLabel(field)}</option>
+                                ))}
+                              </select>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => addLineItemField(activeLineItemIndex, lineItemFieldSelections[activeLineItemIndex] || "")}
+                                disabled={!lineItemFieldSelections[activeLineItemIndex]}
+                              >
+                                <Plus className="size-4" />
+                                표준 필드 추가
+                              </Button>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                              <Input
+                                placeholder="예: 검사자, 차대번호, 포장상태"
+                                value={customLineItemFields[activeLineItemIndex] ?? ""}
+                                onChange={(event) => setCustomLineItemFields({ ...customLineItemFields, [activeLineItemIndex]: event.target.value })}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => addLineItemField(activeLineItemIndex, customLineItemFields[activeLineItemIndex] || "")}
+                                disabled={!customLineItemFields[activeLineItemIndex]?.trim()}
+                              >
+                                <Plus className="size-4" />
+                                직접 필드 추가
+                              </Button>
+                            </div>
                           </div>
                         </div>
 
