@@ -453,10 +453,13 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
     : `toolbar=0&navpanes=0&scrollbar=1&view=${fitMode === "width" ? "FitH" : "Fit"}`;
   const previewUrl = isPdf ? `${fileUrl}#${pdfHash}` : fileUrl;
   const zoomLabel = `${fitMode === "document" ? "문서 영역" : fitMode === "page" ? "전체 페이지" : fitMode === "width" ? "너비 맞춤" : "실제 크기"} · ${zoom}%`;
-  const activeCrop = fitMode === "document" && documentCrop ? documentCrop : fullCrop();
+  const reliableDocumentCrop = documentCrop && documentCrop.confidence >= 0.62 ? documentCrop : null;
+  const activeCrop = fitMode === "document" && reliableDocumentCrop ? reliableDocumentCrop : fullCrop();
   const imageLayout = isImage && naturalSize && previewSize.width && previewSize.height
     ? imagePreviewLayout({ fitMode, crop: activeCrop, naturalSize, previewSize, zoom })
     : null;
+  const imageScrollLeft = imageLayout?.scrollLeft ?? 0;
+  const imageScrollTop = imageLayout?.scrollTop ?? 0;
 
   useEffect(() => {
     if (!previewRef.current) return;
@@ -468,6 +471,12 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!isImage || !imageLayout || !previewRef.current) return;
+    previewRef.current.scrollLeft = imageScrollLeft;
+    previewRef.current.scrollTop = imageScrollTop;
+  }, [document.id, fitMode, imageLayout, imageScrollLeft, imageScrollTop, isImage, zoom]);
 
   function setMode(mode: PreviewFitMode) {
     setFitMode(mode);
@@ -530,7 +539,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         {isImage ? (
           <p className="text-xs text-muted-foreground">
             preview 위에서 마우스 휠로 확대/축소합니다. 문서 영역 맞춤은 원본을 자르지 않고 화면 표시만 조정합니다.
-            {documentCrop ? ` 감지 신뢰도 ${Math.round(documentCrop.confidence * 100)}%` : " 문서 외곽 감지가 어려우면 전체 페이지로 표시됩니다."}
+            {reliableDocumentCrop ? ` 감지 신뢰도 ${Math.round(reliableDocumentCrop.confidence * 100)}%` : " 문서 외곽 감지가 불안정하면 전체 페이지를 보존합니다."}
           </p>
         ) : null}
       </CardHeader>
@@ -574,6 +583,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
           </div>
         ) : isPdf ? (
           <iframe
+            key={previewUrl}
             src={previewUrl}
             title={document.original_filename}
             className="h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full rounded-lg border bg-white xl:min-h-0 xl:max-h-none xl:flex-1"
@@ -636,25 +646,33 @@ function imagePreviewLayout({
     baseScale = viewportWidth / imageWidth;
   } else if (fitMode === "actual") {
     baseScale = 1;
-  } else {
+  } else if (fitMode === "document") {
     baseScale = Math.min(viewportWidth / cropPixelWidth, viewportHeight / cropPixelHeight);
+  } else {
+    baseScale = Math.min(viewportWidth / imageWidth, viewportHeight / imageHeight);
   }
 
   const scale = Math.max(0.05, baseScale * (zoom / 100));
-  const visibleWidth = cropPixelWidth * scale;
-  const visibleHeight = cropPixelHeight * scale;
-  const innerWidth = Math.max(viewportWidth, visibleWidth);
-  const innerHeight = Math.max(viewportHeight, visibleHeight);
-  const cropOffsetX = crop.x * imageWidth * scale;
-  const cropOffsetY = crop.y * imageHeight * scale;
+  const scaledImageWidth = imageWidth * scale;
+  const scaledImageHeight = imageHeight * scale;
+  const innerWidth = Math.max(viewportWidth, scaledImageWidth);
+  const innerHeight = Math.max(viewportHeight, scaledImageHeight);
+  const left = (innerWidth - scaledImageWidth) / 2;
+  const top = (innerHeight - scaledImageHeight) / 2;
+  const cropCenterX = left + (crop.x + crop.width / 2) * scaledImageWidth;
+  const cropCenterY = top + (crop.y + crop.height / 2) * scaledImageHeight;
+  const scrollLeft = fitMode === "document" ? clampNumber(cropCenterX - viewportWidth / 2, 0, Math.max(0, innerWidth - viewportWidth)) : 0;
+  const scrollTop = fitMode === "document" ? clampNumber(cropCenterY - viewportHeight / 2, 0, Math.max(0, innerHeight - viewportHeight)) : 0;
 
   return {
     innerWidth,
     innerHeight,
-    imageWidth: imageWidth * scale,
-    imageHeight: imageHeight * scale,
-    left: (innerWidth - visibleWidth) / 2 - cropOffsetX,
-    top: (innerHeight - visibleHeight) / 2 - cropOffsetY,
+    imageWidth: scaledImageWidth,
+    imageHeight: scaledImageHeight,
+    left,
+    top,
+    scrollLeft,
+    scrollTop,
   };
 }
 
