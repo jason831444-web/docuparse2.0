@@ -17,6 +17,7 @@ from PIL import Image, ImageFilter, ImageStat
 
 from app.core.config import get_settings
 from app.models.document import DocumentType
+from app.services.document_interpretation_service import get_llama_cpp_gguf_model
 from app.services.parser import DocumentParser, ParsedDocument
 
 
@@ -958,6 +959,209 @@ class PaddleOCRVLDocumentAIService(DocumentAIService):
         return Path(cleaned) if cleaned else None
 
 
+class GemmaStructuredRepairDocumentAIService(DocumentAIService):
+    """Text-only Gemma/GGUF repair candidate for incomplete business extraction."""
+
+    provider_name = "ai_repair_gemma_gguf"
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+
+    def analyze(
+        self,
+        image_path: Path,
+        raw_text: str,
+        parsed: ParsedDocument,
+        filename: str = "",
+    ) -> AIDocumentUnderstandingResult:
+        payload = self._call_model(raw_text, parsed, filename)
+        result = self._normalize(payload, parsed, raw_text)
+        result.provider = self.provider_name
+        result.extraction_provider = self.provider_name
+        result.refinement_provider = self.provider_name
+        result.provider_chain = [self.provider_name]
+        result.merge_strategy = "text_only_gemma_repair_candidate"
+        result.review_required = True
+        result.extraction_notes.append(
+            "Gemma가 OCR 원문과 1차 parser 결과를 기준으로 보강 후보를 만들었습니다. 원본 확인 후 확정하세요."
+        )
+        return result
+
+    def _call_model(self, raw_text: str, parsed: ParsedDocument, filename: str) -> dict[str, Any]:
+        llm = get_llama_cpp_gguf_model(self.settings)
+        output = llm(
+            self._prompt(raw_text, parsed, filename),
+            max_tokens=min(int(self.settings.llama_cpp_max_tokens or 700), 900),
+            temperature=0.0,
+            stop=["</s>", "<end_of_turn>"],
+            echo=False,
+        )
+        return self._extract_json(self._output_text(output))
+
+    def _prompt(self, raw_text: str, parsed: ParsedDocument, filename: str) -> str:
+        parsed_summary = {
+            "document_type": parsed.document_type.value,
+            "document_number": parsed.document_number,
+            "vendor_name": parsed.vendor_name or parsed.merchant_name,
+            "customer_name": parsed.customer_name,
+            "issue_date": str(parsed.issue_date or parsed.extracted_date or "") or None,
+            "due_date": str(parsed.due_date or "") or None,
+            "currency": parsed.currency,
+            "subtotal": str(parsed.subtotal) if parsed.subtotal is not None else None,
+            "tax": str(parsed.tax) if parsed.tax is not None else None,
+            "total_amount": str(parsed.extracted_amount) if parsed.extracted_amount is not None else None,
+            "line_items": parsed.line_items[:20],
+        }
+        instruction = (
+            "You are a conservative Korean manufacturing document repair assistant. "
+            "Use only the OCR/raw text and parser result. Do not OCR the image. "
+            "Do not invent values that are not visible in the text. "
+            "Return only valid JSON with keys: document_type, vendor_name, customer_name, "
+            "document_number, issue_date, due_date, currency, subtotal, tax, extracted_amount, "
+            "line_items, low_confidence_fields, extraction_notes, confidence_score. "
+            "line_items may contain item_name, specification, item_code, lot_code, quantity, unit, "
+            "unit_price, supply_amount, tax_amount, line_total, note, received_quantity, "
+            "accepted_quantity, defective_quantity, inspection_item, inspection_result. "
+            "For delivery_note or inspection_report with no price columns, keep unit_price, "
+            "supply_amount, tax_amount, line_total, subtotal, tax, extracted_amount null. "
+            "For hidden/cropped amount text, keep amount fields null and add low_confidence_fields. "
+            "If a value is uncertain, leave it null and add a Korean extraction_notes entry. JSON only."
+        )
+        compact_text = raw_text[: min(len(raw_text), int(self.settings.ai_interpretation_max_chars or 12000))]
+        payload = {"filename": filename, "parser_result": parsed_summary, "ocr_raw_text": compact_text}
+        return (
+            "<start_of_turn>user\n"
+            f"{instruction}\n\nPayload:\n{json.dumps(payload, ensure_ascii=True, default=str)}\n\nJSON only:"
+            "\n<end_of_turn>\n<start_of_turn>model\n"
+        )
+
+    def _normalize(self, payload: dict[str, Any], parsed: ParsedDocument, raw_text: str) -> AIDocumentUnderstandingResult:
+        doc_type = self._document_type(payload.get("document_type"), parsed.document_type)
+        no_price_type = doc_type in {DocumentType.delivery_note, DocumentType.inspection_report}
+        return AIDocumentUnderstandingResult(
+            document_type=doc_type,
+            vendor_name=self._clean_text(payload.get("vendor_name")),
+            customer_name=self._clean_text(payload.get("customer_name")),
+            document_number=self._clean_text(payload.get("document_number")),
+            issue_date=self._parse_date(payload.get("issue_date")),
+            due_date=self._parse_date(payload.get("due_date")),
+            line_items=self._line_items(payload.get("line_items"), doc_type),
+            low_confidence_fields=self._string_list(payload.get("low_confidence_fields"))[:30],
+            extracted_date=self._parse_date(payload.get("issue_date")),
+            extracted_amount=None if no_price_type else self._decimal(payload.get("extracted_amount")),
+            subtotal=None if no_price_type else self._decimal(payload.get("subtotal")),
+            tax=None if no_price_type else self._decimal(payload.get("tax")),
+            currency=None if no_price_type else self._clean_text(payload.get("currency")),
+            category=doc_type.value,
+            tags=[doc_type.value],
+            cleaned_raw_text=raw_text,
+            confidence_score=self._decimal(payload.get("confidence_score")) or Decimal("0.55"),
+            extraction_notes=self._string_list(payload.get("extraction_notes"))[:12],
+            review_required=True,
+            field_sources={
+                "document_type": self.provider_name,
+                "vendor_name": self.provider_name,
+                "customer_name": self.provider_name,
+                "document_number": self.provider_name,
+                "issue_date": self.provider_name,
+                "due_date": self.provider_name,
+                "line_items": self.provider_name,
+            },
+        )
+
+    def _line_items(self, value: Any, doc_type: DocumentType) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        no_price_type = doc_type in {DocumentType.delivery_note, DocumentType.inspection_report}
+        result: list[dict] = []
+        for raw in value[:80]:
+            if not isinstance(raw, dict):
+                continue
+            item: dict[str, Any] = {}
+            for field in ["item_name", "specification", "item_code", "lot_code", "unit", "note", "inspection_item", "inspection_result"]:
+                cleaned = self._clean_text(raw.get(field))
+                if cleaned:
+                    item[field] = cleaned
+            for field in ["quantity", "received_quantity", "accepted_quantity", "defective_quantity"]:
+                number = self._decimal(raw.get(field))
+                if number is not None:
+                    item[field] = number
+            if not no_price_type:
+                for field in ["unit_price", "supply_amount", "tax_amount", "line_total"]:
+                    number = self._decimal(raw.get(field))
+                    if number is not None:
+                        item[field] = number
+            if item.get("item_name") or item.get("item_code") or item.get("lot_code"):
+                result.append(item)
+        return result
+
+    def _document_type(self, value: Any, fallback: DocumentType) -> DocumentType:
+        cleaned = self._clean_text(value)
+        if cleaned:
+            try:
+                return DocumentType(cleaned)
+            except ValueError:
+                pass
+        return fallback
+
+    def _clean_text(self, value: Any) -> str | None:
+        if value in (None, "", []):
+            return None
+        text = re.sub(r"\s+", " ", str(value)).strip()
+        return text[:255] if text else None
+
+    def _string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [text for item in value if (text := self._clean_text(item))]
+
+    def _decimal(self, value: Any) -> Decimal | None:
+        if value in (None, "", []):
+            return None
+        try:
+            return Decimal(str(value).replace(",", "").replace("₩", "").replace("원", "").strip())
+        except (InvalidOperation, ValueError):
+            return None
+
+    def _parse_date(self, value: Any) -> date | None:
+        text = self._clean_text(value)
+        if not text:
+            return None
+        text = text.replace(".", "-").replace("/", "-")
+        match = re.search(r"(20\d{2})-?(\d{1,2})-?(\d{1,2})", text)
+        if not match:
+            return None
+        year, month, day = (int(part) for part in match.groups())
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+
+    def _output_text(self, output: Any) -> str:
+        if isinstance(output, dict):
+            choices = output.get("choices")
+            if isinstance(choices, list) and choices:
+                text = choices[0].get("text")
+                if text:
+                    return str(text)
+        return str(output or "")
+
+    def _extract_json(self, output_text: str) -> dict[str, Any]:
+        candidates = [output_text.strip()]
+        match = re.search(r"\{.*\}", output_text, flags=re.DOTALL)
+        if match:
+            candidates.append(match.group(0))
+        for candidate in dict.fromkeys(value for value in candidates if value):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate.strip(), flags=re.IGNORECASE)
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        raise RuntimeError(f"Gemma repair output did not contain valid JSON: {output_text[:400]}")
+
+
 class HybridOpenSourceDocumentAIService(DocumentAIService):
     provider_name = "hybrid_open_source"
 
@@ -1020,6 +1224,8 @@ class HybridOpenSourceDocumentAIService(DocumentAIService):
             return get_paddleocr_vl_document_ai_service()
         if normalized in {"heuristic", "heuristic_fallback", "local"}:
             return self.local_fallback
+        if normalized in {"gemma", "gemma_gguf", "llama_cpp", "ai_repair_gemma_gguf"}:
+            return get_gemma_structured_repair_document_ai_service()
         if normalized == "openai":
             return get_openai_vision_document_ai_service()
         raise ValueError(f"Unsupported AI provider: {provider_name}")
@@ -1052,7 +1258,9 @@ class HybridOpenSourceDocumentAIService(DocumentAIService):
         }:
             if not result.line_items:
                 reasons.append("Manufacturing line items are missing.")
-            if any(item.get(field) in (None, "", []) for item in result.line_items for field in ["quantity", "unit_price", "line_total"]):
+            priced_document = result.document_type not in {DocumentType.delivery_note, DocumentType.inspection_report}
+            required_line_fields = ["quantity", "unit_price", "line_total"] if priced_document else ["quantity"]
+            if any(item.get(field) in (None, "", []) for item in result.line_items for field in required_line_fields):
                 reasons.append("Manufacturing line item quantity, unit price, or line total is uncertain.")
         if not result.category or result.category == "other":
             reasons.append("Category is missing or weak.")
@@ -1134,6 +1342,12 @@ def get_openai_vision_document_ai_service() -> OpenAIVisionDocumentAIService:
 def get_paddleocr_vl_document_ai_service() -> PaddleOCRVLDocumentAIService:
     logger.warning("Creating shared PaddleOCRVLDocumentAIService instance")
     return PaddleOCRVLDocumentAIService()
+
+
+@lru_cache(maxsize=1)
+def get_gemma_structured_repair_document_ai_service() -> GemmaStructuredRepairDocumentAIService:
+    logger.warning("Creating shared GemmaStructuredRepairDocumentAIService instance")
+    return GemmaStructuredRepairDocumentAIService()
 
 
 @lru_cache(maxsize=1)

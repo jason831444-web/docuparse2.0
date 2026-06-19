@@ -137,9 +137,11 @@ class DocumentProcessor:
                 ai_result.provider_chain = [normalized.extraction_method or route.route_label, "heuristic_fallback"]
                 ai_result.merge_strategy = route.route_label
                 self._apply_ai_provider_chain_diagnostics(ai_provider_diagnostics, ai_result.provider_chain or [])
+            ai_merge_review_issues: list[dict[str, Any]] = []
             if self._is_manufacturing_parsed_type(parsed):
                 merge = self.ai_merger.merge(parsed, ai_result)
                 ai_result = merge.result
+                ai_merge_review_issues = merge.review_issues
             structured_quality = self.quality.evaluate_structured_result(document, ai_result, extraction_quality)
             ingestion_notes = self._ingestion_notes(normalized, route)
 
@@ -326,6 +328,40 @@ class DocumentProcessor:
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
             workflow_metadata = workflow.workflow_metadata or {}
+            if ai_merge_review_issues:
+                issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                existing = {
+                    (
+                        issue.get("code"),
+                        issue.get("field"),
+                        issue.get("item_index"),
+                        issue.get("expected"),
+                        issue.get("actual"),
+                    )
+                    for issue in issues
+                    if isinstance(issue, dict)
+                }
+                for issue in ai_merge_review_issues:
+                    key = (
+                        issue.get("code"),
+                        issue.get("field"),
+                        issue.get("item_index"),
+                        issue.get("expected"),
+                        issue.get("actual"),
+                    )
+                    if key in existing:
+                        continue
+                    issue = dict(issue)
+                    issue.setdefault("source", "ai_result_merger")
+                    issues.append(issue)
+                    existing.add(key)
+                workflow_metadata["normalized_review_issues"] = issues
+                workflow_metadata["review_required"] = True
+                workflow_metadata["ai_repair_merge"] = {
+                    "source": ai_result.refinement_provider or ai_result.provider,
+                    "issue_count": len(ai_merge_review_issues),
+                    "merge_strategy": ai_result.merge_strategy,
+                }
             if business_safety_issues:
                 issues = list(workflow_metadata.get("normalized_review_issues") or [])
                 existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
