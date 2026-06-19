@@ -102,6 +102,10 @@ def decompose_hangul_for_match(value: object) -> str:
     return "".join(output)
 
 
+def _hangul_only(value: object) -> str:
+    return "".join(char for char in normalize_item_text(value) if _HANGUL_BASE <= ord(char) <= _HANGUL_END)
+
+
 def _windowed_similarity(shorter: str, longer: str) -> float:
     if not shorter or not longer:
         return 0.0
@@ -404,13 +408,17 @@ class ItemMasterMatcher:
         compact_score = SequenceMatcher(None, source, target).ratio()
         jamo_score = SequenceMatcher(None, decompose_hangul_for_match(source), decompose_hangul_for_match(target)).ratio()
         window_score = _windowed_similarity(source, target)
-        jamo_window_score = _windowed_similarity(decompose_hangul_for_match(source), decompose_hangul_for_match(target))
+        source_hangul = _hangul_only(source)
+        target_hangul = _hangul_only(target)
+        hangul_window_score = 0.0
+        if len(source_hangul) >= 3 and len(target_hangul) >= 3:
+            hangul_window_score = _windowed_similarity(decompose_hangul_for_match(source_hangul), decompose_hangul_for_match(target_hangul))
         # Short Korean OCR tokens often differ by one vowel/consonant while the
         # surrounding material/spec tokens still identify the item. Keep this as
         # a scoring signal only; match_line_items_against_masters still routes
         # non-exact matches through ambiguity/review thresholds.
-        fuzzy_score = max(compact_score, jamo_score, window_score, jamo_window_score)
-        if fuzzy_score >= 0.86 and min(len(source), len(target)) <= 6:
+        fuzzy_score = max(compact_score, jamo_score, window_score, hangul_window_score)
+        if hangul_window_score >= 0.86 and min(len(source_hangul), len(target_hangul)) <= 8:
             return Decimal("0.88")
         return Decimal(str(fuzzy_score))
 
