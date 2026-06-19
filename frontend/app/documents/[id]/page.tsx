@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SyntheticEvent, WheelEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent, SyntheticEvent, WheelEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -439,17 +439,21 @@ type NaturalImageSize = { width: number; height: number };
 
 function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const zoomAnchorRef = useRef<{ ratioX: number; ratioY: number; offsetX: number; offsetY: number } | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
   const [zoom, setZoom] = useState(100);
   const [naturalSize, setNaturalSize] = useState<NaturalImageSize | null>(null);
   const [previewSize, setPreviewSize] = useState<PreviewSize>({ width: 0, height: 0 });
+  const [isDraggingPreview, setIsDraggingPreview] = useState(false);
   const isPdf = document.mime_type === "application/pdf";
   const fileUrl = documentFileUrl(document.file_url);
   const previewUrl = isPdf ? `${fileUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit` : fileUrl;
   const imageLayout = isImage && naturalSize && previewSize.width && previewSize.height
     ? imagePreviewLayout({ naturalSize, previewSize, zoom })
     : null;
-  const imageScrollLeft = imageLayout?.scrollLeft ?? 0;
-  const imageScrollTop = imageLayout?.scrollTop ?? 0;
+  const pdfLayout = isPdf && previewSize.width && previewSize.height
+    ? pdfPreviewLayout({ previewSize, zoom })
+    : null;
 
   useEffect(() => {
     if (!previewRef.current) return;
@@ -463,18 +467,78 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
   }, []);
 
   useEffect(() => {
-    if (!isImage || !imageLayout || !previewRef.current) return;
-    previewRef.current.scrollLeft = imageScrollLeft;
-    previewRef.current.scrollTop = imageScrollTop;
-  }, [document.id, imageLayout, imageScrollLeft, imageScrollTop, isImage, zoom]);
+    setZoom(100);
+    setNaturalSize(null);
+    zoomAnchorRef.current = null;
+    dragRef.current = null;
+    setIsDraggingPreview(false);
+  }, [document.id]);
 
-  function adjustZoom(delta: number) {
-    setZoom((value) => Math.max(60, Math.min(300, value + delta)));
-  }
+  useLayoutEffect(() => {
+    const element = previewRef.current;
+    const anchor = zoomAnchorRef.current;
+    if (!element || !anchor) return;
+    zoomAnchorRef.current = null;
+    element.scrollLeft = clampNumber(
+      element.scrollWidth * anchor.ratioX - anchor.offsetX,
+      0,
+      Math.max(0, element.scrollWidth - element.clientWidth),
+    );
+    element.scrollTop = clampNumber(
+      element.scrollHeight * anchor.ratioY - anchor.offsetY,
+      0,
+      Math.max(0, element.scrollHeight - element.clientHeight),
+    );
+  }, [zoom, imageLayout, pdfLayout]);
 
   function handlePreviewWheel(event: WheelEvent<HTMLDivElement>) {
     event.preventDefault();
-    adjustZoom(event.deltaY < 0 ? 8 : -8);
+    const element = previewRef.current;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left;
+    const offsetY = event.clientY - rect.top;
+    zoomAnchorRef.current = {
+      ratioX: element.scrollWidth ? (element.scrollLeft + offsetX) / element.scrollWidth : 0.5,
+      ratioY: element.scrollHeight ? (element.scrollTop + offsetY) / element.scrollHeight : 0.5,
+      offsetX,
+      offsetY,
+    };
+    setZoom((value) => clampNumber(value + (event.deltaY < 0 ? 10 : -10), 60, 320));
+  }
+
+  function handlePreviewPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const element = previewRef.current;
+    if (!element) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: element.scrollLeft,
+      scrollTop: element.scrollTop,
+    };
+    element.setPointerCapture(event.pointerId);
+    setIsDraggingPreview(true);
+    event.preventDefault();
+  }
+
+  function handlePreviewPointerMove(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const element = previewRef.current;
+    if (!drag || !element || drag.pointerId !== event.pointerId) return;
+    element.scrollLeft = drag.scrollLeft - (event.clientX - drag.startX);
+    element.scrollTop = drag.scrollTop - (event.clientY - drag.startY);
+  }
+
+  function endPreviewDrag(event: PointerEvent<HTMLDivElement>) {
+    const element = previewRef.current;
+    const drag = dragRef.current;
+    if (element && drag?.pointerId === event.pointerId && element.hasPointerCapture(event.pointerId)) {
+      element.releasePointerCapture(event.pointerId);
+    }
+    dragRef.current = null;
+    setIsDraggingPreview(false);
   }
 
   function handleImageLoad(event: SyntheticEvent<HTMLImageElement>) {
@@ -492,15 +556,19 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          원본 전체 페이지를 유지합니다. preview 위에서 마우스 휠로 확대/축소하고, 확대 후에는 스크롤로 문서 전체를 확인하세요. 현재 {zoom}%
+          원본 전체 페이지를 유지합니다. 마우스 위치에서 휠로 확대/축소하고, 확대 후에는 문서를 드래그해서 이동하세요. 현재 {zoom}%
         </p>
       </CardHeader>
       <CardContent className="space-y-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
         {isImage ? (
           <div
             ref={previewRef}
-            className="relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1"
+            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
             onWheel={handlePreviewWheel}
+            onPointerDown={handlePreviewPointerDown}
+            onPointerMove={handlePreviewPointerMove}
+            onPointerUp={endPreviewDrag}
+            onPointerCancel={endPreviewDrag}
           >
             <div
               className="relative bg-white"
@@ -536,24 +604,38 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         ) : isPdf ? (
           <div
             ref={previewRef}
-            className="relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1"
+            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
             onWheel={handlePreviewWheel}
+            onPointerDown={handlePreviewPointerDown}
+            onPointerMove={handlePreviewPointerMove}
+            onPointerUp={endPreviewDrag}
+            onPointerCancel={endPreviewDrag}
           >
             <div
               className="relative mx-auto bg-white shadow-sm"
               style={{
-                width: `${Math.max(60, zoom)}%`,
-                height: `${Math.max(60, zoom)}%`,
-                minWidth: "60%",
-                minHeight: "60%",
+                width: pdfLayout?.innerWidth ?? "100%",
+                height: pdfLayout?.innerHeight ?? "100%",
+                minWidth: "100%",
+                minHeight: "100%",
               }}
             >
+              <div
+                className="absolute bg-white shadow-sm"
+                style={{
+                  width: pdfLayout?.pageWidth ?? "100%",
+                  height: pdfLayout?.pageHeight ?? "100%",
+                  left: pdfLayout?.left ?? 0,
+                  top: pdfLayout?.top ?? 0,
+                }}
+              >
               <iframe
                 key={previewUrl}
                 src={previewUrl}
                 title={document.original_filename}
-                className="h-full min-h-[34rem] w-full bg-white pointer-events-none"
+                className="h-full w-full bg-white pointer-events-none"
               />
+              </div>
             </div>
           </div>
         ) : (
@@ -619,6 +701,24 @@ function imagePreviewLayout({
     top,
     scrollLeft,
     scrollTop,
+  };
+}
+
+function pdfPreviewLayout({ previewSize, zoom }: { previewSize: PreviewSize; zoom: number }) {
+  const viewportWidth = Math.max(1, previewSize.width);
+  const viewportHeight = Math.max(1, previewSize.height);
+  const scale = Math.max(0.6, zoom / 100);
+  const pageWidth = viewportWidth * scale;
+  const pageHeight = viewportHeight * scale;
+  const innerWidth = Math.max(viewportWidth, pageWidth);
+  const innerHeight = Math.max(viewportHeight, pageHeight);
+  return {
+    innerWidth,
+    innerHeight,
+    pageWidth,
+    pageHeight,
+    left: (innerWidth - pageWidth) / 2,
+    top: (innerHeight - pageHeight) / 2,
   };
 }
 
