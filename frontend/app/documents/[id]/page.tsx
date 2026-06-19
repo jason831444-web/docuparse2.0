@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SyntheticEvent, WheelEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -434,65 +434,143 @@ function ErpReadinessBanner({
   );
 }
 
+type PreviewFitMode = "document" | "page" | "width" | "actual";
+type CropRect = { x: number; y: number; width: number; height: number; confidence: number };
+type PreviewSize = { width: number; height: number };
+type NaturalImageSize = { width: number; height: number };
+
 function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
-  const [fitMode, setFitMode] = useState<"page" | "width" | "actual">("page");
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const [fitMode, setFitMode] = useState<PreviewFitMode>(() => isImage ? "document" : "page");
   const [zoom, setZoom] = useState(100);
+  const [documentCrop, setDocumentCrop] = useState<CropRect | null>(null);
+  const [naturalSize, setNaturalSize] = useState<NaturalImageSize | null>(null);
+  const [previewSize, setPreviewSize] = useState<PreviewSize>({ width: 0, height: 0 });
   const isPdf = document.mime_type === "application/pdf";
   const fileUrl = documentFileUrl(document.file_url);
   const pdfHash = fitMode === "actual"
     ? `toolbar=0&navpanes=0&scrollbar=1&zoom=${zoom}`
-    : `toolbar=0&navpanes=0&scrollbar=1&view=${fitMode === "page" ? "Fit" : "FitH"}`;
+    : `toolbar=0&navpanes=0&scrollbar=1&view=${fitMode === "width" ? "FitH" : "Fit"}`;
   const previewUrl = isPdf ? `${fileUrl}#${pdfHash}` : fileUrl;
-  const zoomLabel = fitMode === "actual" ? `${zoom}%` : fitMode === "width" ? "너비 맞춤" : "페이지 맞춤";
+  const zoomLabel = `${fitMode === "document" ? "문서 영역" : fitMode === "page" ? "전체 페이지" : fitMode === "width" ? "너비 맞춤" : "실제 크기"} · ${zoom}%`;
+  const activeCrop = fitMode === "document" && documentCrop ? documentCrop : fullCrop();
+  const imageLayout = isImage && naturalSize && previewSize.width && previewSize.height
+    ? imagePreviewLayout({ fitMode, crop: activeCrop, naturalSize, previewSize, zoom })
+    : null;
+
+  useEffect(() => {
+    if (!previewRef.current) return;
+    const element = previewRef.current;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect;
+      setPreviewSize({ width: Math.max(1, box.width), height: Math.max(1, box.height) });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  function setMode(mode: PreviewFitMode) {
+    setFitMode(mode);
+    setZoom(100);
+  }
+
+  function adjustZoom(delta: number) {
+    setZoom((value) => Math.max(50, Math.min(300, value + delta)));
+  }
+
+  function handlePreviewWheel(event: WheelEvent<HTMLDivElement>) {
+    if (!isImage) return;
+    event.preventDefault();
+    adjustZoom(event.deltaY < 0 ? 10 : -10);
+  }
+
+  function handleImageLoad(event: SyntheticEvent<HTMLImageElement>) {
+    const image = event.currentTarget;
+    setNaturalSize({ width: image.naturalWidth || 1, height: image.naturalHeight || 1 });
+    setDocumentCrop(detectDocumentCrop(image));
+  }
+
   return (
     <Card className="overflow-hidden xl:flex xl:h-[calc(100vh-6rem)] xl:flex-col">
       <CardHeader className="gap-3 space-y-0 xl:shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3">
-        <CardTitle>원본 문서</CardTitle>
-        <Button asChild variant="outline" size="sm">
-          <a href={fileUrl} target="_blank" rel="noreferrer">원본 열기</a>
-        </Button>
+          <CardTitle>원본 문서</CardTitle>
+          <Button asChild variant="outline" size="sm">
+            <a href={fileUrl} target="_blank" rel="noreferrer">원본 열기</a>
+          </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {[
-            ["page", "페이지 맞춤"],
-            ["width", "너비 맞춤"],
-            ["actual", "100%"],
-          ].map(([value, label]) => (
+          {(isImage
+            ? [
+                ["document", "문서 영역"],
+                ["page", "전체 페이지"],
+                ["width", "너비 맞춤"],
+                ["actual", "100%"],
+              ]
+            : [
+                ["page", "페이지 맞춤"],
+                ["width", "너비 맞춤"],
+                ["actual", "100%"],
+              ]
+          ).map(([value, label]) => (
             <Button
               key={value}
               type="button"
               variant={fitMode === value ? "default" : "outline"}
               size="sm"
-              onClick={() => {
-                setFitMode(value as "page" | "width" | "actual");
-                if (value === "actual") setZoom(100);
-              }}
+              onClick={() => setMode(value as PreviewFitMode)}
             >
               {label}
             </Button>
           ))}
-          <Button type="button" variant="outline" size="sm" disabled={fitMode !== "actual"} onClick={() => setZoom((value) => Math.max(50, value - 25))}>-</Button>
-          <span className="min-w-20 text-center text-xs font-medium text-muted-foreground">{zoomLabel}</span>
-          <Button type="button" variant="outline" size="sm" disabled={fitMode !== "actual"} onClick={() => setZoom((value) => Math.min(250, value + 25))}>+</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => adjustZoom(-10)}>-</Button>
+          <span className="min-w-32 text-center text-xs font-medium text-muted-foreground">{zoomLabel}</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => adjustZoom(10)}>+</Button>
         </div>
+        {isImage ? (
+          <p className="text-xs text-muted-foreground">
+            preview 위에서 마우스 휠로 확대/축소합니다. 문서 영역 맞춤은 원본을 자르지 않고 화면 표시만 조정합니다.
+            {documentCrop ? ` 감지 신뢰도 ${Math.round(documentCrop.confidence * 100)}%` : " 문서 외곽 감지가 어려우면 전체 페이지로 표시됩니다."}
+          </p>
+        ) : null}
       </CardHeader>
       <CardContent className="space-y-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
         {isImage ? (
-          <div className="relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1">
-            {fitMode === "page" ? (
-              <Image src={fileUrl} alt={document.original_filename} fill unoptimized className="object-contain p-2" />
-            ) : (
-              <div className={fitMode === "width" ? "flex min-h-full items-start justify-center bg-white" : "inline-block min-h-full min-w-full bg-white p-2"}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={fileUrl}
-                  alt={document.original_filename}
-                  className={fitMode === "width" ? "h-auto w-full max-w-none object-contain" : "h-auto max-w-none"}
-                  style={fitMode === "actual" ? { width: `${zoom}%` } : undefined}
-                />
-              </div>
-            )}
+          <div
+            ref={previewRef}
+            className="relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1"
+            onWheel={handlePreviewWheel}
+          >
+            <div
+              className="relative bg-white"
+              style={{
+                width: imageLayout?.innerWidth ?? "100%",
+                height: imageLayout?.innerHeight ?? "100%",
+                minWidth: "100%",
+                minHeight: "100%",
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={fileUrl}
+                alt={document.original_filename}
+                onLoad={handleImageLoad}
+                className="absolute max-w-none select-none"
+                draggable={false}
+                style={imageLayout ? {
+                  width: imageLayout.imageWidth,
+                  height: imageLayout.imageHeight,
+                  left: imageLayout.left,
+                  top: imageLayout.top,
+                } : {
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  left: 0,
+                  top: 0,
+                }}
+              />
+            </div>
           </div>
         ) : isPdf ? (
           <iframe
@@ -523,6 +601,154 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
       </CardContent>
     </Card>
   );
+}
+
+function fullCrop(): CropRect {
+  return { x: 0, y: 0, width: 1, height: 1, confidence: 0 };
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function imagePreviewLayout({
+  fitMode,
+  crop,
+  naturalSize,
+  previewSize,
+  zoom,
+}: {
+  fitMode: PreviewFitMode;
+  crop: CropRect;
+  naturalSize: NaturalImageSize;
+  previewSize: PreviewSize;
+  zoom: number;
+}) {
+  const imageWidth = Math.max(1, naturalSize.width);
+  const imageHeight = Math.max(1, naturalSize.height);
+  const cropPixelWidth = Math.max(1, crop.width * imageWidth);
+  const cropPixelHeight = Math.max(1, crop.height * imageHeight);
+  const viewportWidth = Math.max(1, previewSize.width);
+  const viewportHeight = Math.max(1, previewSize.height);
+
+  let baseScale = 1;
+  if (fitMode === "width") {
+    baseScale = viewportWidth / imageWidth;
+  } else if (fitMode === "actual") {
+    baseScale = 1;
+  } else {
+    baseScale = Math.min(viewportWidth / cropPixelWidth, viewportHeight / cropPixelHeight);
+  }
+
+  const scale = Math.max(0.05, baseScale * (zoom / 100));
+  const visibleWidth = cropPixelWidth * scale;
+  const visibleHeight = cropPixelHeight * scale;
+  const innerWidth = Math.max(viewportWidth, visibleWidth);
+  const innerHeight = Math.max(viewportHeight, visibleHeight);
+  const cropOffsetX = crop.x * imageWidth * scale;
+  const cropOffsetY = crop.y * imageHeight * scale;
+
+  return {
+    innerWidth,
+    innerHeight,
+    imageWidth: imageWidth * scale,
+    imageHeight: imageHeight * scale,
+    left: (innerWidth - visibleWidth) / 2 - cropOffsetX,
+    top: (innerHeight - visibleHeight) / 2 - cropOffsetY,
+  };
+}
+
+function detectDocumentCrop(image: HTMLImageElement): CropRect | null {
+  const naturalWidth = image.naturalWidth;
+  const naturalHeight = image.naturalHeight;
+  if (!naturalWidth || !naturalHeight) return null;
+
+  const maxProbeSize = 420;
+  const scale = Math.min(1, maxProbeSize / Math.max(naturalWidth, naturalHeight));
+  const width = Math.max(1, Math.round(naturalWidth * scale));
+  const height = Math.max(1, Math.round(naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+
+  try {
+    context.drawImage(image, 0, 0, width, height);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    const cornerBrightness = averageCornerBrightness(pixels, width, height);
+    const threshold = clampNumber(cornerBrightness + 22, 132, 218);
+    const step = Math.max(1, Math.floor(Math.min(width, height) / 180));
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    let matched = 0;
+
+    for (let y = 0; y < height; y += step) {
+      for (let x = 0; x < width; x += step) {
+        const index = (y * width + x) * 4;
+        const red = pixels[index] ?? 0;
+        const green = pixels[index + 1] ?? 0;
+        const blue = pixels[index + 2] ?? 0;
+        const brightness = (red + green + blue) / 3;
+        const channelSpread = Math.max(red, green, blue) - Math.min(red, green, blue);
+        if (brightness >= threshold && (channelSpread < 70 || brightness > 185)) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+          matched += 1;
+        }
+      }
+    }
+
+    if (!matched || minX >= maxX || minY >= maxY) return null;
+    const sampled = Math.ceil(width / step) * Math.ceil(height / step);
+    const matchedRatio = matched / sampled;
+    const cropAreaRatio = ((maxX - minX) * (maxY - minY)) / (width * height);
+    if (matchedRatio < 0.08 || cropAreaRatio < 0.15 || cropAreaRatio > 0.96) return null;
+
+    const paddingX = width * 0.035;
+    const paddingY = height * 0.035;
+    const paddedMinX = clampNumber(minX - paddingX, 0, width);
+    const paddedMinY = clampNumber(minY - paddingY, 0, height);
+    const paddedMaxX = clampNumber(maxX + paddingX, 0, width);
+    const paddedMaxY = clampNumber(maxY + paddingY, 0, height);
+    const confidence = clampNumber(0.35 + matchedRatio * 1.4 + (1 - Math.abs(0.62 - cropAreaRatio)) * 0.25, 0.45, 0.94);
+
+    return {
+      x: paddedMinX / width,
+      y: paddedMinY / height,
+      width: (paddedMaxX - paddedMinX) / width,
+      height: (paddedMaxY - paddedMinY) / height,
+      confidence,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function averageCornerBrightness(pixels: Uint8ClampedArray, width: number, height: number) {
+  const patch = Math.max(4, Math.floor(Math.min(width, height) * 0.08));
+  const corners = [
+    [0, 0],
+    [width - patch, 0],
+    [0, height - patch],
+    [width - patch, height - patch],
+  ];
+  let total = 0;
+  let count = 0;
+  for (const [startX, startY] of corners) {
+    for (let y = startY; y < startY + patch; y += 2) {
+      for (let x = startX; x < startX + patch; x += 2) {
+        const index = (y * width + x) * 4;
+        total += ((pixels[index] ?? 0) + (pixels[index + 1] ?? 0) + (pixels[index + 2] ?? 0)) / 3;
+        count += 1;
+      }
+    }
+  }
+  return count ? total / count : 120;
 }
 
 function LineItemField({
