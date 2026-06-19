@@ -64,6 +64,60 @@ def normalize_item_text(value: object) -> str:
     return text
 
 
+_HANGUL_BASE = 0xAC00
+_HANGUL_END = 0xD7A3
+_HANGUL_CHOSEONG = [
+    "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+]
+_HANGUL_JUNGSEONG = [
+    "ㅏ", "ㅐ", "ㅑ", "ㅒ", "ㅓ", "ㅔ", "ㅕ", "ㅖ", "ㅗ", "ㅘ", "ㅙ", "ㅚ", "ㅛ", "ㅜ", "ㅝ", "ㅞ", "ㅟ", "ㅠ", "ㅡ", "ㅢ", "ㅣ",
+]
+_HANGUL_JONGSEONG = [
+    "", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ", "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+]
+
+
+def decompose_hangul_for_match(value: object) -> str:
+    """Return a stable jamo-ish representation for fuzzy OCR review matching.
+
+    This is intentionally used only for candidate scoring. It does not rewrite
+    extracted item names, because OCR-near matches still need human review
+    unless another strong signal such as an exact code exists.
+    """
+
+    text = normalize_item_text(value)
+    output: list[str] = []
+    for char in text:
+        code = ord(char)
+        if _HANGUL_BASE <= code <= _HANGUL_END:
+            offset = code - _HANGUL_BASE
+            choseong = offset // 588
+            jungseong = (offset % 588) // 28
+            jongseong = offset % 28
+            output.append(_HANGUL_CHOSEONG[choseong])
+            output.append(_HANGUL_JUNGSEONG[jungseong])
+            output.append(_HANGUL_JONGSEONG[jongseong] or "_")
+        else:
+            output.append(char)
+    return "".join(output)
+
+
+def _windowed_similarity(shorter: str, longer: str) -> float:
+    if not shorter or not longer:
+        return 0.0
+    if len(shorter) > len(longer):
+        shorter, longer = longer, shorter
+    if len(shorter) < 3:
+        return SequenceMatcher(None, shorter, longer).ratio()
+    best = SequenceMatcher(None, shorter, longer).ratio()
+    for size in {len(shorter) - 1, len(shorter), len(shorter) + 1}:
+        if size <= 0 or size > len(longer):
+            continue
+        for start in range(0, len(longer) - size + 1):
+            best = max(best, SequenceMatcher(None, shorter, longer[start : start + size]).ratio())
+    return best
+
+
 def normalize_spec_text(value: object) -> str:
     text = str(value or "").lower().strip()
     if not text:
@@ -347,7 +401,18 @@ class ItemMasterMatcher:
             return Decimal("1")
         if source in target or target in source:
             return Decimal("0.88")
-        return Decimal(str(SequenceMatcher(None, source, target).ratio()))
+        compact_score = SequenceMatcher(None, source, target).ratio()
+        jamo_score = SequenceMatcher(None, decompose_hangul_for_match(source), decompose_hangul_for_match(target)).ratio()
+        window_score = _windowed_similarity(source, target)
+        jamo_window_score = _windowed_similarity(decompose_hangul_for_match(source), decompose_hangul_for_match(target))
+        # Short Korean OCR tokens often differ by one vowel/consonant while the
+        # surrounding material/spec tokens still identify the item. Keep this as
+        # a scoring signal only; match_line_items_against_masters still routes
+        # non-exact matches through ambiguity/review thresholds.
+        fuzzy_score = max(compact_score, jamo_score, window_score, jamo_window_score)
+        if fuzzy_score >= 0.86 and min(len(source), len(target)) <= 6:
+            return Decimal("0.88")
+        return Decimal(str(fuzzy_score))
 
     def _active_alias_entries(self, master: Any) -> list[dict[str, Any]]:
         entries = [{"name": str(alias), "spec": None} for alias in (getattr(master, "aliases", None) or []) if str(alias).strip()]
@@ -376,7 +441,10 @@ class ItemMasterMatcher:
             return Decimal("1")
         if source_norm in target_norm or target_norm in source_norm:
             return Decimal("0.75")
-        return self._similarity(source_norm, target_norm) * Decimal("0.80")
+        # Specs are often numeric/model-like. Do not use Hangul windowed fuzzy
+        # matching here, because it can make unrelated OCR specs look close and
+        # suppress the existing conflicting-spec safety check.
+        return Decimal(str(SequenceMatcher(None, source_norm, target_norm).ratio())) * Decimal("0.80")
 
     def _unit_score(self, source: object, target: object) -> Decimal:
         source_norm = str(source or "").strip().lower()

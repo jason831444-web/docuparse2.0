@@ -877,6 +877,81 @@ def test_alias_matching_ambiguous_duplicate_and_inactive_master_policy():
     assert "INT-INACTIVE-PLATE" not in candidate_codes
 
 
+def test_item_master_ocr_near_hangul_candidates_are_review_only():
+    matcher = ItemMasterMatcher()
+    masters = [
+        SimpleNamespace(
+            internal_item_code="P-WASH-SUS304-M8",
+            item_name="SUS304 평와셔 M8",
+            normalized_item_name="sus304평와셔m8",
+            spec="M8",
+            normalized_spec="m8",
+            unit="EA",
+            standard_price=Decimal("40"),
+            active=True,
+            aliases=["SUS304 와셔", "M8 와셔 SUS", "SUS WASHER M8"],
+        ),
+        SimpleNamespace(
+            internal_item_code="P-BRK-SUS-50X80X3T",
+            item_name="SUS304 스테인리스 브라켓 50x80x3T",
+            normalized_item_name="sus304sus브라켓50x80x3t",
+            spec="50x80x3T",
+            normalized_spec="50x80x3t",
+            unit="EA",
+            standard_price=Decimal("1500"),
+            active=True,
+            aliases=["스테인리스 브라켓", "SUS 브라켓 50x80", "스텐 브라켓 3T"],
+        ),
+    ]
+
+    washer = matcher.match_line_items_against_masters(
+        [{"item_name": "평와세", "specification": "M5", "quantity": 1, "unit": "EA"}],
+        masters,
+    )[0]
+    washer_codes = {candidate["internal_item_code"] for candidate in washer["item_master_candidates"]}
+
+    assert washer["item_name"] == "평와세"
+    assert washer["item_master_match_status"] == "ambiguous"
+    assert washer.get("internal_item_code") in (None, "")
+    assert "P-WASH-SUS304-M8" in washer_codes
+    assert Decimal(str(washer["item_master_match_confidence"])) >= Decimal("0.65")
+
+    bracket = matcher.match_line_items_against_masters(
+        [{"item_name": "스테인리스브라겟", "specification": "50x80x3T", "quantity": 1, "unit": "EA"}],
+        masters,
+    )[0]
+    bracket_codes = {candidate["internal_item_code"] for candidate in bracket["item_master_candidates"]}
+
+    assert bracket["item_name"] == "스테인리스브라겟"
+    assert bracket["item_master_match_status"] == "ambiguous"
+    assert bracket.get("internal_item_code") in (None, "")
+    assert "P-BRK-SUS-50X80X3T" in bracket_codes
+
+
+def test_item_master_ocr_near_matching_does_not_match_unrelated_short_text():
+    matcher = ItemMasterMatcher()
+    masters = [
+        SimpleNamespace(
+            internal_item_code="P-WASH-SUS304-M8",
+            item_name="SUS304 평와셔 M8",
+            normalized_item_name="sus304평와셔m8",
+            spec="M8",
+            normalized_spec="m8",
+            unit="EA",
+            standard_price=Decimal("40"),
+            active=True,
+            aliases=["SUS304 와셔", "M8 와셔 SUS", "SUS WASHER M8"],
+        )
+    ]
+    unrelated = matcher.match_line_items_against_masters(
+        [{"item_name": "랜덤품목", "specification": "M5", "quantity": 1, "unit": "EA"}],
+        masters,
+    )[0]
+
+    assert unrelated["item_master_match_status"] == "unmatched"
+    assert unrelated.get("internal_item_code") in (None, "")
+
+
 def test_missing_document_item_code_is_info_when_internal_match_is_confident_and_issues_are_deduped():
     text = _text("ambiguous_matching.txt")
     parsed = DocumentParser().parse(text, "generated_ambiguous.txt")
