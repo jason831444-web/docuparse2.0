@@ -38,10 +38,11 @@ import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
-import type { DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem } from "@/types/document";
+import type { DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
+type DocumentListItem = DocumentListResponse["items"][number];
 
 function itemMasterStatusLabel(status: string | null | undefined) {
   return {
@@ -103,6 +104,40 @@ function readList(value: unknown): string[] {
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+async function loadDocumentNeighbors(currentId: string): Promise<DocumentNeighbors> {
+  const documents: DocumentListItem[] = [];
+  let page = 1;
+  let total = Infinity;
+  while (documents.length < Math.min(total, 500)) {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("page_size", "100");
+    params.set("sort_by", "created_at");
+    params.set("order", "desc");
+    const data = await api.list(params);
+    documents.push(...data.items);
+    total = data.total;
+    const index = documents.findIndex((item) => item.id === currentId);
+    if (index >= 0 && index < documents.length - 1) break;
+    if (!data.items.length || documents.length >= data.total) break;
+    page += 1;
+  }
+  const index = documents.findIndex((item) => item.id === currentId);
+  if (index < 0) return { previous: null, next: null };
+  return {
+    previous: documents[index - 1] ? toDocumentNeighbor(documents[index - 1]) : null,
+    next: documents[index + 1] ? toDocumentNeighbor(documents[index + 1]) : null,
+  };
+}
+
+function toDocumentNeighbor(document: DocumentListItem): DocumentNeighbor {
+  return {
+    id: document.id,
+    label: document.document_number || document.title || null,
+    filename: document.original_filename,
+  };
 }
 
 function InfoGrid({ items }: { items: Array<[string, string | null | undefined]> }) {
@@ -436,6 +471,8 @@ function ErpReadinessBanner({
 
 type PreviewSize = { width: number; height: number };
 type NaturalImageSize = { width: number; height: number };
+type DocumentNeighbor = { id: string; label: string | null; filename: string };
+type DocumentNeighbors = { previous: DocumentNeighbor | null; next: DocumentNeighbor | null };
 
 function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; isImage: boolean }) {
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -870,6 +907,7 @@ export default function DocumentDetailPage() {
   const [activeLineItemIndex, setActiveLineItemIndex] = useState(0);
   const [lineItemFieldSelections, setLineItemFieldSelections] = useState<Record<number, string>>({});
   const [customLineItemFields, setCustomLineItemFields] = useState<Record<number, string>>({});
+  const [documentNeighbors, setDocumentNeighbors] = useState<DocumentNeighbors>({ previous: null, next: null });
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
@@ -879,6 +917,7 @@ export default function DocumentDetailPage() {
   }, [form]);
 
   useEffect(() => {
+    setLoading(true);
     api
       .get(params.id)
       .then(syncDocument)
@@ -892,6 +931,12 @@ export default function DocumentDetailPage() {
       })
       .catch(() => setExportTemplates([]));
   }, [params.id, syncDocument]);
+
+  useEffect(() => {
+    loadDocumentNeighbors(params.id)
+      .then(setDocumentNeighbors)
+      .catch(() => setDocumentNeighbors({ previous: null, next: null }));
+  }, [params.id]);
 
   async function onSubmit(values: DocumentUpdate & { tags_text: string }) {
     setSaving(true);
@@ -1020,6 +1065,11 @@ export default function DocumentDetailPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "삭제에 실패했습니다");
     }
+  }
+
+  function navigateToDocument(id: string) {
+    const from = searchParams.get("from");
+    router.push(`/documents/${id}${from ? `?from=${encodeURIComponent(from)}` : ""}`);
   }
 
   function updateLineItem(index: number, field: string, value: string) {
@@ -1212,6 +1262,30 @@ export default function DocumentDetailPage() {
           </p>
         </div>
         <div className="max-w-md space-y-2">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!documentNeighbors.previous}
+              title={documentNeighbors.previous ? `${documentNeighbors.previous.label || documentNeighbors.previous.filename} 문서로 이동` : "이전 문서가 없습니다"}
+              onClick={() => documentNeighbors.previous && navigateToDocument(documentNeighbors.previous.id)}
+            >
+              <ChevronLeft className="size-4" />
+              이전 문서
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!documentNeighbors.next}
+              title={documentNeighbors.next ? `${documentNeighbors.next.label || documentNeighbors.next.filename} 문서로 이동` : "다음 문서가 없습니다"}
+              onClick={() => documentNeighbors.next && navigateToDocument(documentNeighbors.next.id)}
+            >
+              다음 문서
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant={isConfirmed ? "secondary" : "default"} onClick={confirmDocument} disabled={saving || isConfirmed}>
               <CheckCheck className="size-4" />
