@@ -31,8 +31,16 @@ class MonthlyReportService:
         start_date: date,
         end_date: date,
         period: str = "custom",
+        party_name: str | None = None,
     ) -> dict[str, Any]:
         range_documents = [document for document in documents if self._belongs_to_range(document, start_date, end_date)]
+        if party_name:
+            normalized_party = self._normalize_party_filter(party_name)
+            range_documents = [
+                document
+                for document in range_documents
+                if self._normalize_party_filter(self._party_name(document)) == normalized_party
+            ]
         verified_documents = [document for document in range_documents if self._is_verified(document)]
         pending_documents = [document for document in range_documents if not self._is_verified(document)]
 
@@ -125,6 +133,7 @@ class MonthlyReportService:
             "start_date": start_date.isoformat(),
             "end_date": self._inclusive_end_date(end_date).isoformat(),
             "range_label": self._range_label(start_date, end_date, period),
+            "party_name": party_name or None,
             "summary": {
                 "total_documents": len(range_documents),
                 "verified_documents": len(verified_documents),
@@ -186,6 +195,9 @@ class MonthlyReportService:
 
     def _party_name(self, document: Document) -> str:
         return self._clean_text(document.customer_name or document.vendor_name or document.merchant_name) or "거래처 미확인"
+
+    def _normalize_party_filter(self, value: str | None) -> str:
+        return re.sub(r"\s+", "", self._clean_text(value) or "").casefold()
 
     def _document_date(self, document: Document) -> str | None:
         value = document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Download, FileSpreadsheet, RefreshCcw } from "lucide-react";
+import { AlertTriangle, BarChart3, Download, FileSpreadsheet, RefreshCcw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,9 +26,19 @@ export default function MonthlyReportPage() {
   const [period, setPeriod] = useState<ReportPeriod>("month");
   const [startDate, setStartDate] = useState(initial.startDate);
   const [endDate, setEndDate] = useState(initial.endDate);
+  const [selectedParty, setSelectedParty] = useState("");
   const [report, setReport] = useState<MonthlyReport | null>(null);
+  const [partyOptionsReport, setPartyOptionsReport] = useState<MonthlyReport | null>(null);
   const [loading, setLoading] = useState(true);
   const params = useMemo(
+    () => {
+      const query = new URLSearchParams({ start_date: startDate, end_date: endDate, period });
+      if (selectedParty) query.set("party_name", selectedParty);
+      return query;
+    },
+    [endDate, period, selectedParty, startDate],
+  );
+  const partyOptionParams = useMemo(
     () => new URLSearchParams({ start_date: startDate, end_date: endDate, period }),
     [endDate, period, startDate],
   );
@@ -38,11 +48,16 @@ export default function MonthlyReportPage() {
     api.monthlyReport(params).then(setReport).catch(() => setReport(null)).finally(() => setLoading(false));
   }, [params]);
 
+  useEffect(() => {
+    api.monthlyReport(partyOptionParams).then(setPartyOptionsReport).catch(() => setPartyOptionsReport(null));
+  }, [partyOptionParams]);
+
   const issueRows = report ? [
     ...report.issues.missing_required_fields,
     ...report.issues.calculation_mismatches,
     ...report.issues.pending_documents,
   ] : [];
+  const partyOptions = partyOptionsReport?.by_party ?? report?.by_party ?? [];
 
   function applyPeriod(nextPeriod: ReportPeriod) {
     setPeriod(nextPeriod);
@@ -71,6 +86,19 @@ export default function MonthlyReportPage() {
           <Input className="h-9 w-36" type="date" value={startDate} onChange={(event) => { setPeriod("custom"); setStartDate(event.target.value); }} />
           <span className="text-sm text-muted-foreground">~</span>
           <Input className="h-9 w-36" type="date" value={endDate} onChange={(event) => { setPeriod("custom"); setEndDate(event.target.value); }} />
+          <select
+            className="h-9 min-w-44 rounded-md border bg-white px-3 text-sm"
+            value={selectedParty}
+            onChange={(event) => setSelectedParty(event.target.value)}
+            aria-label="거래처 선택"
+          >
+            <option value="">전체 거래처</option>
+            {partyOptions.map((party) => (
+              <option key={party.name} value={party.name}>
+                {party.name}
+              </option>
+            ))}
+          </select>
           <Button variant="outline" size="sm" onClick={() => api.monthlyReport(params).then(setReport)}>
             <RefreshCcw className="size-4" /> 새로고침
           </Button>
@@ -95,6 +123,7 @@ export default function MonthlyReportPage() {
             <div>
               <span className="font-medium text-slate-950">집계 기간</span>
               <span className="ml-2 text-muted-foreground">{report.range_label}</span>
+              {report.party_name ? <span className="ml-2 text-muted-foreground">· {report.party_name}</span> : null}
             </div>
             <Badge variant="outline" className="bg-slate-50 text-slate-700 shadow-none">{PERIOD_LABELS[(report.period as ReportPeriod) || "custom"] ?? "기간"}</Badge>
           </div>
@@ -106,6 +135,44 @@ export default function MonthlyReportPage() {
             <MetricCard label="총 거래 금액" value={formatMoney(report.summary.total_amount, "KRW")} />
             <MetricCard label="확인 필요 문서" value={report.summary.documents_with_errors} tone="red" />
             <MetricCard label="금액 없는 수량 문서" value={report.summary.no_price_documents ?? 0} />
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <HorizontalBarChart
+              title="거래처별 거래 금액 그래프"
+              description={selectedParty ? "선택한 거래처 기준 집계입니다." : "금액 기준 상위 거래처를 한눈에 봅니다."}
+              rows={report.by_party.slice(0, 8).map((row) => ({
+                label: row.name,
+                value: row.total_amount,
+                displayValue: formatMoney(row.total_amount, "KRW"),
+                caption: `${row.document_count}건`,
+              }))}
+            />
+            <HorizontalBarChart
+              title="품목별 금액 그래프"
+              description="품목별 총 금액 기준 상위 항목입니다."
+              rows={report.by_item.slice(0, 8).map((row) => ({
+                label: row.spec ? `${row.item_name} · ${row.spec}` : row.item_name,
+                value: row.total_amount,
+                displayValue: formatMoney(row.total_amount, "KRW"),
+                caption: `수량 ${row.quantity}`,
+              }))}
+            />
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <StatusChart report={report} />
+            <HorizontalBarChart
+              title="문서 유형별 업무량 그래프"
+              description="문서 유형별 처리 건수를 비교합니다."
+              rows={(report.by_document_type ?? []).slice(0, 8).map((row) => ({
+                label: titleCaseLabel(row.document_type),
+                value: row.document_count,
+                displayValue: `${row.document_count}건`,
+                caption: `검수 ${row.verified_documents} · 대기 ${row.pending_documents}`,
+              }))}
+              valueKind="count"
+            />
           </section>
 
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -181,6 +248,101 @@ function MetricCard({ label, value, tone }: { label: string; value: string | num
       <CardContent className="p-5">
         <p className="text-sm text-muted-foreground">{label}</p>
         <p className={`mt-5 text-2xl font-semibold leading-none ${tone === "emerald" ? "text-emerald-700" : tone === "amber" ? "text-amber-700" : tone === "red" ? "text-red-700" : "text-slate-950"}`}>{value}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function HorizontalBarChart({
+  title,
+  description,
+  rows,
+  valueKind = "money",
+}: {
+  title: string;
+  description: string;
+  rows: Array<{ label: string; value: number; displayValue: string; caption?: string }>;
+  valueKind?: "money" | "count";
+}) {
+  const maxValue = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 0);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BarChart3 className="size-4 text-primary" />
+          {title}
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.length ? rows.map((row, index) => {
+          const value = Number(row.value) || 0;
+          const width = maxValue ? Math.max(4, Math.round((Math.abs(value) / maxValue) * 100)) : 0;
+          const negative = value < 0;
+          return (
+            <div key={`${row.label}-${index}`} className="grid gap-1.5">
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="min-w-0 truncate font-medium text-slate-800">{row.label}</span>
+                <span className={negative ? "shrink-0 font-semibold text-red-700" : "shrink-0 font-semibold text-slate-900"}>
+                  {row.displayValue}
+                </span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${negative ? "bg-red-500" : valueKind === "count" ? "bg-blue-500" : "bg-emerald-500"}`}
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+              {row.caption ? <p className="text-[11px] text-muted-foreground">{row.caption}</p> : null}
+            </div>
+          );
+        }) : (
+          <p className="rounded-lg border bg-slate-50 p-6 text-sm text-muted-foreground">그래프로 표시할 데이터가 없습니다.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusChart({ report }: { report: MonthlyReport }) {
+  const rows = [
+    { label: "검수 완료", value: report.summary.verified_documents, className: "bg-emerald-500" },
+    { label: "미검수/대기", value: report.summary.pending_documents, className: "bg-amber-500" },
+    { label: "확인 필요", value: report.summary.documents_with_errors, className: "bg-red-500" },
+    { label: "금액 없는 수량 문서", value: report.summary.no_price_documents ?? 0, className: "bg-slate-500" },
+  ];
+  const total = Math.max(report.summary.total_documents, rows.reduce((sum, row) => sum + row.value, 0), 1);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BarChart3 className="size-4 text-primary" />
+          문서 처리 상태 그래프
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">기간 내 문서 처리 상태를 비교합니다.</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex h-4 overflow-hidden rounded-full bg-slate-100">
+          {rows.map((row) => (
+            <span
+              key={row.label}
+              className={row.className}
+              style={{ width: `${Math.max(0, Math.round((row.value / total) * 100))}%` }}
+              title={`${row.label} ${row.value}건`}
+            />
+          ))}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {rows.map((row) => (
+            <div key={row.label} className="flex items-center justify-between rounded-md border bg-white px-3 py-2 text-sm">
+              <span className="flex items-center gap-2">
+                <span className={`size-2.5 rounded-full ${row.className}`} />
+                {row.label}
+              </span>
+              <span className="font-semibold">{row.value}건</span>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );

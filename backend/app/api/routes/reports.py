@@ -21,11 +21,12 @@ def monthly_report(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     period: str = Query(default="month", pattern="^(day|week|month|year|custom)$"),
+    party_name: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     start, end = _resolve_report_range(year=year, month=month, start_date=start_date, end_date=end_date)
     service = MonthlyReportService()
-    return service.build_for_range(_report_documents(db, start, end), start_date=start, end_date=end, period=period)
+    return service.build_for_range(_report_documents(db, start, end), start_date=start, end_date=end, period=period, party_name=party_name)
 
 
 @router.get("/monthly/export")
@@ -35,12 +36,13 @@ def monthly_report_export(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     period: str = Query(default="month", pattern="^(day|week|month|year|custom)$"),
+    party_name: str | None = Query(default=None),
     format: str = Query(default="xlsx", pattern="^(xlsx|csv)$"),
     db: Session = Depends(get_db),
 ) -> Response:
     start, end = _resolve_report_range(year=year, month=month, start_date=start_date, end_date=end_date)
     service = MonthlyReportService()
-    report = service.build_for_range(_report_documents(db, start, end), start_date=start, end_date=end, period=period)
+    report = service.build_for_range(_report_documents(db, start, end), start_date=start, end_date=end, period=period, party_name=party_name)
     filename = f"docparse-report-{report['start_date']}-{report['end_date']}.{format}"
     if format == "csv":
         return Response(

@@ -500,6 +500,7 @@ export interface MonthlyReport {
   start_date: string;
   end_date: string;
   range_label: string;
+  party_name?: string | null;
   summary: MonthlyReportSummary;
   by_party: MonthlyReportPartyRow[];
   by_item: MonthlyReportItemRow[];

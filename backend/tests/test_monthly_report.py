@@ -95,6 +95,28 @@ def test_report_can_aggregate_custom_date_range():
     assert report["summary"]["total_amount"] == 1000
 
 
+def test_report_can_filter_by_party_name():
+    service = MonthlyReportService()
+    documents = [
+        _document(document_number="PO-A", customer_name="한빛 제조", extracted_amount=Decimal("1000")),
+        _document(document_number="PO-B", customer_name="대한정밀", extracted_amount=Decimal("2000")),
+    ]
+
+    report = service.build_for_range(
+        documents,
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 7, 1),
+        period="month",
+        party_name="한빛제조",
+    )
+
+    assert report["party_name"] == "한빛제조"
+    assert report["summary"]["total_documents"] == 1
+    assert report["summary"]["total_amount"] == 1000
+    assert report["by_party"] == [{"name": "한빛 제조", "document_count": 1, "total_amount": 1000}]
+    assert report["by_item"][0]["quantity"] == 10
+
+
 def test_monthly_report_issues_include_pending_missing_and_calculation_mismatch():
     service = MonthlyReportService()
     missing = _document(
