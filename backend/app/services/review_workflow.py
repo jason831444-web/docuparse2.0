@@ -107,9 +107,10 @@ def now_iso() -> str:
 
 
 def issue_key(issue: dict[str, Any]) -> str:
+    item_index = _coerce_item_index(issue.get("item_index"))
     return ":".join(
         str(part)
-        for part in [issue.get("code") or "review_required", issue.get("field") or "document", issue.get("item_index") if issue.get("item_index") is not None else ""]
+        for part in [issue.get("code") or "review_required", issue.get("field") or "document", item_index if item_index is not None else ""]
     )
 
 
@@ -147,11 +148,18 @@ def update_issue_status(document: Document, key: str, status: str, note: str | N
     issues = review.get("issues") if isinstance(review.get("issues"), list) else []
     target = None
     for issue in issues:
-        if isinstance(issue, dict) and issue.get("key") == key:
+        if isinstance(issue, dict) and _review_issue_key_matches(issue.get("key"), key):
             target = issue
             break
     if target is None:
-        target = {"key": key, "code": key.split(":", 1)[0], "status": "open"}
+        parsed = _parse_approval_issue(key)
+        target = {
+            "key": parsed["key"],
+            "code": parsed["code"],
+            "field": parsed["field"],
+            "item_index": parsed["item_index"],
+            "status": "open",
+        }
         issues.append(target)
     target.update({"status": status, "note": note, "updated_by": reviewer, "updated_at": now_iso()})
     if status in RESOLVED_ISSUE_STATUSES:
@@ -228,12 +236,11 @@ def validate_approval(document: Document) -> ApprovalValidation:
     warnings: list[str] = []
 
     review = review_metadata(document)
-    issue_status = {str(issue.get("key")): str(issue.get("status") or "open") for issue in review.get("issues", []) if isinstance(issue, dict)}
     for issue in (document.workflow_metadata or {}).get("normalized_review_issues") or []:
         if not isinstance(issue, dict):
             continue
         key = issue_key(issue)
-        if issue_status.get(key, "open") in RESOLVED_ISSUE_STATUSES:
+        if _review_issue_status(review, key) in RESOLVED_ISSUE_STATUSES:
             continue
         code = str(issue.get("code") or "review_required")
         severity = str(issue.get("severity") or "warning")
@@ -253,7 +260,7 @@ def validate_approval(document: Document) -> ApprovalValidation:
     if party_required and not document.customer_name:
         warnings.append("missing_customer_name")
     if _items_required(document, profiles) and not document.line_items:
-        blocking.append("missing_line_items")
+        _append_blocking_if_open(review, blocking, "missing_line_items")
     if amount_required and not document.extracted_amount:
         warnings.append("missing_total")
     if "tax_document" in profiles:
@@ -261,16 +268,21 @@ def validate_approval(document: Document) -> ApprovalValidation:
     if "return_document" in profiles:
         warnings.append("amount_direction_requires_review")
         if _doc_type(document) == "delivery_note":
-            blocking.append("return_document_misclassified_as_delivery_note")
+            _append_blocking_if_open(review, blocking, "return_document_misclassified_as_delivery_note")
         if not _related_document_number(document):
             warnings.append("related_document_missing")
     if "inventory_movement_document" in profiles and document.line_items:
         for index, item in enumerate(document.line_items, start=1):
             if not item.get("item_name") or item.get("quantity") in (None, ""):
-                blocking.append(f"missing_inventory_item_or_quantity:item_{index}")
+                _append_blocking_if_open(review, blocking, f"missing_inventory_item_or_quantity:item_{index}")
     if _has_vl_candidate_issues(document):
         warnings.append("vl_candidate_review_required")
     return ApprovalValidation(blocking=list(dict.fromkeys(blocking)), warnings=list(dict.fromkeys(warnings)))
+
+
+def _append_blocking_if_open(review: dict[str, Any], blocking: list[str], key: str) -> None:
+    if _review_issue_status(review, key) not in RESOLVED_ISSUE_STATUSES:
+        blocking.append(key)
 
 
 def _approval_issue_detail(document: Document, raw_value: str, *, blocking: bool) -> dict[str, Any]:
@@ -303,7 +315,30 @@ def _parse_approval_issue(raw_value: str) -> dict[str, Any]:
     if code == "missing_inventory_item_or_quantity" and len(parts) > 1 and parts[1].startswith("item_"):
         field = "line_items.quantity"
         item_index = _coerce_item_index(parts[1].replace("item_", ""))
-    return {"key": value, "code": code, "field": field, "item_index": item_index}
+    normalized_key = ":".join(str(part) for part in [code, field, item_index if item_index is not None else ""])
+    return {"key": normalized_key, "code": code, "field": field, "item_index": item_index}
+
+
+def _review_issue_status(review: dict[str, Any], key: str) -> str:
+    issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+    for issue in issues:
+        if isinstance(issue, dict) and _review_issue_key_matches(issue.get("key"), key):
+            return str(issue.get("status") or "open")
+    return "open"
+
+
+def _review_issue_key_matches(left: object, right: object) -> bool:
+    left_text = str(left or "").replace("unresolved:", "", 1)
+    right_text = str(right or "").replace("unresolved:", "", 1)
+    if left_text == right_text:
+        return True
+    left_parsed = _parse_approval_issue(left_text)
+    right_parsed = _parse_approval_issue(right_text)
+    return (
+        left_parsed["code"] == right_parsed["code"]
+        and left_parsed["field"] == right_parsed["field"]
+        and left_parsed["item_index"] == right_parsed["item_index"]
+    )
 
 
 def _find_normalized_issue(document: Document, key: str) -> dict[str, Any]:

@@ -718,6 +718,18 @@ export interface NormalizedReviewIssue {
   currency?: string | null;
 }
 
+function coerceReviewItemIndex(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const normalized = value.trim().replace(/^item_/, "");
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function reviewIssueKey(code: string, field?: string, itemIndex?: number) {
+  return `${code || "review_required"}:${field || "document"}:${itemIndex ?? ""}`;
+}
+
 export function normalizedReviewIssues(document: {
   workflow_metadata?: Record<string, unknown> | null;
   ingestion_metadata?: Record<string, unknown> | null;
@@ -734,7 +746,13 @@ export function normalizedReviewIssues(document: {
   reviewIssues.forEach((issue) => {
     if (issue && typeof issue === "object") {
       const record = issue as Record<string, unknown>;
-      if (typeof record.key === "string" && typeof record.status === "string") reviewStatusByKey.set(record.key, record.status);
+      if (typeof record.status === "string") {
+        if (typeof record.key === "string") reviewStatusByKey.set(record.key, record.status);
+        const code = typeof record.code === "string" ? record.code : typeof record.key === "string" ? record.key.split(":", 1)[0] : "review_required";
+        const field = typeof record.field === "string" ? record.field : typeof record.key === "string" ? record.key.split(":")[1] : "document";
+        const itemIndex = coerceReviewItemIndex(record.item_index ?? (typeof record.key === "string" ? record.key.split(":")[2] : undefined));
+        reviewStatusByKey.set(reviewIssueKey(code, field, itemIndex), record.status);
+      }
     }
   });
   const fromMetadata = Array.isArray(metadata.normalized_review_issues)
@@ -752,7 +770,7 @@ export function normalizedReviewIssues(document: {
           key: typeof issue.key === "string" ? issue.key : undefined,
           message_ko: String(issue.message_ko || ""),
           field: typeof issue.field === "string" ? issue.field : undefined,
-          item_index: typeof issue.item_index === "number" ? issue.item_index : undefined,
+          item_index: coerceReviewItemIndex(issue.item_index),
           severity: typeof issue.severity === "string" ? issue.severity : undefined,
           document_total: typeof issue.document_total === "string" || typeof issue.document_total === "number" ? issue.document_total : undefined,
           line_total_sum: typeof issue.line_total_sum === "string" || typeof issue.line_total_sum === "number" ? issue.line_total_sum : undefined,
@@ -763,7 +781,7 @@ export function normalizedReviewIssues(document: {
       normalized.severity = "info";
       normalized.message_ko = "이 문서 유형에서는 금액 정보가 없을 수 있습니다.";
     }
-    normalized.key ||= `${normalized.code}:${normalized.field || "document"}:${normalized.item_index ?? ""}`;
+    normalized.key = reviewIssueKey(normalized.code, normalized.field, normalized.item_index);
     const reviewStatus = reviewStatusByKey.get(normalized.key);
     if (reviewStatus === "resolved" || reviewStatus === "ignored") {
       normalized.severity = "info";

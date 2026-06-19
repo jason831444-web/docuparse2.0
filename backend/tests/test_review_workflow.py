@@ -73,6 +73,54 @@ def test_internal_item_matching_issues_do_not_block_approval():
     assert document.workflow_metadata["review"]["approved"] is True
 
 
+def test_resolved_issue_status_matches_string_item_index_key_variants():
+    document = _document(workflow_metadata={
+        "taxonomy": {"document_profile": "priced_document", "document_profiles": ["priced_document"], "amount_required": True, "party_required": True},
+        "normalized_review_issues": [{"code": "missing_quantity", "message_ko": "수량 확인 필요", "field": "line_items.quantity", "item_index": "0"}],
+    })
+
+    blocked = approve_document(document)
+    assert blocked.ok is False
+    assert blocked.blocking == ["unresolved:missing_quantity:line_items.quantity:0"]
+
+    update_issue_status(document, "unresolved:missing_quantity:line_items.quantity:0", "resolved")
+    approved = approve_document(document)
+
+    assert approved.ok is True
+    assert document.workflow_metadata["review"]["approved"] is True
+
+
+def test_ignored_issue_status_matches_legacy_item_token_key():
+    document = _document(
+        document_type=DocumentType.general_document,
+        vendor_name=None,
+        customer_name=None,
+        extracted_amount=None,
+        subtotal=None,
+        tax=None,
+        workflow_metadata={
+            "taxonomy": {
+                "document_subtype": "internal_transfer",
+                "document_profile": "inventory_movement_document",
+                "document_profiles": ["inventory_movement_document", "no_price_document"],
+                "amount_required": False,
+                "party_required": False,
+            },
+            "normalized_review_issues": [],
+        },
+        line_items=[{"item_name": "베어링", "quantity": None, "unit": "EA"}],
+    )
+
+    blocked = approve_document(document)
+    assert blocked.ok is False
+    assert blocked.blocking == ["missing_inventory_item_or_quantity:item_1"]
+
+    update_issue_status(document, "missing_inventory_item_or_quantity:item_1", "ignored")
+    approved = approve_document(document)
+
+    assert approved.ok is True
+
+
 def test_approval_error_payload_is_user_facing_korean_without_raw_codes():
     document = _document(workflow_metadata={
         "taxonomy": {"document_profile": "priced_document", "document_profiles": ["priced_document"], "amount_required": True, "party_required": True},

@@ -82,6 +82,33 @@ assert.equal(isBlockingReviewIssue({
   severity: "warning",
 }), false);
 
+const stringIndexResolvedIssues = normalizedReviewIssues({
+  workflow_metadata: {
+    review: {
+      issues: [
+        {
+          key: "missing_quantity:line_items.quantity:0",
+          code: "missing_quantity",
+          field: "line_items.quantity",
+          item_index: "0",
+          status: "resolved",
+        },
+      ],
+    },
+    normalized_review_issues: [
+      {
+        code: "missing_quantity",
+        message_ko: "수량 확인 필요",
+        field: "line_items.quantity",
+        item_index: "0",
+        severity: "warning",
+      },
+    ],
+  },
+});
+assert.equal(stringIndexResolvedIssues[0].severity, "info");
+assert.equal(isBlockingReviewIssue(stringIndexResolvedIssues[0]), false);
+
 assert.equal(reviewIssueSummary({
   code: "amount_direction_requires_review",
   message_ko: "반품/차감 문서는 금액의 차감 방향과 원문서 반영 방식을 확인해야 합니다.",
