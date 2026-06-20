@@ -1,5 +1,6 @@
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -46,6 +47,16 @@ class DocumentWorker:
         if not document:
             return None
         document.processing_status = ProcessingStatus.processing
+        now = datetime.now(timezone.utc).isoformat()
+        workflow_metadata = dict(document.workflow_metadata or {})
+        workflow_metadata["processing_stage"] = {
+            "stage": "preparing",
+            "updated_at": now,
+        }
+        events = list(workflow_metadata.get("processing_stage_events") or [])
+        events.append({"stage": "preparing", "at": now, "source": "queue_worker_claim"})
+        workflow_metadata["processing_stage_events"] = events[-12:]
+        document.workflow_metadata = workflow_metadata
         document.ingestion_metadata = {
             **(document.ingestion_metadata or {}),
             "queue_backend": "local_db",

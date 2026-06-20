@@ -1,10 +1,24 @@
 from typing import Protocol
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.document import Document, ProcessingStatus
 from app.services.document_processor import DocumentProcessor
+
+
+def _queue_stage_metadata(document: Document, stage: str) -> dict:
+    metadata = dict(document.workflow_metadata or {})
+    now = datetime.now(timezone.utc).isoformat()
+    metadata["processing_stage"] = {
+        "stage": stage,
+        "updated_at": now,
+    }
+    events = list(metadata.get("processing_stage_events") or [])
+    events.append({"stage": stage, "at": now})
+    metadata["processing_stage_events"] = events[-12:]
+    return metadata
 
 
 class DocumentQueue(Protocol):
@@ -17,6 +31,7 @@ class InlineDocumentQueue:
 
     def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         document.processing_status = ProcessingStatus.queued
+        document.workflow_metadata = _queue_stage_metadata(document, "pending")
         db.add(document)
         db.commit()
         db.refresh(document)
@@ -34,6 +49,7 @@ class DeferredLocalDocumentQueue:
 
     def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         document.processing_status = ProcessingStatus.queued
+        document.workflow_metadata = _queue_stage_metadata(document, "pending")
         db.add(document)
         db.commit()
         db.refresh(document)
@@ -45,6 +61,7 @@ class ExternalDocumentQueue:
 
     def enqueue(self, db: Session, document: Document, *, process_inline: bool = True) -> Document:
         document.processing_status = ProcessingStatus.queued
+        document.workflow_metadata = _queue_stage_metadata(document, "pending")
         document.ingestion_metadata = {
             **(document.ingestion_metadata or {}),
             "queue_backend": get_settings().queue_backend,

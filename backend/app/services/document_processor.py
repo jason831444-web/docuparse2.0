@@ -1,7 +1,8 @@
 import logging
 import re
 import threading
-from datetime import date
+import time
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 
 logger = logging.getLogger(__name__)
 _PROCESSING_SEMAPHORE = threading.BoundedSemaphore(get_settings().document_processing_concurrency)
+_VL_INFERENCE_SEMAPHORE = threading.BoundedSemaphore(get_settings().paddleocr_vl_gguf_concurrency)
 
 
 def _safe_remote_upload_metadata(value: Any) -> dict[str, Any]:
@@ -69,19 +71,173 @@ class DocumentProcessor:
         self.vl_candidate_gate = VLCandidateValidationGate()
         self.image_preprocessor = ImagePreprocessor(self.ingestion.document_quality)
 
+    def _record_elapsed(self, timings: dict[str, int], key: str, started: float) -> None:
+        timings[key] = int(round((time.perf_counter() - started) * 1000))
+
+    def _mark_processing_stage(
+        self,
+        db: Session,
+        document: Document,
+        stage: str,
+        timings: dict[str, int] | None = None,
+        stage_events: list[dict[str, Any]] | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        event = {"stage": stage, "at": now}
+        if stage_events is not None:
+            stage_events.append(event)
+        metadata = dict(document.workflow_metadata or {})
+        metadata["processing_stage"] = {
+            "stage": stage,
+            "updated_at": now,
+        }
+        if timings:
+            metadata["processing_timing_ms"] = dict(timings)
+        if stage_events is not None:
+            metadata["processing_stage_events"] = list(stage_events)[-12:]
+        document.workflow_metadata = sanitize_for_postgres(metadata)
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+
+    def _merge_processing_run_metadata(
+        self,
+        workflow_metadata: dict[str, Any],
+        final_stage: str,
+        timings: dict[str, int],
+        stage_events: list[dict[str, Any]],
+        prepare_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = dict(workflow_metadata or {})
+        now = datetime.now(timezone.utc).isoformat()
+        events = [*stage_events, {"stage": final_stage, "at": now}]
+        metadata["processing_stage"] = {
+            "stage": final_stage,
+            "updated_at": now,
+        }
+        metadata["processing_stage_events"] = events[-16:]
+        metadata["processing_timing_ms"] = dict(timings)
+        if prepare_metadata:
+            metadata["cpu_prepare"] = prepare_metadata
+        metadata["processing_pipeline"] = {
+            "mode": "batch_stage_split",
+            "cpu_prepare_parallel_safe": True,
+            "gpu_vl_concurrency": self.settings.paddleocr_vl_gguf_concurrency,
+            "gpu_vl_queue": "in_process_semaphore",
+            "postprocess_parallel_safe": True,
+            "gemma_second_pass_blocking": False,
+        }
+        return metadata
+
+    def _prepare_cpu_stage_assets(
+        self,
+        stored_path: Path,
+        document: Document,
+        timings: dict[str, int],
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "source": "cpu_prepare_stage",
+            "original_file_preserved": True,
+            "stored_file_exists": stored_path.exists(),
+            "file_suffix": stored_path.suffix.casefold(),
+            "file_size_bytes": stored_path.stat().st_size if stored_path.exists() else None,
+            "preview_cache": {"attempted": False, "created": False},
+        }
+        if not stored_path.exists():
+            metadata["warnings"] = ["stored_file_missing"]
+            return metadata
+        preview_started = time.perf_counter()
+        preview_metadata = self._ensure_preview_cache(stored_path, document)
+        self._record_elapsed(timings, "preview_thumbnail_ms", preview_started)
+        metadata["preview_cache"] = preview_metadata
+        return metadata
+
+    def _ensure_preview_cache(self, stored_path: Path, document: Document) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "attempted": True,
+            "created": False,
+            "cache_hit": False,
+            "source_file_preserved": True,
+        }
+        suffix = stored_path.suffix.casefold()
+        output_dir = self.settings.upload_dir / "preview_cache" / str(document.id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "page-1-preview.jpg"
+        if output_path.exists():
+            document.preview_image_path = str(output_path)
+            metadata.update({"cache_hit": True, "path_present": True, "format": "jpeg"})
+            return metadata
+        try:
+            if suffix == ".pdf":
+                pdf_started = time.perf_counter()
+                self._render_pdf_preview(stored_path, output_path)
+                metadata["pdf_render_ms"] = int(round((time.perf_counter() - pdf_started) * 1000))
+                metadata["source"] = "pdf_first_page_render"
+            elif suffix in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+                self._render_image_preview(stored_path, output_path)
+                metadata["source"] = "image_thumbnail"
+            else:
+                metadata.update({"attempted": False, "skip_reason": "unsupported_preview_file_type"})
+                return metadata
+            document.preview_image_path = str(output_path)
+            metadata.update({"created": True, "path_present": True, "format": "jpeg"})
+        except Exception as exc:
+            metadata.update({"created": False, "error": f"{type(exc).__name__}: {exc}"})
+        return metadata
+
+    def _render_image_preview(self, stored_path: Path, output_path: Path) -> None:
+        from PIL import Image, ImageOps
+
+        with Image.open(stored_path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((1800, 2400), Image.Resampling.LANCZOS)
+            image.save(output_path, "JPEG", quality=88, optimize=True)
+
+    def _render_pdf_preview(self, stored_path: Path, output_path: Path) -> None:
+        import fitz
+
+        with fitz.open(stored_path) as pdf:
+            if len(pdf) <= 0:
+                raise ValueError("PDF has no pages")
+            page = pdf.load_page(0)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            png_path = output_path.with_suffix(".png")
+            pixmap.save(png_path)
+        try:
+            self._render_image_preview(png_path, output_path)
+        finally:
+            png_path.unlink(missing_ok=True)
+
     def process(self, db: Session, document: Document) -> Document:
         with _PROCESSING_SEMAPHORE:
             return self._process_locked(db, document)
 
     def _process_locked(self, db: Session, document: Document) -> Document:
+        total_started = time.perf_counter()
+        stage_timings: dict[str, int] = {}
+        stage_events: list[dict[str, Any]] = []
+        prepare_metadata: dict[str, Any] = {}
         document.processing_status = ProcessingStatus.processing
         document.processing_error = None
         db.add(document)
         db.commit()
         db.refresh(document)
         try:
+            self._mark_processing_stage(db, document, "preparing", stage_timings, stage_events)
             stored_path = Path(document.stored_file_path)
-            vl_primary_attempt = self._vl_primary_reader_attempt(stored_path, document, {})
+            prepare_started = time.perf_counter()
+            prepare_metadata = self._prepare_cpu_stage_assets(stored_path, document, stage_timings)
+            self._record_elapsed(stage_timings, "prepare_ms", prepare_started)
+            vl_primary_attempt = self._vl_primary_reader_attempt(
+                stored_path,
+                document,
+                {},
+                db=db,
+                stage_timings=stage_timings,
+                stage_events=stage_events,
+            )
+            postprocess_started = time.perf_counter()
+            self._mark_processing_stage(db, document, "postprocessing", stage_timings, stage_events)
             vl_primary_drives_reader = self._vl_primary_attempt_should_drive_reader(vl_primary_attempt)
             if vl_primary_drives_reader:
                 normalized = self._vl_primary_normalized_document(
@@ -93,7 +249,9 @@ class DocumentProcessor:
             else:
                 normalized = self.ingestion.ingest(stored_path, document.original_filename, document.mime_type)
             raw_text = normalized.normalized_text
+            parser_started = time.perf_counter()
             parsed = self.parser.parse(raw_text, document.original_filename)
+            self._record_elapsed(stage_timings, "parser_ms", parser_started)
             vl_promoted_structured = self._vl_primary_structured_candidate(vl_primary_attempt) if vl_primary_drives_reader else None
             if vl_promoted_structured:
                 self._apply_vl_structured_candidate_to_parsed(parsed, vl_promoted_structured)
@@ -264,6 +422,7 @@ class DocumentProcessor:
                     document.ai_document_type = parsed.document_type
                     document.category = parsed.category or parsed.document_type.value
                     document.tags = [parsed.document_type.value]
+                item_master_started = time.perf_counter()
                 document.line_items = sanitize_for_postgres(
                     self.item_master_matcher.match_line_items(
                         db,
@@ -274,6 +433,7 @@ class DocumentProcessor:
                         ),
                     )
                 )
+                self._record_elapsed(stage_timings, "item_master_ms", item_master_started)
                 if preserve_return_credit_amounts:
                     document.line_items = sanitize_for_postgres(
                         self._restore_return_credit_visible_amounts(
@@ -407,6 +567,17 @@ class DocumentProcessor:
             document.review_required = workflow_review_required if self._is_manufacturing_type(document) else document.review_required or workflow_review_required
             document.review_required = document.review_required or bool((workflow_metadata.get("vl_candidate_summary") or {}).get("requires_review"))
             document.processing_status = ProcessingStatus.needs_review if document.review_required else ProcessingStatus.ready
+            self._record_elapsed(stage_timings, "postprocess_ms", postprocess_started)
+            self._record_elapsed(stage_timings, "total_processing_ms", total_started)
+            final_stage = "review_ready" if document.review_required else "completed"
+            workflow_metadata = self._merge_processing_run_metadata(
+                workflow_metadata,
+                final_stage,
+                stage_timings,
+                stage_events,
+                prepare_metadata,
+            )
+            document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             if parser_only:
                 logger.info("Parser-only processing completed for document %s.", document.id)
         except Exception as exc:
@@ -414,6 +585,17 @@ class DocumentProcessor:
             document = db.get(Document, document.id) or document
             document.processing_status = ProcessingStatus.failed
             document.processing_error = sanitize_for_postgres(str(exc))
+            self._record_elapsed(stage_timings, "total_processing_ms", total_started)
+            workflow_metadata = dict(document.workflow_metadata or {})
+            document.workflow_metadata = sanitize_for_postgres(
+                self._merge_processing_run_metadata(
+                    workflow_metadata,
+                    "failed",
+                    stage_timings,
+                    stage_events,
+                    prepare_metadata,
+                )
+            )
         db.add(document)
         db.commit()
         db.refresh(document)
@@ -424,6 +606,10 @@ class DocumentProcessor:
         stored_path: Path,
         document: Document,
         workflow_metadata: dict,
+        *,
+        db: Session | None = None,
+        stage_timings: dict[str, int] | None = None,
+        stage_events: list[dict[str, Any]] | None = None,
     ) -> dict | None:
         if not self.vl_worker.enabled():
             return None
@@ -431,7 +617,18 @@ class DocumentProcessor:
         input_path = stored_path
         if input_variant.get("processed_path"):
             input_path = Path(str(input_variant["processed_path"]))
-        result = self.vl_worker.analyze(input_path, original_filename=document.original_filename)
+        if db is not None:
+            self._mark_processing_stage(db, document, "vl_waiting", stage_timings, stage_events)
+        vl_wait_started = time.perf_counter()
+        with _VL_INFERENCE_SEMAPHORE:
+            if stage_timings is not None:
+                self._record_elapsed(stage_timings, "vl_wait_ms", vl_wait_started)
+            if db is not None:
+                self._mark_processing_stage(db, document, "vl_processing", stage_timings, stage_events)
+            vl_request_started = time.perf_counter()
+            result = self.vl_worker.analyze(input_path, original_filename=document.original_filename)
+            if stage_timings is not None:
+                self._record_elapsed(stage_timings, "vl_request_ms", vl_request_started)
         result["input_variant"] = input_variant
         metadata = self._vl_primary_reader_metadata_from_result(result, document, workflow_metadata)
         text = result.get("text") or result.get("text_preview")
