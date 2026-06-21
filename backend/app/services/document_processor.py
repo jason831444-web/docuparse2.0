@@ -2285,6 +2285,20 @@ class DocumentProcessor:
 
         self._normalize_party_fields(document)
 
+        removed_date_fragment_amounts: list[str] = []
+        for field in ("extracted_amount", "subtotal", "tax"):
+            value = getattr(document, field, None)
+            if self._document_amount_looks_like_date_fragment(value, raw_text):
+                setattr(document, field, None)
+                removed_date_fragment_amounts.append(field)
+        if removed_date_fragment_amounts:
+            issues.append(self._business_safety_issue(
+                "date_fragment_not_total_amount",
+                "날짜 일부가 금액처럼 해석되어 확정 금액에서 제외했습니다.",
+                ",".join(removed_date_fragment_amounts),
+            ))
+            document.review_required = True
+
         filtered_items: list[dict] = []
         removed_summary_rows = 0
         for item in line_items:
@@ -2378,6 +2392,17 @@ class DocumentProcessor:
         text = self._line_item_business_text(item)
         return bool(self._summary_footer_pattern().search(text))
 
+    def _document_amount_looks_like_date_fragment(self, value: Any, raw_text: str) -> bool:
+        if value in (None, "", []):
+            return False
+        text = str(value).strip().replace(",", "")
+        if not re.fullmatch(r"20\d{2}\.\d{1,2}", text):
+            return False
+        year, month = text.split(".", 1)
+        month_number = int(month)
+        date_fragment = rf"{re.escape(year)}[./-]0?{month_number}[./-]\d{{1,2}}"
+        return bool(re.search(date_fragment, raw_text or ""))
+
     def _line_item_business_text(self, item: dict) -> str:
         fields = (
             "item_name",
@@ -2404,7 +2429,8 @@ class DocumentProcessor:
             r"과세\s*합계|면세\s*금액|vat\b|v\.a\.t|부가세|"
             r"결제\s*합계|현금\s*합계|카드\s*합계|온라인\s*결제|"
             r"주문\s*횟수|매장\s*판매|배달\s*판매|평균\s*단가|"
-            r"공급\s*가액\s*합계|세액\s*합계|청구\s*금액|합계\s*금액"
+            r"공급\s*가액\s*합계|세액\s*합계|청구\s*금액|합계\s*금액|"
+            r"(?:^|\s)(?:공급\s*가액|세\s*액|부가\s*세|합\s*계|총\s*계|소\s*계)(?:\s|$)"
             r")",
             flags=re.IGNORECASE,
         )

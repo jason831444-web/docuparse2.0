@@ -83,6 +83,46 @@ def _processor(worker: FakeVLWorker) -> DocumentProcessor:
     return processor
 
 
+def test_final_business_safety_removes_standalone_receipt_summary_rows():
+    document = _document(
+        document_type=DocumentType.receipt,
+        line_items=[
+            {"item_name": "절삭유", "quantity": 2, "line_total": 38000},
+            {"item_name": "공급가액", "quantity": "68,636"},
+            {"item_name": "부가세", "quantity": "6,864"},
+            {"item_name": "합계", "quantity": "75,500"},
+        ],
+    )
+
+    issues = _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "영수증\n품목 수량 금액\n절삭유 2 38,000\n공급가액 68,636\n부가세 6,864\n합계 75,500",
+    )
+
+    assert [item["item_name"] for item in document.line_items] == ["절삭유"]
+    assert any(issue["code"] == "summary_total_not_line_item" for issue in issues)
+
+
+def test_final_business_safety_removes_date_fragment_total_amount():
+    document = _document(
+        document_type=DocumentType.receipt,
+        extracted_amount=Decimal("2026.06"),
+        subtotal=Decimal("68636"),
+        tax=Decimal("6864"),
+        line_items=[{"item_name": "절삭유", "quantity": 2, "line_total": 38000}],
+    )
+
+    issues = _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "거래일시 2026.06.13 14:22\n합계 75,500",
+    )
+
+    assert document.extracted_amount is None
+    assert document.subtotal == Decimal("68636")
+    assert document.tax == Decimal("6864")
+    assert any(issue["code"] == "date_fragment_not_total_amount" for issue in issues)
+
+
 def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields():
     text = """
     견적서
