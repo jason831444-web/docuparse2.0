@@ -1916,10 +1916,13 @@ class DocumentProcessor:
             return True
         if manufacturing_document_signal:
             return False
+        if document.document_type == DocumentType.receipt or re.search(r"영수증\s*번호|receipt\s*(?:no|number)", text, flags=re.IGNORECASE):
+            return False
         if re.search(r"(영수증|승인번호|카드사)", text, flags=re.IGNORECASE) and re.search(
             r"(결제|카드|현금|승인|부가세|vat)", text, flags=re.IGNORECASE
         ):
-            return True
+            metric_count = len({match.group(0) for match in self._pos_metric_pattern().finditer(text)})
+            return metric_count >= 2
         if not line_items:
             return False
         pos_metric_count = sum(1 for item in line_items if self._pos_metric_pattern().search(self._line_item_business_text(item)))

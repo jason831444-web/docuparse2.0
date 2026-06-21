@@ -734,6 +734,7 @@ class DocumentParser:
             r"\b(?:RTN|RCM)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bTRF[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bMV[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\bI?DOC[-_ ]?[0O]?\d{2,4}\b",
             r"\b(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{3,4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)*(?:[-_][A-Z]{1,10}){0,2}\b",
             r"\bINV(?:[-_ ]+[A-Z]{2,10}){1,3}[-_ ]+\d{3,4}\b",
         ]
@@ -758,6 +759,7 @@ class DocumentParser:
             return None
         text = text.replace("_", "-")
         text = re.sub(r"-{2,}", "-", text)
+        text = re.sub(r"^IDOC(?=-)", "DOC", text, flags=re.IGNORECASE)
         text = re.sub(r"^FAXx-", "FAX-", text, flags=re.IGNORECASE)
         text = re.sub(r"^PO0-", "PO-", text, flags=re.IGNORECASE)
         text = re.sub(r"^(QC-)", "IQC-", text, flags=re.IGNORECASE)
@@ -931,6 +933,8 @@ class DocumentParser:
     def _extract_line_items(self, lines: list[str], doc_type: DocumentType | None = None) -> list[dict]:
         vl_inline_items = self._extract_vl_inline_table_items(lines, doc_type)
         if vl_inline_items:
+            if doc_type == DocumentType.quotation:
+                vl_inline_items.extend(self._extract_option_quotation_line_items(lines))
             return self._dedupe_line_items(vl_inline_items)[:80]
         if doc_type == DocumentType.inspection_report:
             special_items = self._extract_special_quantity_table_items(lines)
@@ -1031,7 +1035,7 @@ class DocumentParser:
             return False
         if not re.search(r"(단가|unit\s*price)", text, flags=re.IGNORECASE):
             return False
-        if not re.search(r"(공급가액|공급액|공급기록|공급금액|supply|subtotal|amount)", text, flags=re.IGNORECASE):
+        if not re.search(r"(공급가액|공급액|공급기록|공급금액|공급가역|궁금가액|supply|subtotal|amount)", text, flags=re.IGNORECASE):
             return False
         if not re.search(r"(세액|부가세|tax|vat)", text, flags=re.IGNORECASE):
             return False
@@ -1487,7 +1491,7 @@ class DocumentParser:
                 return item
             generic_no_price_match = re.match(
                 r"^\d+\s+(?P<body>.+?)\s+(?P<quantity>[-+]?\d[\d,]*)\s+"
-                r"(?P<unit>EA|PCS?|BOX|CAN|SET|ROLL|PACK|PK|개|장|본|봉|박스|캔|통|식|대|매|세트)"
+                r"(?P<unit>EA|PCS?|BOX|CAN|SET|ROLL|PACK|PK|KG|KGS?|G|L|개|장|본|봉|박스|캔|통|식|대|매|세트|킬로|키로)"
                 r"(?:\s+(?P<remarks>.*))?$",
                 text,
                 flags=re.IGNORECASE,
@@ -2918,6 +2922,8 @@ class DocumentParser:
             item = self._parse_receipt_inline_row(line)
             if item:
                 items.append(self._normalize_line_item(item))
+        if len(items) < 2:
+            items.extend(self._extract_fragmented_receipt_line_items(lines))
         return self._dedupe_line_items(items)
 
     def _parse_receipt_inline_row(self, line: str) -> dict | None:
@@ -2947,6 +2953,105 @@ class DocumentParser:
         if match.group("line_total"):
             item["line_total"] = match.group("line_total")
         return item
+
+    def _extract_fragmented_receipt_line_items(self, lines: list[str]) -> list[dict]:
+        """Rebuild receipt rows when VL split item, quantity, price, and total lines.
+
+        Phone-photo receipts often come back as a vertical stream:
+        item name -> spec -> "5EA X 620" -> "3100". Keep the result as review
+        rows and never infer missing money beyond the visible numeric cells.
+        """
+        cleaned: list[str] = []
+        for raw in lines:
+            line = re.sub(r"\s+", " ", str(raw or "").strip(" -•·\t"))
+            if not line or self._looks_like_numbered_table_footer(line):
+                continue
+            if self._looks_like_business_label(line) or self._looks_like_instruction_or_note(line):
+                continue
+            if re.search(r"^(공급가액|부가세|합계|감사합니다|영수증번호|일자|승인번호|카드사)\b", line, flags=re.IGNORECASE):
+                continue
+            if self._normalize_document_number(line) and self._document_number_score(self._normalize_document_number(line) or "") >= 20:
+                continue
+            if self._extract_date(line):
+                continue
+            cleaned.append(line)
+
+        items: list[dict] = []
+        pending_name_parts: list[str] = []
+        quantity_pattern = re.compile(
+            r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)"
+            r"(?:\s*[xX*]\s*|\s+)(?P<unit_price>\d[\d,]*)"
+            r"(?:\s+(?P<line_total>\d[\d,]*))?$",
+            flags=re.IGNORECASE,
+        )
+        quantity_unit_only_pattern = re.compile(
+            r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)$",
+            flags=re.IGNORECASE,
+        )
+        for index, line in enumerate(cleaned):
+            inline_item = self._parse_receipt_inline_row(line)
+            if inline_item:
+                items.append(self._normalize_line_item(inline_item))
+                pending_name_parts = []
+                continue
+            quantity_match = quantity_pattern.match(line)
+            quantity_unit_only_match = quantity_unit_only_pattern.match(line)
+            if not quantity_match and quantity_unit_only_match:
+                next_price = cleaned[index + 1] if index + 1 < len(cleaned) else ""
+                next_total = cleaned[index + 2] if index + 2 < len(cleaned) else ""
+                if re.fullmatch(r"\d[\d,]*", next_price) and re.fullmatch(r"\d[\d,]*", next_total):
+                    quantity_match = re.match(
+                        r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)$",
+                        line,
+                        flags=re.IGNORECASE,
+                    )
+                    unit_price_from_next = next_price
+                    line_total_from_next = next_total
+                else:
+                    unit_price_from_next = None
+                    line_total_from_next = None
+            else:
+                unit_price_from_next = None
+                line_total_from_next = None
+            if not quantity_match:
+                if re.search(r"[A-Za-z가-힣]", line) and not re.fullmatch(r"\d[\d,]*", line):
+                    pending_name_parts.append(line)
+                    pending_name_parts = pending_name_parts[-3:]
+                continue
+            name_parts = list(pending_name_parts)
+            if (
+                len(name_parts) >= 3
+                and re.fullmatch(r"[가-힣A-Za-z&().\s]{2,30}", name_parts[0] or "")
+                and not re.search(r"\d", name_parts[0])
+                and re.search(r"[A-Za-z0-9]", name_parts[1])
+            ):
+                name_parts = name_parts[1:]
+            item_name = self._clean_value(" ".join(name_parts))
+            if not item_name:
+                continue
+            item: dict = {
+                "item_name": item_name,
+                "quantity": quantity_match.group("quantity"),
+                "unit": self._normalize_receipt_unit(quantity_match.group("unit")),
+                "unit_price": unit_price_from_next or quantity_match.groupdict().get("unit_price"),
+                "validation_warnings": ["receipt_row_review_required", "receipt_fragmented_row_reconstructed"],
+            }
+            line_total = line_total_from_next or quantity_match.groupdict().get("line_total")
+            if not line_total and index + 1 < len(cleaned) and re.fullmatch(r"\d[\d,]*", cleaned[index + 1]):
+                line_total = cleaned[index + 1]
+            if line_total:
+                item["line_total"] = line_total
+            items.append(self._normalize_line_item(item))
+            pending_name_parts = []
+        return self._dedupe_line_items(items)
+
+    def _normalize_receipt_unit(self, value: str) -> str:
+        unit = str(value or "").upper().replace("0", "O")
+        if unit == "EAX":
+            return "EA"
+        if unit == "BOX":
+            return "BOX"
+        return unit
 
     def _nearest_item_name_before(self, lines: list[str], index: int) -> str | None:
         for candidate in reversed(lines[max(0, index - 3):index]):
@@ -2978,6 +3083,10 @@ class DocumentParser:
         pending_amounts: list[Decimal] = []
         table_body = False
         for index, line in enumerate(lines):
+            inline_option = self._parse_inline_quotation_option_row(line)
+            if inline_option:
+                items.append(inline_option)
+                continue
             if self._field_for_quotation_option_header(line):
                 table_body = True
                 continue
@@ -3009,6 +3118,32 @@ class DocumentParser:
             items.append(item)
             pending_amounts = []
         return items
+
+    def _parse_inline_quotation_option_row(self, line: str) -> dict | None:
+        text = re.sub(r"\s+", " ", str(line or "").strip(" -|"))
+        if not re.search(r"(옵션|option|선택)", text, flags=re.IGNORECASE):
+            return None
+        if re.search(r"(부가세|VAT|합계|총액)", text, flags=re.IGNORECASE):
+            return None
+        code_match = re.search(r"\b(?P<code>[A-Z][A-Z0-9]{1,20}(?:[-_][A-Z0-9]{1,20})+)\b", text)
+        if not code_match:
+            return None
+        before_code = self._clean_value(text[: code_match.start()])
+        after_code = self._clean_value(text[code_match.end() :])
+        if not before_code:
+            return None
+        name = re.sub(r"^(?:옵션|option|선택)\s+", "", before_code, flags=re.IGNORECASE).strip()
+        if not name:
+            name = before_code
+        item: dict = {
+            "item_name": name,
+            "item_code": self._clean_code_value(code_match.group("code")),
+            "unit": "EA",
+            "validation_warnings": ["quotation_option_review_required", "option_amount_not_confirmed"],
+        }
+        if after_code:
+            item["remarks"] = after_code
+        return item
 
     def _field_for_quotation_option_header(self, line: str) -> bool:
         key = re.sub(r"[^0-9a-z가-힣]+", "", str(line or "").lower())
