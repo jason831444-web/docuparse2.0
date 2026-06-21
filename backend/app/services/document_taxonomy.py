@@ -93,6 +93,44 @@ class DocumentTaxonomyService:
                 ]),
             )
 
+        if self._is_pos_daily_settlement(content):
+            return DocumentTaxonomy(
+                document_type=doc_type,
+                document_subtype="pos_daily_settlement",
+                document_profile="pos_daily_settlement",
+                document_profiles=["pos_daily_settlement", "unsupported_line_item_document"],
+                layout_profile=layout_profile,
+                amount_required=False,
+                party_required=False,
+                confidence=0.86,
+                evidence=self._evidence(content, [
+                    r"\bPOS[-_ ]?\d{4}",
+                    r"POS\s*메인",
+                    r"일\s*정산",
+                    r"매출\s*정산",
+                    r"순\s*판매\s*금액|실\s*판매\s*금액|총\s*판매\s*금액",
+                    r"카드\s*합계|현금\s*합계|온라인\s*결제",
+                ]),
+            )
+
+        if self._is_purchase_memo(content):
+            return DocumentTaxonomy(
+                document_type=doc_type,
+                document_subtype="purchase_memo",
+                document_profile="purchase_memo",
+                document_profiles=["purchase_memo", "review_required_document"],
+                layout_profile=layout_profile,
+                amount_required=True,
+                party_required=False,
+                confidence=0.82,
+                evidence=self._evidence(content, [
+                    r"\bPM[-_ ]?\d{4}",
+                    r"구매\s*메모|발주\s*메모|purchase\s+memo",
+                    r"단가\s*확인\s*필요",
+                    r"자재\s*입고\s*요청",
+                ]),
+            )
+
         if self._is_tax_invoice(content, doc_type):
             return DocumentTaxonomy(
                 document_type=doc_type,
@@ -204,6 +242,21 @@ class DocumentTaxonomyService:
         )
         has_inventory_rows = bool(re.search(r"내부품목코드|요청수량|요청수림", text, flags=re.IGNORECASE))
         return has_from_to_warehouse and has_inventory_rows
+
+    def _is_pos_daily_settlement(self, text: str) -> bool:
+        return bool(re.search(
+            r"\bPOS[-_ ]?\d{4}|POS\s*메인|POS\s*일\s*정산|일\s*정산|매출\s*정산|"
+            r"순\s*판매\s*금액|실\s*판매\s*금액|총\s*판매\s*금액|카드\s*합계|현금\s*합계|온라인\s*결제",
+            text,
+            flags=re.IGNORECASE,
+        ))
+
+    def _is_purchase_memo(self, text: str) -> bool:
+        return bool(re.search(
+            r"\bPM[-_ ]?\d{4}|구매\s*메모|발주\s*메모|purchase\s+memo|단가\s*확인\s*필요|자재\s*입고\s*요청",
+            text,
+            flags=re.IGNORECASE,
+        ))
 
     def _layout_profile(self, extraction_method: str | None, file_metadata: dict | None) -> str | None:
         method = (extraction_method or "").lower()

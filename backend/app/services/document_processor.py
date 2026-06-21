@@ -567,6 +567,32 @@ class DocumentProcessor:
                 workflow_metadata,
             )
             if ai_parsed_document:
+                ai_mapping_issues = self._apply_ai_parsed_document_candidates(
+                    document,
+                    ai_parsed_document,
+                    workflow_metadata,
+                    ai_result.cleaned_raw_text or raw_text,
+                    normalized.extraction_method,
+                )
+                if ai_mapping_issues:
+                    issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                    existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
+                    for issue in ai_mapping_issues:
+                        if issue.get("code") not in existing_codes:
+                            issues.append(issue)
+                            existing_codes.add(issue.get("code"))
+                    workflow_metadata["normalized_review_issues"] = issues
+                    workflow_metadata["review_required"] = True
+                second_pass_safety_issues = self._apply_final_business_safety_overrides(document, ai_result.cleaned_raw_text or raw_text)
+                if second_pass_safety_issues:
+                    issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                    existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
+                    for issue in second_pass_safety_issues:
+                        if issue.get("code") not in existing_codes:
+                            issues.append(issue)
+                            existing_codes.add(issue.get("code"))
+                    workflow_metadata["normalized_review_issues"] = issues
+                    workflow_metadata["review_required"] = True
                 workflow_metadata["ai_parsed_document"] = ai_parsed_document
             field_provenance = self._field_provenance_metadata(document, normalized, workflow_metadata)
             if field_provenance:
@@ -1555,6 +1581,367 @@ class DocumentProcessor:
             "line_item_count": len(document.line_items or []),
         }
 
+    def _apply_ai_parsed_document_candidates(
+        self,
+        document: Document,
+        ai_parsed_document: dict[str, Any],
+        workflow_metadata: dict[str, Any],
+        raw_text: str,
+        extraction_method: str | None,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(ai_parsed_document, dict):
+            return []
+        applied: dict[str, Any] = {
+            "source": "ai_parsed_document",
+            "applied_fields": [],
+            "review_only_fields": [],
+            "blocked_fields": [],
+            "table_line_items_added": 0,
+            "table_line_items_skipped_reasons": [],
+        }
+        issues: list[dict[str, Any]] = []
+
+        fields = self._ai_parsed_key_value_fields(ai_parsed_document)
+        self._apply_ai_parsed_scalar_candidates(document, fields, applied)
+
+        semantic_issues = self._apply_ai_parsed_semantic_policy(document, ai_parsed_document, raw_text)
+        issues.extend(semantic_issues)
+
+        added_items = self._ai_parsed_table_line_item_candidates(document, ai_parsed_document, raw_text)
+        if added_items:
+            existing = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
+            merged = list(existing)
+            for item in added_items:
+                if self._duplicates_confirmed_line_item(item, merged):
+                    applied["table_line_items_skipped_reasons"].append("duplicate_existing_line_item")
+                    continue
+                merged.append(item)
+            if len(merged) > len(existing):
+                document.line_items = sanitize_for_postgres(
+                    self._line_items_for_extraction_method(
+                        merged,
+                        extraction_method,
+                        preserve_signed_amount_rows=self._return_credit_signal_for_document(document, raw_text),
+                    )
+                )
+                applied["table_line_items_added"] = len(merged) - len(existing)
+                document.review_required = True
+                issues.append(self._business_safety_issue(
+                    "ai_parsed_document_table_candidate_promoted_for_review",
+                    "AI가 읽은 표 구조에서 품목 후보를 보강했습니다. 확정 전 원본과 대조가 필요합니다.",
+                    "line_items",
+                ))
+        elif any(section.get("type") == "table" for section in ai_parsed_document.get("sections") or [] if isinstance(section, dict)):
+            applied["table_line_items_skipped_reasons"].append("no_safe_promotable_table_rows")
+
+        if applied["applied_fields"] or applied["review_only_fields"] or applied["blocked_fields"] or applied["table_line_items_added"] or applied["table_line_items_skipped_reasons"]:
+            workflow_metadata["ai_parsed_document_mapping"] = applied
+        return issues
+
+    def _ai_parsed_key_value_fields(self, ai_parsed_document: dict[str, Any]) -> list[dict[str, Any]]:
+        fields: list[dict[str, Any]] = []
+        for section in ai_parsed_document.get("sections") or []:
+            if not isinstance(section, dict) or section.get("type") != "key_value":
+                continue
+            for field in section.get("fields") or []:
+                if isinstance(field, dict):
+                    fields.append(field)
+        for field in ai_parsed_document.get("unmapped_fields") or []:
+            if isinstance(field, dict):
+                fields.append(field)
+        return fields
+
+    def _apply_ai_parsed_scalar_candidates(
+        self,
+        document: Document,
+        fields: list[dict[str, Any]],
+        applied: dict[str, Any],
+    ) -> None:
+        for field in fields:
+            key = str(field.get("normalized_key") or "").strip()
+            value = field.get("value")
+            if not self._safe_ai_scalar_value(value):
+                applied["review_only_fields"].append({"field": key or field.get("key"), "reason": "unsafe_or_long_value"})
+                continue
+            if key == "document_number" and not document.document_number:
+                number = self.parser._normalize_document_number(value)
+                if number and self._safe_ai_document_number(number):
+                    document.document_number = sanitize_for_postgres(number)
+                    self._record_ai_mapping_source(document, "document_number")
+                    applied["applied_fields"].append("document_number")
+                else:
+                    applied["review_only_fields"].append({"field": "document_number", "value": value, "reason": "weak_document_number_pattern"})
+                continue
+            if key in {"document_date", "date", "issue_date", "invoice_date", "order_date", "request_date", "inspection_date"}:
+                parsed_date = self._parse_ai_candidate_date(value)
+                if parsed_date and not (document.issue_date or document.extracted_date):
+                    document.issue_date = parsed_date
+                    document.extracted_date = parsed_date
+                    self._record_ai_mapping_source(document, "issue_date")
+                    applied["applied_fields"].append("issue_date")
+                elif parsed_date is None:
+                    applied["review_only_fields"].append({"field": key, "value": value, "reason": "unparsed_date"})
+                continue
+            if key in {"due_date", "delivery_date"}:
+                parsed_date = self._parse_ai_candidate_date(value)
+                if parsed_date and not document.due_date:
+                    document.due_date = parsed_date
+                    self._record_ai_mapping_source(document, "due_date")
+                    applied["applied_fields"].append("due_date")
+                continue
+            if key in {"supplier_name", "supplier", "vendor", "vendor_name"} and not document.vendor_name:
+                party = self._normalize_party_name(value)
+                if party:
+                    document.vendor_name = sanitize_for_postgres(party)
+                    self._record_ai_mapping_source(document, "vendor_name")
+                    applied["applied_fields"].append("vendor_name")
+                continue
+            if key in {"customer_name", "customer", "party", "party_name", "store", "merchant", "merchant_name", "bill_to", "ship_to"}:
+                party = self._normalize_party_name(value)
+                if not party:
+                    continue
+                if not document.customer_name:
+                    document.customer_name = sanitize_for_postgres(party)
+                    self._record_ai_mapping_source(document, "customer_name")
+                    applied["applied_fields"].append("customer_name")
+                elif not document.merchant_name:
+                    document.merchant_name = sanitize_for_postgres(party)
+                    self._record_ai_mapping_source(document, "merchant_name")
+                    applied["applied_fields"].append("merchant_name")
+
+    def _record_ai_mapping_source(self, document: Document, field: str) -> None:
+        field_sources = dict(document.field_sources or {})
+        field_sources[field] = "ai_parsed_document.key_value"
+        document.field_sources = sanitize_for_postgres(field_sources)
+
+    def _safe_ai_scalar_value(self, value: Any) -> bool:
+        text = str(value or "").strip()
+        if not text or len(text) > 80:
+            return False
+        if len(text.split()) > 8:
+            return False
+        if re.search(r"(품목|규격|수량|단가|공급가액|세액|합계)\s+", text, flags=re.IGNORECASE):
+            return False
+        return True
+
+    def _safe_ai_document_number(self, value: str) -> bool:
+        return bool(re.search(r"\b(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX)(?:-|[A-Z0-9])", value, flags=re.IGNORECASE))
+
+    def _parse_ai_candidate_date(self, value: Any) -> date | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        match = re.search(r"(20\d{2})[.년/-]?\s*(\d{1,2})[.월/-]?\s*(\d{1,2})", text)
+        if not match:
+            return None
+        try:
+            return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except Exception:
+            return None
+
+    def _apply_ai_parsed_semantic_policy(
+        self,
+        document: Document,
+        ai_parsed_document: dict[str, Any],
+        raw_text: str,
+    ) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        combined = self._ai_parsed_semantic_text(document, ai_parsed_document, raw_text)
+        if self._return_credit_signal_for_document(document, combined):
+            previous_type = self._document_type_value(document.document_type)
+            if document.document_type == DocumentType.purchase_order:
+                document.document_type = DocumentType.general_document
+                document.ai_document_type = DocumentType.general_document
+                issues.append(self._business_safety_issue(
+                    "return_credit_not_purchase_order",
+                    "반품/크레딧 신호가 있어 발주서 확정 분류를 해제하고 반품 정책으로 검토합니다.",
+                    "document_type",
+                ))
+            document.category = self._return_or_credit_category(document, combined)
+            document.tags = sorted(set([*(document.tags or []), document.category, "return_document"]))
+            if document.line_items:
+                document.line_items = sanitize_for_postgres(
+                    self._restore_return_credit_visible_amounts(document.line_items, document.line_items)
+                )
+            if previous_type == "purchase_order":
+                document.review_required = True
+            return issues
+        if self._internal_transfer_signal_for_document(document, combined):
+            document.document_type = DocumentType.general_document
+            document.ai_document_type = DocumentType.general_document
+            document.category = "internal_transfer"
+            document.tags = sorted(set([*(document.tags or []), "internal_transfer", "no_price_document"]))
+            for field in ("extracted_amount", "subtotal", "tax", "currency"):
+                setattr(document, field, None)
+        elif self._pos_daily_settlement_signal(combined):
+            document.document_type = DocumentType.general_document
+            document.ai_document_type = DocumentType.general_document
+            document.category = "pos_daily_settlement"
+            document.tags = sorted(set([*(document.tags or []), "pos_daily_settlement"]))
+            document.review_required = True
+        elif self._purchase_memo_signal(combined):
+            if document.document_type == DocumentType.purchase_order:
+                document.document_type = DocumentType.memo
+                document.ai_document_type = DocumentType.memo
+                document.review_required = True
+            document.category = "purchase_memo"
+            document.tags = sorted(set([*(document.tags or []), "purchase_memo"]))
+        return issues
+
+    def _ai_parsed_semantic_text(self, document: Document, ai_parsed_document: dict[str, Any], raw_text: str) -> str:
+        parts = [
+            str(raw_text or ""),
+            str(document.title or ""),
+            str(document.document_number or ""),
+            str(document.category or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+            str(ai_parsed_document.get("title") or ""),
+            str(ai_parsed_document.get("document_type_hint") or ""),
+        ]
+        for section in ai_parsed_document.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            parts.append(str(section.get("title") or ""))
+            if section.get("type") == "key_value":
+                for field in section.get("fields") or []:
+                    if isinstance(field, dict):
+                        parts.append(f"{field.get('key') or ''} {field.get('value') or ''}")
+            elif section.get("type") == "notes":
+                parts.extend(str(item or "") for item in section.get("items") or [])
+            elif section.get("type") == "table":
+                parts.append(" ".join(str(column or "") for column in section.get("columns") or []))
+                for row in section.get("rows") or []:
+                    if isinstance(row, dict):
+                        cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
+                        parts.append(" ".join(str(value or "") for value in cells.values()))
+        return "\n".join(parts)
+
+    def _return_credit_signal_for_document(self, document: Document, text: str) -> bool:
+        values = [
+            str(text or ""),
+            str(document.document_number or ""),
+            str(document.category or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+        ]
+        combined = "\n".join(values)
+        return_words = re.search(
+            r"(반품|크레딧|차감|환입|credit\s+(?:note|memo)|return\s+(?:note|credit)|원문서|사유\s*규격)",
+            combined,
+            flags=re.IGNORECASE,
+        )
+        if re.search(r"(영수증|승인번호|카드사|receipt)", combined, flags=re.IGNORECASE) and not return_words:
+            return False
+        return bool(re.search(
+            r"\b(?:RTN|RCM)[-_ ]?\d{4}|반품\s*/?\s*(?:차감|크레딧)?|반품전표|크레딧|차감|환입|"
+            r"credit\s+(?:note|memo)|return\s+(?:note|credit)|negative|원문서|사유\s*규격|"
+            r"(?:^|\s)-\d{1,3}(?:,\d{3})+|\(\s*\d{1,3}(?:,\d{3})+\s*\)",
+            combined,
+            flags=re.IGNORECASE | re.MULTILINE,
+        ) or (return_words and re.search(r"\bRC[-_ ]?\d{4}", combined, flags=re.IGNORECASE)))
+
+    def _internal_transfer_signal_for_document(self, document: Document, text: str) -> bool:
+        combined = "\n".join([
+            str(text or ""),
+            str(document.document_number or ""),
+            str(document.category or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+        ])
+        return bool(re.search(r"\b(?:TRF|MV)[-_ ]?\d{4}|자재\s*이동|내부\s*이동|출고창고|입고창고|이동사유|금액\s*/?\s*세액\s*없음", combined, flags=re.IGNORECASE))
+
+    def _pos_daily_settlement_signal(self, text: str) -> bool:
+        settlement_metric = re.search(
+            r"(일\s*정산|매출\s*정산|순\s*판매\s*금액|실\s*판매\s*금액|총\s*판매\s*금액|카드\s*합계|현금\s*합계|온라인\s*결제|주문\s*횟수)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not settlement_metric:
+            return False
+        return bool(re.search(r"\bPOS[-_ ]?\d{4}|POS\s*메인|POS\s*일\s*정산|일\s*정산|매출\s*정산", text, flags=re.IGNORECASE))
+
+    def _purchase_memo_signal(self, text: str) -> bool:
+        return bool(re.search(r"(구매\s*메모|발주\s*메모|purchase\s+memo|단가\s*확인\s*필요|자재\s*입고\s*요청|\bPM[-_ ]?\d{4})", text, flags=re.IGNORECASE))
+
+    def _ai_parsed_table_line_item_candidates(
+        self,
+        document: Document,
+        ai_parsed_document: dict[str, Any],
+        raw_text: str,
+    ) -> list[dict[str, Any]]:
+        semantic_text = self._ai_parsed_semantic_text(document, ai_parsed_document, raw_text)
+        if self._pos_daily_settlement_signal(semantic_text):
+            return []
+        if getattr(document.document_type, "value", str(document.document_type or "")) == "receipt" and not self._purchase_memo_signal(semantic_text):
+            return []
+        amount_allowed = bool((ai_parsed_document.get("policy") or {}).get("amount_allowed", True))
+        no_price = not amount_allowed or self._internal_transfer_signal_for_document(document, semantic_text) or self._has_inspection_no_price_document_signal(document, semantic_text, document.line_items or [])
+        candidates: list[dict[str, Any]] = []
+        for section in ai_parsed_document.get("sections") or []:
+            if not isinstance(section, dict) or section.get("type") != "table":
+                continue
+            if str(section.get("table_type_guess") or "").lower() in {"settlement_summary", "pos_daily_settlement"}:
+                continue
+            for row in section.get("rows") or []:
+                item = self._line_item_from_ai_table_row(row, no_price=no_price)
+                if item:
+                    candidates.append(item)
+        return candidates
+
+    def _line_item_from_ai_table_row(self, row: dict[str, Any], *, no_price: bool) -> dict[str, Any] | None:
+        if not isinstance(row, dict):
+            return None
+        canonical = dict(row.get("canonical_cells") or {})
+        cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
+        if not canonical and cells.get("raw_line"):
+            return None
+        item: dict[str, Any] = {}
+        for key in (
+            "item_name",
+            "specification",
+            "item_code",
+            "document_item_code",
+            "internal_item_code",
+            "lot_code",
+            "quantity",
+            "requested_quantity",
+            "delivered_quantity",
+            "received_quantity",
+            "accepted_quantity",
+            "defective_quantity",
+            "unit",
+            "unit_price",
+            "supply_amount",
+            "tax_amount",
+            "line_total",
+            "note",
+            "inspection_item",
+            "inspection_result",
+            "result",
+            "judgment",
+            "defect_reason",
+        ):
+            if canonical.get(key) not in (None, "", []):
+                item[key] = canonical.get(key)
+        if item.get("item_name") in (None, "", []) and item.get("document_item_code") in (None, "", []) and item.get("internal_item_code") in (None, "", []):
+            return None
+        if self._line_item_has_summary_footer_signal(item):
+            return None
+        if item.get("quantity") in (None, "", []):
+            for alternate in ("requested_quantity", "delivered_quantity", "received_quantity"):
+                if item.get(alternate) not in (None, "", []):
+                    item["quantity"] = item.get(alternate)
+                    break
+        if no_price:
+            for field in ("unit_price", "supply_amount", "tax_amount", "line_total"):
+                item.pop(field, None)
+        item.setdefault("source", "ai_parsed_document.table")
+        flags = set(str(flag) for flag in item.get("review_flags") or [])
+        flags.add("ai_parsed_document_table_review_required")
+        if no_price:
+            flags.add("no_price_document_amount_guardrail")
+        item["review_flags"] = sorted(flags)
+        item.setdefault("confidence", row.get("confidence") or 0.62)
+        return item
+
     def _document_type_value(self, value: Any) -> str | None:
         if value is None:
             return None
@@ -1864,6 +2251,22 @@ class DocumentProcessor:
         issues: list[dict[str, Any]] = []
         line_items = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
 
+        if self._return_credit_signal_for_document(document, raw_text):
+            previous_type = document.document_type
+            if previous_type == DocumentType.purchase_order:
+                document.document_type = DocumentType.general_document
+                document.ai_document_type = DocumentType.general_document
+                issues.append(self._business_safety_issue(
+                    "return_credit_not_purchase_order",
+                    "반품/크레딧 신호가 있어 발주서 확정 분류를 해제하고 반품 정책으로 검토합니다.",
+                    "document_type",
+                ))
+                document.review_required = True
+            document.category = self._return_or_credit_category(document, raw_text)
+            document.tags = sorted(set([*(document.tags or []), document.category, "return_document"]))
+            document.line_items = sanitize_for_postgres(line_items)
+            line_items = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
+
         if self._looks_like_pos_settlement_document(document, raw_text, line_items):
             if line_items:
                 document.line_items = []
@@ -1874,8 +2277,8 @@ class DocumentProcessor:
                 ))
             document.document_type = DocumentType.general_document
             document.ai_document_type = DocumentType.general_document
-            document.category = "unsupported_pos_settlement"
-            document.tags = sorted(set([*(document.tags or []), "unsupported_pos_settlement"]))
+            document.category = "pos_daily_settlement"
+            document.tags = sorted(set([*(document.tags or []), "pos_daily_settlement", "unsupported_pos_settlement"]))
             document.review_required = True
             document.low_confidence_fields = sorted(set([*(document.low_confidence_fields or []), "unsupported_pos_settlement"]))
             return issues

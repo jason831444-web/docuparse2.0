@@ -50,19 +50,26 @@ MANUFACTURING_PROFILE_SIGNATURES = {
     "purchase_memo": [
         r"발주\s*메모",
         r"구매\s*메모",
+        r"구매\s*요청\s*메모",
         r"purchase\s+memo",
         r"handwritten-like\s+purchase\s+memo",
         r"단가\s*확인\s*필요",
         r"자재\s*입고\s*요청",
+        r"\bPM[-_ ]?\d{4}",
     ],
     "pos_daily_settlement": [
         r"POS\s*일일\s*정산",
+        r"POS\s*메인",
         r"일\s*정산",
+        r"매출\s*정산",
         r"daily\s+sales\s+settlement",
         r"실판매금액",
         r"순판매금액",
+        r"총판매금액",
         r"카드합계",
+        r"현금합계",
         r"온라인결제",
+        r"\bPOS[-_ ]?\d{4}",
     ],
     "receipt": [
         r"영수증번호",
@@ -77,6 +84,8 @@ MANUFACTURING_PROFILE_SIGNATURES = {
         r"출고창고",
         r"입고창고",
         r"이동사유",
+        r"금액\s*/?\s*세액\s*없음",
+        r"\b(?:TRF|MV)[-_ ]?\d{4}",
     ],
 }
 
@@ -278,7 +287,7 @@ class DocumentParser:
         if re.search(r"(납품서|납품메모)", handwritten_type_text):
             return DocumentType.delivery_note
         if re.search(r"(발주메모|주문목록|구매메모)", handwritten_type_text):
-            return DocumentType.purchase_order
+            return DocumentType.memo
         if re.search(r"(자재리스트|자재목록|구매요청|현장.*공장)", handwritten_type_text):
             return DocumentType.general_document
         first_lines = "\n".join(line.strip().lower() for line in text.splitlines()[:6])

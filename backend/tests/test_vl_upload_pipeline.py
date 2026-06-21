@@ -485,7 +485,8 @@ def test_final_business_safety_blocks_pos_summary_rows_from_manufacturing_items(
 
     assert document.line_items == []
     assert document.document_type == DocumentType.general_document
-    assert document.category == "unsupported_pos_settlement"
+    assert document.category == "pos_daily_settlement"
+    assert "unsupported_pos_settlement" in document.tags
     assert document.review_required is True
     assert {issue["code"] for issue in issues} == {"unsupported_pos_daily_settlement_review_required"}
 
@@ -1187,6 +1188,166 @@ def test_process_keeps_vl_internal_transfer_as_no_price_general_document(tmp_pat
     assert result.line_items[0]["quantity"] == 2
     assert result.line_items[0]["requested_quantity"] == 2
     assert "supply_amount" not in result.line_items[0]
+
+
+def test_final_business_safety_prevents_return_credit_purchase_order_and_preserves_negative_values():
+    document = _document(
+        original_filename="DOC-009_return_credit_blurry_uncropped_photo.pdf",
+        document_type=DocumentType.purchase_order,
+        document_number="RCM-2026-0009",
+        line_items=[
+            {
+                "item_name": "AL6061 판재",
+                "quantity": -2,
+                "unit_price": 18000,
+                "supply_amount": -36000,
+                "tax_amount": -3600,
+                "line_total": -39600,
+            }
+        ],
+    )
+
+    issues = DocumentProcessor()._apply_final_business_safety_overrides(
+        document,
+        "반품/크레딧 메모 문서번호 RCM-2026-0009 원문서 TS-2026-0034 사유 규격 불일치",
+    )
+
+    assert document.document_type == DocumentType.general_document
+    assert document.category == "credit_note"
+    assert "return_document" in document.tags
+    assert document.line_items[0]["quantity"] == -2
+    assert document.line_items[0]["supply_amount"] == -36000
+    assert document.line_items[0]["tax_amount"] == -3600
+    assert document.line_items[0]["line_total"] == -39600
+    assert "return_credit_not_purchase_order" in {issue["code"] for issue in issues}
+
+
+def test_ai_parsed_document_key_values_fill_missing_canonical_fields_without_overwriting():
+    processor = DocumentProcessor()
+    document = _document(
+        document_type=DocumentType.general_document,
+        document_number=None,
+        vendor_name=None,
+        customer_name=None,
+        issue_date=None,
+        extracted_date=None,
+    )
+    workflow_metadata = {}
+    ai_doc = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {"key": "문서번호", "value": "MV-2026-0010", "normalized_key": "document_number"},
+                    {"key": "요청일", "value": "2026.06.18", "normalized_key": "document_date"},
+                    {"key": "공급자", "value": "대성정공", "normalized_key": "supplier_name"},
+                    {"key": "거래처", "value": "한빛정밀", "normalized_key": "customer_name"},
+                ],
+            }
+        ],
+        "policy": {"amount_allowed": False},
+    }
+
+    issues = processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "자재 이동 요청서 문서번호 MV-2026-0010 요청일 2026.06.18",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert issues == []
+    assert document.document_number == "MV-2026-0010"
+    assert document.issue_date == date(2026, 6, 18)
+    assert document.vendor_name == "대성정공"
+    assert document.customer_name == "한빛정밀"
+    assert document.field_sources["document_number"] == "ai_parsed_document.key_value"
+    assert workflow_metadata["ai_parsed_document_mapping"]["applied_fields"] == [
+        "document_number",
+        "issue_date",
+        "vendor_name",
+        "customer_name",
+    ]
+
+
+def test_ai_parsed_document_table_rows_promote_safe_no_price_line_item_candidates():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.delivery_note, line_items=[])
+    workflow_metadata = {}
+    ai_doc = {
+        "policy": {"amount_allowed": False},
+        "sections": [
+            {
+                "type": "table",
+                "title": "납품 목록",
+                "columns": ["No", "품목", "규격", "수량", "단위", "비고"],
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "cells": {"품목": "S45C PIN", "규격": "8X60", "수량": "500", "단위": "EA", "비고": "입고대기"},
+                        "canonical_cells": {
+                            "item_name": "S45C PIN",
+                            "specification": "8X60",
+                            "quantity": "500",
+                            "unit": "EA",
+                            "note": "입고대기",
+                            "line_total": "999999",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    issues = processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "납품서 단가 미기재 납품서 - 수량 검수용",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.line_items[0]["item_name"] == "S45C PIN"
+    assert document.line_items[0]["quantity"] == "500"
+    assert "line_total" not in document.line_items[0]
+    assert "ai_parsed_document_table_candidate_promoted_for_review" in {issue["code"] for issue in issues}
+    assert workflow_metadata["ai_parsed_document_mapping"]["table_line_items_added"] == 1
+
+
+def test_ai_parsed_document_pos_settlement_table_is_not_promoted_to_line_items():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.general_document, line_items=[])
+    workflow_metadata = {}
+    ai_doc = {
+        "policy": {"amount_allowed": False},
+        "sections": [
+            {
+                "type": "table",
+                "table_type_guess": "settlement_summary",
+                "columns": ["항목", "금액"],
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "cells": {"항목": "순판매금액", "금액": "955,900"},
+                        "canonical_cells": {"item_name": "순판매금액", "line_total": "955900"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "루팡 POS 메인포스 일정산 순판매금액 955,900 카드합계 891,600",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.line_items == []
+    assert workflow_metadata["ai_parsed_document_mapping"]["table_line_items_skipped_reasons"] == [
+        "no_safe_promotable_table_rows"
+    ]
 
 
 def test_vl_upload_pipeline_is_noop_when_worker_is_disabled():
