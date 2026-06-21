@@ -217,3 +217,74 @@ No 품목 규격 수량 단가 공급가액 세액 합계
     assert option["item_code"] == "FAST-DELIVERY"
     assert option["item_name"] == "긴급 납품 옵션"
     assert "supply_amount" not in option
+
+
+def test_inspection_rows_keep_pos_receipt_paper_as_item_not_receipt_category():
+    text = """
+문서번호:DOC-029
+공급자
+상호: (주)한빛산업
+공급받는자
+상호: (주)삼광유통
+작성일: 2026.06.12
+검사자: 이지훈 / 품질팀
+No 품명 Lot/Code 입고수량 검사항목 판정 비고
+1 HDPE 포장필름 FILM-HDPE 20 외관/치수 합격 입고 보류
+2 양파 15kg ONION-15K 300 외관/치수 합격 스크래치 확인
+3 POS 영수증 용지 POS-PAPER 50 외관/치수 재검 스크래치 확인
+※ 검사 기록서는 금액이 없는 품질 확인 문서입니다.
+"""
+    parsed = DocumentParser().parse(text, "incoming_inspection.jpg")
+
+    assert parsed.document_type == DocumentType.inspection_report
+    assert parsed.category == "inspection_report"
+    assert len(parsed.line_items) == 3
+    assert parsed.line_items[2]["item_name"] == "POS 영수증 용지"
+    assert parsed.line_items[2]["inspection_result"] == "재검"
+    assert all("line_total" not in item for item in parsed.line_items)
+
+
+def test_receipt_fragmented_rows_support_total_before_quantity_unit_price():
+    text = """
+한빛문구
+영수증번호
+DOC-100
+일자:
+20260624
+Bearing
+Housing
+38400
+3EAX
+12809
+양파
+15kg
+66000
+3B0X *
+22000
+냉동
+닭정육
+2kg
+55500
+3BOX X 18500
+S456
+PIN 8X60
+1756
+5EA X 350
+공급가액
+161650
+부가세
+16 165
+합계
+177815
+감사합니다
+"""
+    parsed = DocumentParser().parse(text, "receipt_fragmented.png")
+
+    assert parsed.document_type == DocumentType.receipt
+    assert parsed.document_number == "DOC-100"
+    assert len(parsed.line_items) == 4
+    assert parsed.line_items[0]["item_name"] == "Bearing Housing"
+    assert parsed.line_items[0]["line_total"] == 38400
+    assert parsed.line_items[1]["item_name"] == "양파 15kg"
+    assert parsed.line_items[1]["line_total"] == 66000
+    assert "line_total" not in parsed.line_items[-1]

@@ -218,6 +218,10 @@ class DocumentParser:
         if doc_type == DocumentType.inspection_report:
             line_items = self._suppress_incomplete_inspection_quantities(line_items)
         category = self._guess_category(joined)
+        if doc_type == DocumentType.inspection_report:
+            category = "inspection_report"
+        elif doc_type == DocumentType.receipt and category in {None, "pos_daily_settlement"}:
+            category = "receipt"
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
         due_date = self._extract_due_date(joined, doc_type)
@@ -2551,7 +2555,7 @@ class DocumentParser:
         text = str(value or "").strip()
         if re.search(r"\b(?:S\d{2,3}C|SCM\d+|SUS\d*|AL\d*|PIN|SHAFT|PLATE|BOLT|WASHER|BRG|PCB|M\d+)\b", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(하우징|핀|볼트|너트|와셔|브라켓|판재|환봉|샤프트|플레이트|커넥터|하네스|케이블|베어링|기어|부싱|소스|양파|닭정육|감자|포장|필름)", text):
+        if re.search(r"(하우징|핀|볼트|너트|와셔|브라켓|판재|환봉|샤프트|플레이트|커넥터|하네스|케이블|베어링|기어|부싱|소스|양파|닭정육|감자|포장|필름|영수증|용지)", text):
             return True
         return False
 
@@ -2915,6 +2919,9 @@ class DocumentParser:
         items: list[dict] = []
         for raw in lines:
             line = re.sub(r"\s+", " ", str(raw or "").strip(" -•·\t"))
+            line = line.replace("{", "").replace("}", "").strip()
+            line = re.sub(r"(?<=\d)(EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?)(?=X|\*)", r"\1 ", line, flags=re.IGNORECASE)
+            line = re.sub(r"(?<=\d)(EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?)[:：]?$", r"\1", line, flags=re.IGNORECASE)
             if not line or self._looks_like_numbered_table_footer(line):
                 continue
             if self._looks_like_business_label(line) or self._looks_like_instruction_or_note(line):
@@ -2985,7 +2992,7 @@ class DocumentParser:
             flags=re.IGNORECASE,
         )
         quantity_unit_only_pattern = re.compile(
-            r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)$",
+            r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)\s*[xX*]?$",
             flags=re.IGNORECASE,
         )
         for index, line in enumerate(cleaned):
@@ -2999,17 +3006,27 @@ class DocumentParser:
             if not quantity_match and quantity_unit_only_match:
                 next_price = cleaned[index + 1] if index + 1 < len(cleaned) else ""
                 next_total = cleaned[index + 2] if index + 2 < len(cleaned) else ""
+                previous_total = cleaned[index - 1] if index - 1 >= 0 else ""
                 if re.fullmatch(r"\d[\d,]*", next_price) and re.fullmatch(r"\d[\d,]*", next_total):
                     quantity_match = re.match(
-                        r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)$",
+                        r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)\s*[xX*]?$",
                         line,
                         flags=re.IGNORECASE,
                     )
                     unit_price_from_next = next_price
                     line_total_from_next = next_total
                 else:
-                    unit_price_from_next = None
-                    line_total_from_next = None
+                    if re.fullmatch(r"\d[\d,]*", previous_total) and re.fullmatch(r"\d[\d,]*", next_price):
+                        quantity_match = re.match(
+                            r"^(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|EAX|KG|KGS?|BOX|B0X|ROLL|PCS?|개|박스|롤|봉|팩)\s*[xX*]?$",
+                            line,
+                            flags=re.IGNORECASE,
+                        )
+                        unit_price_from_next = next_price
+                        line_total_from_next = previous_total
+                    else:
+                        unit_price_from_next = None
+                        line_total_from_next = None
             else:
                 unit_price_from_next = None
                 line_total_from_next = None
@@ -3039,6 +3056,8 @@ class DocumentParser:
             line_total = line_total_from_next or quantity_match.groupdict().get("line_total")
             if not line_total and index + 1 < len(cleaned) and re.fullmatch(r"\d[\d,]*", cleaned[index + 1]):
                 line_total = cleaned[index + 1]
+            if line_total and not self._receipt_line_total_matches(quantity_match.group("quantity"), item["unit_price"], line_total):
+                line_total = None
             if line_total:
                 item["line_total"] = line_total
             items.append(self._normalize_line_item(item))
@@ -3052,6 +3071,17 @@ class DocumentParser:
         if unit == "BOX":
             return "BOX"
         return unit
+
+    def _receipt_line_total_matches(self, quantity: object, unit_price: object, line_total: object) -> bool:
+        qty = self._to_decimal(quantity)
+        price = self._to_decimal(unit_price)
+        total = self._to_decimal(line_total)
+        if qty is None or price is None or total is None:
+            return True
+        expected = qty * price
+        if expected <= 0:
+            return True
+        return abs(total - expected) <= max(Decimal("2"), expected * Decimal("0.15"))
 
     def _nearest_item_name_before(self, lines: list[str], index: int) -> str | None:
         for candidate in reversed(lines[max(0, index - 3):index]):

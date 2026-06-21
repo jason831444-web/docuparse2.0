@@ -1161,12 +1161,28 @@ class DocumentProcessor:
         line_items = structured.get("line_items") if isinstance(structured.get("line_items"), list) else []
         if line_items:
             preserve_signed_amount_rows = self._structured_or_parsed_return_credit_signal(structured, parsed)
-            parsed.line_items = self._safe_vl_promoted_line_items(
+            promoted_line_items = self._safe_vl_promoted_line_items(
                 line_items,
                 preserve_signed_amount_rows=preserve_signed_amount_rows,
             )
             if preserve_signed_amount_rows:
-                parsed.line_items = self._restore_return_credit_visible_amounts(parsed.line_items, line_items)
+                promoted_line_items = self._restore_return_credit_visible_amounts(promoted_line_items, line_items)
+            existing_line_items = getattr(parsed, "line_items", None) or []
+            if (
+                self._vl_structured_candidate_is_amountless(structured)
+                and len(existing_line_items) > len(promoted_line_items)
+                and self._parsed_line_items_are_amountless(existing_line_items)
+            ):
+                return
+            parsed.line_items = promoted_line_items
+
+    def _parsed_line_items_are_amountless(self, line_items: list[dict]) -> bool:
+        for item in line_items or []:
+            if not isinstance(item, dict):
+                continue
+            if any(item.get(field) not in (None, "", []) for field in ("unit_price", "supply_amount", "tax_amount", "line_total")):
+                return False
+        return True
 
     def _reconcile_vl_parsed_with_pdf_text_layer(
         self,
