@@ -187,6 +187,48 @@ def test_vl_normalized_document_records_header_ocr_supplement_timing_when_used(t
     assert normalized.normalized_text.startswith("문서번호 INV-2026-0001")
 
 
+def test_vl_normalized_document_skips_header_ocr_with_ai_parsed_document_candidate(tmp_path):
+    processor = DocumentProcessor()
+    page_image = tmp_path / "page.png"
+    _write_test_image(page_image)
+    processor._document_quality_for_source = lambda stored_path: ({}, [page_image])
+    processor.ocr.extract = lambda image_path: (_ for _ in ()).throw(AssertionError("header OCR should be skipped"))
+    metadata = {"vl_provider_metadata": {"elapsed_ms": 1200}, "vl_candidates": []}
+    document = _document(original_filename="transaction-statement.pdf", mime_type="application/pdf")
+
+    normalized = processor._vl_primary_normalized_document(
+        tmp_path / "transaction-statement.pdf",
+        document,
+        "거래명세서\n문서번호 TS-2026-0008\n거래처 대성정공",
+        metadata,
+    )
+
+    assert normalized.file_metadata["header_ocr_supplement_used"] is False
+    assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "raw_text_document_number_found"
+    assert metadata["header_ocr_supplement"]["used"] is False
+
+
+def test_vl_normalized_document_skips_header_ocr_when_document_policy_optional(tmp_path):
+    processor = DocumentProcessor()
+    page_image = tmp_path / "page.png"
+    _write_test_image(page_image)
+    processor._document_quality_for_source = lambda stored_path: ({}, [page_image])
+    processor.ocr.extract = lambda image_path: (_ for _ in ()).throw(AssertionError("header OCR should be skipped"))
+    metadata = {"vl_provider_metadata": {"elapsed_ms": 1200}, "vl_candidates": []}
+    document = _document(original_filename="receipt.jpg", mime_type="image/jpeg")
+
+    normalized = processor._vl_primary_normalized_document(
+        tmp_path / "receipt.jpg",
+        document,
+        "영수증\n거래일시 2026.06.13 14:22\n시흥공구마트",
+        metadata,
+    )
+
+    assert normalized.file_metadata["header_ocr_supplement_used"] is False
+    assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "document_type_policy_document_number_optional"
+    assert metadata["header_ocr_supplement"]["policy_decision"]["policy"] == "ai_parsed_document"
+
+
 def test_vl_upload_pipeline_promotes_visible_official_table_amounts():
     text = """
     세금계산서
@@ -1136,6 +1178,11 @@ def test_process_keeps_vl_internal_transfer_as_no_price_general_document(tmp_pat
     assert result.workflow_metadata["document_subtype"] == "internal_transfer"
     assert result.workflow_metadata["document_profile"] == "inventory_movement_document"
     assert "no_price_document" in result.workflow_metadata["document_profiles"]
+    ai_parsed = result.workflow_metadata["ai_parsed_document"]
+    assert ai_parsed["document_type_hint"] in {"internal_transfer", "inventory_movement_document"}
+    assert any(section["type"] == "key_value" for section in ai_parsed["sections"])
+    assert any(section["type"] == "table" for section in ai_parsed["sections"])
+    assert ai_parsed["policy"]["amount_allowed"] is False
     assert len(result.line_items or []) == 2
     assert result.line_items[0]["quantity"] == 2
     assert result.line_items[0]["requested_quantity"] == 2

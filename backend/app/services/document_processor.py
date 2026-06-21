@@ -14,6 +14,7 @@ from app.models.document import Document, DocumentType, ProcessingStatus
 from app.services.ai_document_understanding import LocalDocumentAIService, get_document_ai_service
 from app.services.ai_escalation import should_escalate_to_ai
 from app.services.ai_merge import AIResultMerger
+from app.services.ai_parsed_document import AiParsedDocumentBuilder
 from app.services.category_interpretation import CategoryInterpretation, CategoryInterpretationService
 from app.services.category_taxonomy import clean_tags_for_context, normalize_category
 from app.services.document_router import LightweightDocumentRouter
@@ -65,6 +66,7 @@ class DocumentProcessor:
         self.workflow_enrichment = DocumentWorkflowEnrichmentService()
         self.item_master_matcher = ItemMasterMatcher()
         self.ai_merger = AIResultMerger()
+        self.ai_parsed_document_builder = AiParsedDocumentBuilder()
         self.bbox_table_reconstructor = BBoxTableReconstructor()
         self.vl_worker = VLCandidateWorkerClient()
         self.vl_candidate_parser = VLCandidateParser(parser=self.parser)
@@ -559,6 +561,13 @@ class DocumentProcessor:
                             existing_codes.add(issue.get("code"))
                     workflow_metadata["normalized_review_issues"] = issues
                     workflow_metadata["review_required"] = True
+            ai_parsed_document = self._build_ai_parsed_document_metadata(
+                ai_result.cleaned_raw_text or raw_text,
+                document,
+                workflow_metadata,
+            )
+            if ai_parsed_document:
+                workflow_metadata["ai_parsed_document"] = ai_parsed_document
             field_provenance = self._field_provenance_metadata(document, normalized, workflow_metadata)
             if field_provenance:
                 workflow_metadata["field_provenance"] = field_provenance
@@ -884,18 +893,31 @@ class DocumentProcessor:
         elif structured_document_number:
             header_supplement_metadata["skipped_reason"] = "structured_candidate_document_number_found"
             header_supplement_metadata["document_number_source"] = "vl_structured_candidate"
-        elif document_profile in {"purchase_memo", "pos_daily_settlement", "receipt"}:
-            header_supplement_metadata["skipped_reason"] = f"{document_profile}_document_number_optional"
-            header_supplement_metadata["document_profile"] = document_profile
-        elif not quality_page_images:
-            header_supplement_metadata["skipped_reason"] = "no_page_image_available"
         else:
-            header_supplement_metadata["reason"] = "document_number_missing_in_vl_text_and_structured_candidate"
-            header_supplement, ocr_detail = self._vl_visual_header_ocr_supplement(text, quality_page_images)
-            header_supplement_metadata.update(ocr_detail)
-            header_supplement_metadata["used"] = bool(header_supplement)
-            if not header_supplement:
-                header_supplement_metadata["skipped_reason"] = "ocr_supplement_no_document_number_found"
+            ai_header_decision = self.ai_parsed_document_builder.should_skip_header_ocr(
+                raw_text=text,
+                document_type_hint=document_profile,
+            )
+            header_supplement_metadata["policy_decision"] = ai_header_decision
+            if ai_header_decision.get("skip"):
+                header_supplement_metadata["skipped_reason"] = str(ai_header_decision.get("reason") or "ai_parsed_document_policy_skip")
+                header_supplement_metadata["document_number_source"] = "ai_parsed_document_candidate" if ai_header_decision.get("candidate_count") else None
+            elif document_profile in {"purchase_memo", "pos_daily_settlement", "receipt"}:
+                header_supplement_metadata["skipped_reason"] = f"{document_profile}_document_number_optional"
+                header_supplement_metadata["document_profile"] = document_profile
+            elif not quality_page_images:
+                header_supplement_metadata["skipped_reason"] = "no_page_image_available"
+            else:
+                header_supplement_metadata["reason"] = "document_number_missing_in_vl_text_and_structured_candidate"
+                header_supplement_metadata["ocr_scope"] = "visible_header_only"
+                header_supplement_metadata["fallback_full_page_used"] = False
+                header_supplement, ocr_detail = self._vl_visual_header_ocr_supplement(text, quality_page_images)
+                header_supplement_metadata.update(ocr_detail)
+                header_supplement_metadata["used"] = bool(header_supplement)
+                if not header_supplement:
+                    header_supplement_metadata["skipped_reason"] = "ocr_supplement_no_document_number_found"
+        header_supplement_metadata.setdefault("ocr_scope", "none")
+        header_supplement_metadata.setdefault("fallback_full_page_used", False)
         header_supplement_metadata["elapsed_ms"] = int(round((time.perf_counter() - header_supplement_started) * 1000))
         metadata["header_ocr_supplement"] = header_supplement_metadata
         normalized_text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
@@ -935,6 +957,9 @@ class DocumentProcessor:
                 "header_ocr_supplement_ms": header_supplement_metadata["elapsed_ms"],
                 "header_ocr_supplement_reason": header_supplement_metadata.get("reason"),
                 "header_ocr_supplement_skipped_reason": header_supplement_metadata.get("skipped_reason"),
+                "header_ocr_supplement_policy_decision": header_supplement_metadata.get("policy_decision"),
+                "header_ocr_supplement_ocr_scope": header_supplement_metadata.get("ocr_scope"),
+                "fallback_full_page_used": header_supplement_metadata.get("fallback_full_page_used"),
                 **({"document_quality": quality_metadata} if quality_metadata else {}),
             },
             ocr_confidence=None,
@@ -1465,6 +1490,75 @@ class DocumentProcessor:
             merged["normalized_review_issues"] = issues
             merged["review_required"] = True
         return merged
+
+    def _build_ai_parsed_document_metadata(
+        self,
+        raw_text: str,
+        document: Document,
+        workflow_metadata: dict,
+    ) -> dict[str, Any] | None:
+        text = str(raw_text or "")
+        if not text.strip() and not workflow_metadata.get("vl_candidates"):
+            return None
+        document_type_hint = self._document_type_value(document.document_type)
+        if document_type_hint == "general_document":
+            profile = (
+                workflow_metadata.get("document_profile")
+                or (workflow_metadata.get("taxonomy") or {}).get("document_profile")
+                or workflow_metadata.get("content_profile")
+            )
+            if isinstance(profile, str) and profile:
+                document_type_hint = profile
+        return self.ai_parsed_document_builder.build(
+            raw_text=text,
+            tables=self._ai_parsed_document_tables(workflow_metadata),
+            document_type_hint=document_type_hint,
+            title=document.title,
+            canonical_document=self._canonical_document_snapshot(document),
+        )
+
+    def _ai_parsed_document_tables(self, workflow_metadata: dict) -> list[dict[str, Any]]:
+        tables: list[dict[str, Any]] = []
+        for candidate in workflow_metadata.get("vl_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            for table in candidate.get("tables") or []:
+                if isinstance(table, dict):
+                    tables.append(table)
+            structured = candidate.get("structured_candidate")
+            if isinstance(structured, dict):
+                for table in structured.get("tables") or []:
+                    if isinstance(table, dict):
+                        tables.append(table)
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for table in tables:
+            signature = repr((table.get("source"), table.get("table_type"), table.get("columns"), table.get("rows")))
+            if signature in seen:
+                continue
+            seen.add(signature)
+            deduped.append(table)
+        return deduped
+
+    def _canonical_document_snapshot(self, document: Document) -> dict[str, Any]:
+        return {
+            "document_type": self._document_type_value(document.document_type),
+            "document_number": document.document_number,
+            "title": document.title,
+            "document_date": document.issue_date.isoformat() if document.issue_date else (document.extracted_date.isoformat() if document.extracted_date else None),
+            "due_date": document.due_date.isoformat() if document.due_date else None,
+            "supplier_name": document.vendor_name,
+            "customer_name": document.customer_name,
+            "total_amount": str(document.extracted_amount) if document.extracted_amount is not None else None,
+            "tax_amount": str(document.tax) if document.tax is not None else None,
+            "currency": document.currency,
+            "line_item_count": len(document.line_items or []),
+        }
+
+    def _document_type_value(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        return getattr(value, "value", str(value))
 
     def _vl_candidate_review_issue(self, gate: dict) -> dict:
         decision = gate.get("decision") or "review_required"
