@@ -2404,18 +2404,43 @@ class DocumentProcessor:
     def _normalize_party_fields(self, document: Document) -> None:
         document.vendor_name = self._normalize_party_name(document.vendor_name)
         document.customer_name = self._normalize_party_name(document.customer_name)
+        document.merchant_name = self._normalize_party_name(document.merchant_name)
 
     def _normalize_party_name(self, value: Any) -> str | None:
         text = str(value or "").strip()
         if not text:
             return None
+        if self._looks_like_non_party_identifier(text):
+            return None
         if re.search(r"^(담당|담당자|회계|검사자|작성자|검수자)\s*[:：]", text):
             return None
         text = re.sub(r"^(상호|업체|거래처|공급자|공급업체|공급받는자|고객사|수신|받는곳)\s*[:：]?\s*", "", text).strip()
+        if self._looks_like_non_party_identifier(text):
+            return None
         text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
         text = re.sub(r"\s*(?:\(?주\)?|주식회사)$", "", text).strip()
         text = re.sub(r"\s*/\s*(회계팀|구매팀|품질팀|생산관리|담당.*)$", "", text).strip()
+        if self._looks_like_non_party_identifier(text):
+            return None
         return text or None
+
+    def _looks_like_non_party_identifier(self, value: Any) -> bool:
+        text = self._clean_text_fragment(str(value or ""))
+        if not text:
+            return True
+        folded = text.casefold()
+        if "/" in text or "\\" in text:
+            if re.search(r"(/workspace/|/uploads?/|vl[_ -]?(?:remote[_ -]?uploads|rendered[_ -]?pages)|\\uploads?\\)", folded):
+                return True
+        if re.fullmatch(
+            r"(?:I?DOC|PO|INV|DN|RCM|TS|IQC|MV|QT|PM|POS|RC)[-_ ]?[Oo0]?\d{2,}(?:[-_ ]?\d+)?",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        if re.fullmatch(r"(?:영수증|문서|전표|승인)?\s*(?:번호|no\.?|number)?\s*[:：]?\s*(?:I?DOC|PO|INV|DN|RCM|TS|IQC|MV|QT|PM|POS|RC)[-_ ]?[Oo0]?\d{2,}", text, flags=re.IGNORECASE):
+            return True
+        return False
 
     def _business_safety_issue(self, code: str, message: str, field: str) -> dict[str, Any]:
         return {

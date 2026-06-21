@@ -267,6 +267,21 @@ def test_ai_parsed_warehouse_candidates_do_not_fill_vendor_or_customer():
     assert "ai_parsed_document_mapping" not in metadata
 
 
+def test_final_party_safety_removes_document_numbers_and_upload_paths():
+    document = _document(
+        document_type=DocumentType.receipt,
+        vendor_name="DOC-O41",
+        customer_name="/workspace/docuparse-gpu-test/uploads/vl_rendered_pages/abc-DOC-065.png",
+        merchant_name="IDOC-026",
+    )
+
+    _processor(FakeVLWorker())._normalize_party_fields(document)
+
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+
+
 def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields():
     text = """
     견적서
