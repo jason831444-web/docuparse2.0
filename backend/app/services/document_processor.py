@@ -868,7 +868,32 @@ class DocumentProcessor:
     ) -> NormalizedDocument:
         provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
         quality_metadata, quality_page_images = self._document_quality_for_source(stored_path)
-        header_supplement = self._vl_visual_header_ocr_supplement(text, quality_page_images)
+        header_supplement_started = time.perf_counter()
+        header_supplement_metadata: dict[str, Any] = {
+            "used": False,
+            "reason": None,
+            "skipped_reason": None,
+            "elapsed_ms": 0,
+        }
+        header_supplement: str | None = None
+        raw_text_document_number = self.parser._extract_document_number(text)
+        structured_document_number = self._vl_structured_document_number(metadata)
+        if raw_text_document_number:
+            header_supplement_metadata["skipped_reason"] = "raw_text_document_number_found"
+        elif structured_document_number:
+            header_supplement_metadata["skipped_reason"] = "structured_candidate_document_number_found"
+            header_supplement_metadata["document_number_source"] = "vl_structured_candidate"
+        elif not quality_page_images:
+            header_supplement_metadata["skipped_reason"] = "no_page_image_available"
+        else:
+            header_supplement_metadata["reason"] = "document_number_missing_in_vl_text_and_structured_candidate"
+            header_supplement, ocr_detail = self._vl_visual_header_ocr_supplement(text, quality_page_images)
+            header_supplement_metadata.update(ocr_detail)
+            header_supplement_metadata["used"] = bool(header_supplement)
+            if not header_supplement:
+                header_supplement_metadata["skipped_reason"] = "ocr_supplement_no_document_number_found"
+        header_supplement_metadata["elapsed_ms"] = int(round((time.perf_counter() - header_supplement_started) * 1000))
+        metadata["header_ocr_supplement"] = header_supplement_metadata
         normalized_text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
         if header_supplement:
             normalized_text = "\n".join([header_supplement, normalized_text])
@@ -902,6 +927,10 @@ class DocumentProcessor:
                 "vl_worker_provider": provider_metadata.get("provider"),
                 "ocr_fallback_used": False,
                 "visual_header_ocr_supplement_used": bool(header_supplement),
+                "header_ocr_supplement_used": bool(header_supplement),
+                "header_ocr_supplement_ms": header_supplement_metadata["elapsed_ms"],
+                "header_ocr_supplement_reason": header_supplement_metadata.get("reason"),
+                "header_ocr_supplement_skipped_reason": header_supplement_metadata.get("skipped_reason"),
                 **({"document_quality": quality_metadata} if quality_metadata else {}),
             },
             ocr_confidence=None,
@@ -910,6 +939,24 @@ class DocumentProcessor:
             heavy_ai_candidate=False,
             partial_support=False,
         )
+
+    def _vl_structured_document_number(self, metadata: dict) -> str | None:
+        for candidate in metadata.get("vl_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            structured = candidate.get("structured_candidate")
+            if not isinstance(structured, dict):
+                continue
+            candidate_doc = structured.get("document")
+            if not isinstance(candidate_doc, dict):
+                continue
+            value = candidate_doc.get("document_number")
+            if value in (None, "", []):
+                continue
+            extracted = self.parser._extract_document_number(str(value))
+            if extracted:
+                return extracted
+        return None
 
     def _document_quality_for_source(self, stored_path: Path) -> tuple[dict | None, list[Path]]:
         suffix = stored_path.suffix.casefold().lstrip(".")
@@ -936,26 +983,55 @@ class DocumentProcessor:
         except Exception:
             return None, []
 
-    def _vl_visual_header_ocr_supplement(self, vl_text: str, page_images: list[Path]) -> str | None:
+    def _vl_visual_header_ocr_supplement(self, vl_text: str, page_images: list[Path]) -> tuple[str | None, dict[str, Any]]:
+        detail: dict[str, Any] = {
+            "ocr_scope": None,
+            "fallback_full_page_used": False,
+        }
         if not page_images:
-            return None
+            return None, detail
         if self.parser._extract_document_number(vl_text):
-            return None
+            return None, detail
         image_path = page_images[0]
         if not image_path.exists():
-            return None
+            return None, detail
+        for scope, candidate_path in self._header_ocr_candidate_images(image_path):
+            detail["ocr_scope"] = scope
+            detail["fallback_full_page_used"] = scope == "full_page"
+            try:
+                result = self.ocr.extract(candidate_path)
+            except Exception as exc:
+                detail["last_error"] = str(exc)
+                continue
+            lines = [line.strip() for line in str(result.text or "").splitlines() if line.strip()]
+            header_lines = self._visible_header_lines_only(lines)
+            if not header_lines:
+                continue
+            header_text = "\n".join(header_lines)
+            if not self.parser._extract_document_number(header_text):
+                continue
+            return header_text, detail
+        return None, detail
+
+    def _header_ocr_candidate_images(self, image_path: Path) -> list[tuple[str, Path]]:
+        candidates: list[tuple[str, Path]] = []
         try:
-            result = self.ocr.extract(image_path)
+            from PIL import Image
+
+            output_dir = self.settings.upload_dir / "header_ocr_supplement"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"{image_path.stem}-header.jpg"
+            with Image.open(image_path) as image:
+                width, height = image.size
+                if width >= 200 and height >= 200:
+                    crop_height = max(160, min(height, int(height * 0.42)))
+                    header = image.convert("RGB").crop((0, 0, width, crop_height))
+                    header.save(output_path, "JPEG", quality=90, optimize=True)
+                    candidates.append(("header_crop", output_path))
         except Exception:
-            return None
-        lines = [line.strip() for line in str(result.text or "").splitlines() if line.strip()]
-        header_lines = self._visible_header_lines_only(lines)
-        if not header_lines:
-            return None
-        header_text = "\n".join(header_lines)
-        if not self.parser._extract_document_number(header_text):
-            return None
-        return header_text
+            candidates = []
+        candidates.append(("full_page", image_path))
+        return candidates
 
     def _visible_header_lines_only(self, lines: list[str]) -> list[str]:
         header: list[str] = []
@@ -1356,6 +1432,7 @@ class DocumentProcessor:
             "vl_preprocess_mode",
             "vl_preprocess_input",
             "vl_preprocess_policy",
+            "header_ocr_supplement",
         ):
             if key in vl_metadata:
                 merged[key] = vl_metadata[key]
