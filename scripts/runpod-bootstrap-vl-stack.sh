@@ -10,10 +10,11 @@ VENV_DIR="${VENV_DIR:-$RUNPOD_WORKDIR/worker-venv}"
 LOG_DIR="${LOG_DIR:-$RUNPOD_WORKDIR/logs}"
 ALLOW_MODEL_DOWNLOAD="${ALLOW_MODEL_DOWNLOAD:-0}"
 INSTALL_PYTHON_DEPS="${INSTALL_PYTHON_DEPS:-1}"
-LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-/opt/llama.cpp}"
+LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-$RUNPOD_WORKDIR/llama.cpp}"
 LLAMA_CPP_REPO="${LLAMA_CPP_REPO:-https://github.com/ggml-org/llama.cpp.git}"
 ALLOW_LLAMA_CPP_BUILD="${ALLOW_LLAMA_CPP_BUILD:-1}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-$LLAMA_CPP_DIR/build/bin/llama-server}"
+LLAMA_CPP_BUILD_JOBS="${LLAMA_CPP_BUILD_JOBS:-16}"
 
 PYTHON_BIN="$VENV_DIR/bin/python"
 PIP_BIN="$VENV_DIR/bin/pip"
@@ -85,8 +86,10 @@ else
   else
     git -C "$LLAMA_CPP_DIR" pull --ff-only
   fi
-  cmake -S "$LLAMA_CPP_DIR" -B "$LLAMA_CPP_DIR/build" -DGGML_CUDA=ON
-  cmake --build "$LLAMA_CPP_DIR/build" -j"$(nproc)" --target llama-server
+  cmake -S "$LLAMA_CPP_DIR" -B "$LLAMA_CPP_DIR/build" \
+    -DGGML_CUDA=ON \
+    -DCMAKE_CUDA_COMPILER="${CMAKE_CUDA_COMPILER:-/usr/local/cuda/bin/nvcc}"
+  cmake --build "$LLAMA_CPP_DIR/build" -j"$LLAMA_CPP_BUILD_JOBS" --target llama-server
 fi
 export LLAMA_SERVER_BIN
 

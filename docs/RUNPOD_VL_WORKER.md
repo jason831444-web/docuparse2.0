@@ -78,7 +78,7 @@ It expects these default paths:
 - uploads: `/workspace/docuparse-gpu-test/uploads`
 - model dir: `/workspace/docuparse_models/paddleocr_vl_1_6_gguf`
 - worker venv: `/workspace/docuparse-gpu-test/worker-venv`
-- llama-server: `/opt/llama.cpp/build/bin/llama-server`
+- llama-server: `/workspace/docuparse-gpu-test/llama.cpp/build/bin/llama-server`
 
 You can override paths with environment variables such as `MODEL_DIR`,
 `DOCUPARSE_REPO`, `VENV_DIR`, `LLAMA_SERVER_BIN`, `LLAMA_CPP_DIR`, `LOG_DIR`,
@@ -97,7 +97,7 @@ SMOKE_FILE=/workspace/docuparse-gpu-test/docuparse2.0/samples/pdf_samples/manufa
 Manual command reference for `llama-server`:
 
 ```bash
-/opt/llama.cpp/build/bin/llama-server \
+/workspace/docuparse-gpu-test/llama.cpp/build/bin/llama-server \
   -m /workspace/docuparse_models/paddleocr_vl_1_6_gguf/PaddleOCR-VL-1.6-GGUF.gguf \
   --mmproj /workspace/docuparse_models/paddleocr_vl_1_6_gguf/PaddleOCR-VL-1.6-GGUF-mmproj.gguf \
   --host 127.0.0.1 \
