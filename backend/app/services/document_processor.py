@@ -1602,7 +1602,7 @@ class DocumentProcessor:
         issues: list[dict[str, Any]] = []
 
         fields = self._ai_parsed_key_value_fields(ai_parsed_document)
-        self._apply_ai_parsed_scalar_candidates(document, fields, applied)
+        self._apply_ai_parsed_scalar_candidates(document, fields, applied, raw_text=raw_text)
 
         semantic_issues = self._apply_ai_parsed_semantic_policy(document, ai_parsed_document, raw_text)
         issues.extend(semantic_issues)
@@ -1656,6 +1656,8 @@ class DocumentProcessor:
         document: Document,
         fields: list[dict[str, Any]],
         applied: dict[str, Any],
+        *,
+        raw_text: str = "",
     ) -> None:
         for field in fields:
             key = str(field.get("normalized_key") or "").strip()
@@ -1700,6 +1702,14 @@ class DocumentProcessor:
                 party = self._normalize_party_name(value)
                 if not party:
                     continue
+                if (
+                    not document.vendor_name
+                    and self._ai_field_is_store_or_merchant(field)
+                    and self._ai_party_candidate_can_fill_vendor(document, fields, raw_text)
+                ):
+                    document.vendor_name = sanitize_for_postgres(party)
+                    self._record_ai_mapping_source(document, "vendor_name")
+                    applied["applied_fields"].append("vendor_name")
                 if not document.customer_name:
                     document.customer_name = sanitize_for_postgres(party)
                     self._record_ai_mapping_source(document, "customer_name")
@@ -1708,6 +1718,26 @@ class DocumentProcessor:
                     document.merchant_name = sanitize_for_postgres(party)
                     self._record_ai_mapping_source(document, "merchant_name")
                     applied["applied_fields"].append("merchant_name")
+
+    def _ai_party_candidate_can_fill_vendor(self, document: Document, fields: list[dict[str, Any]], raw_text: str = "") -> bool:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        if doc_type == "receipt":
+            return True
+        combined = " ".join(
+            str(value or "")
+            for value in [
+                raw_text,
+                doc_type,
+                getattr(document, "category", None),
+                *(getattr(document, "tags", None) or []),
+                *(field.get("evidence") for field in fields if isinstance(field, dict)),
+            ]
+        )
+        return bool(self._pos_daily_settlement_signal(combined))
+
+    def _ai_field_is_store_or_merchant(self, field: dict[str, Any]) -> bool:
+        key_text = " ".join(str(field.get(name) or "") for name in ("key", "normalized_key", "evidence"))
+        return bool(re.search(r"\b(?:store|merchant)\b|매장|가맹점|상점", key_text, flags=re.IGNORECASE))
 
     def _record_ai_mapping_source(self, document: Document, field: str) -> None:
         field_sources = dict(document.field_sources or {})

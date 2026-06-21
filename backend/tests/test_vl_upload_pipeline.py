@@ -123,6 +123,71 @@ def test_final_business_safety_removes_date_fragment_total_amount():
     assert any(issue["code"] == "date_fragment_not_total_amount" for issue in issues)
 
 
+def test_ai_parsed_store_candidate_fills_receipt_vendor_without_guessing_customer():
+    document = _document(document_type=DocumentType.receipt, vendor_name=None, customer_name=None)
+    metadata = {}
+    ai_parsed = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {
+                        "key": "매장",
+                        "value": "시흥공구마트",
+                        "normalized_key": "customer_name",
+                        "evidence": "매장 시흥공구마트",
+                        "status": "candidate",
+                    }
+                ],
+            }
+        ]
+    }
+
+    _processor(FakeVLWorker())._apply_ai_parsed_document_candidates(
+        document,
+        ai_parsed,
+        metadata,
+        "영수증\n매장 시흥공구마트",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.vendor_name == "시흥공구마트"
+    assert document.customer_name == "시흥공구마트"
+    assert metadata["ai_parsed_document_mapping"]["applied_fields"].count("vendor_name") == 1
+
+
+def test_ai_parsed_store_candidate_fills_pos_vendor_from_settlement_signal():
+    document = _document(document_type=DocumentType.general_document, vendor_name=None, customer_name=None)
+    metadata = {}
+    ai_parsed = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {
+                        "key": "매장",
+                        "value": "대야역 분식",
+                        "normalized_key": "customer_name",
+                        "evidence": "매장 대야역 분식",
+                        "status": "candidate",
+                    }
+                ],
+            }
+        ]
+    }
+
+    _processor(FakeVLWorker())._apply_ai_parsed_document_candidates(
+        document,
+        ai_parsed,
+        metadata,
+        "POS 일정산\n매장 대야역 분식\n순 판매 금액 1,060,000",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.vendor_name == "대야역 분식"
+    assert document.customer_name == "대야역 분식"
+
+
 def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields():
     text = """
     견적서
