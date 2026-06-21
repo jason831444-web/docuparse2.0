@@ -38,7 +38,7 @@ import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
-import type { DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem } from "@/types/document";
+import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow, DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem } from "@/types/document";
 
 const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
@@ -104,6 +104,59 @@ function readList(value: unknown): string[] {
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function confidenceLabel(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  return `${Math.round(numeric * 100)}%`;
+}
+
+function aiStatusLabel(status: unknown): string {
+  return {
+    candidate: "검토 후보",
+    unmapped: "미매핑",
+    blocked: "차단됨",
+  }[String(status || "")] ?? (status ? titleCaseLabel(String(status)) : "검토 후보");
+}
+
+function aiStatusClass(status: unknown): string {
+  if (status === "blocked") return "border-red-200 bg-red-50 text-red-800";
+  if (status === "unmapped") return "border-slate-300 bg-slate-50 text-slate-700";
+  return "border-blue-200 bg-blue-50 text-blue-800";
+}
+
+function aiParsedDocumentMetadata(document: DocumentRecord): AiParsedDocument | null {
+  const metadata = readRecord(document.workflow_metadata);
+  const parsed = readRecord(metadata.ai_parsed_document);
+  if (!Object.keys(parsed).length) return null;
+  return parsed as AiParsedDocument;
+}
+
+function aiParsedSections(document: AiParsedDocument | null, type: string): AiParsedSection[] {
+  return Array.isArray(document?.sections) ? document.sections.filter((section) => section?.type === type) : [];
+}
+
+function aiParsedFields(value: unknown): AiParsedField[] {
+  return Array.isArray(value) ? value.map((field) => readRecord(field) as AiParsedField).filter((field) => Object.keys(field).length) : [];
+}
+
+function aiParsedRows(value: unknown): AiParsedTableRow[] {
+  return Array.isArray(value) ? value.map((row) => readRecord(row) as AiParsedTableRow).filter((row) => Object.keys(row).length) : [];
+}
+
+function aiParsedColumns(section: AiParsedSection, rows: AiParsedTableRow[]): string[] {
+  if (Array.isArray(section.columns) && section.columns.length) return section.columns.map(String);
+  const columns = new Set<string>();
+  rows.forEach((row) => Object.keys(readRecord(row.cells)).forEach((column) => columns.add(column)));
+  return Array.from(columns);
 }
 
 async function loadDocumentNeighbors(currentId: string): Promise<DocumentNeighbors> {
@@ -262,6 +315,198 @@ function OfficialTableSourceCard({ document }: { document: DocumentRecord }) {
             })}
           </div>
         </details>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AiParsedDocumentCard({ document }: { document: DocumentRecord }) {
+  const aiDocument = aiParsedDocumentMetadata(document);
+  if (!aiDocument) {
+    return (
+      <Card className="border-slate-200 bg-slate-50/60">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="size-5 text-primary" />
+            AI가 읽은 구조
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">AI가 읽은 구조 정보가 없습니다.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  const keyValueSections = aiParsedSections(aiDocument, "key_value");
+  const tableSections = aiParsedSections(aiDocument, "table");
+  const noteSections = aiParsedSections(aiDocument, "notes");
+  const blockedCandidates = aiParsedFields(aiDocument.blocked_candidates);
+  const unmappedFields = aiParsedFields(aiDocument.unmapped_fields);
+  const warnings = Array.isArray(aiDocument.warnings) ? aiDocument.warnings : [];
+  return (
+    <Card className="border-indigo-200 bg-indigo-50/30">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="size-5 text-primary" />
+          AI가 읽은 구조
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="rounded-lg border border-indigo-200 bg-white p-4 text-sm text-indigo-950">
+          <p className="font-semibold">이 영역은 AI가 문서에서 읽은 원형 구조입니다.</p>
+          <p className="mt-1 text-indigo-900">확정값이 아니며, export에는 guardrail을 통과한 값만 포함됩니다.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {aiDocument.document_type_hint ? <Badge variant="outline" className="bg-indigo-50">유형 후보: {titleCaseLabel(aiDocument.document_type_hint)}</Badge> : null}
+            {aiDocument.document_type_confidence ? <Badge variant="outline" className="bg-indigo-50">신뢰도 {confidenceLabel(aiDocument.document_type_confidence)}</Badge> : null}
+            {aiDocument.source ? <Badge variant="outline" className="bg-white">source: {aiDocument.source}</Badge> : null}
+          </div>
+        </div>
+
+        {keyValueSections.length ? (
+          <div className="space-y-3">
+            {keyValueSections.map((section, sectionIndex) => (
+              <div key={`kv-${sectionIndex}`} className="rounded-lg border bg-white p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{section.title || "일반 정보"}</p>
+                    <p className="text-xs text-muted-foreground">key / value 형태로 보존된 검토 후보입니다.</p>
+                  </div>
+                  {section.source ? <Badge variant="outline">{section.source}</Badge> : null}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {aiParsedFields(section.fields).map((field, fieldIndex) => (
+                    <div key={`${field.key}-${fieldIndex}`} className={`rounded-md border p-3 ${field.status === "unmapped" ? "bg-slate-50" : "bg-white"}`}>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs text-muted-foreground">{field.key || "알 수 없는 키"}</p>
+                          <p className="mt-1 break-words text-sm font-medium">{displayValue(field.value)}</p>
+                        </div>
+                        <Badge variant="outline" className={aiStatusClass(field.status)}>{aiStatusLabel(field.status)}</Badge>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+                        {field.normalized_key ? <span className="rounded bg-slate-100 px-1.5 py-0.5">mapped: {field.normalized_key}</span> : <span className="rounded bg-slate-100 px-1.5 py-0.5">미매핑 후보</span>}
+                        {field.source ? <span className="rounded bg-slate-100 px-1.5 py-0.5">{field.source}</span> : null}
+                        {confidenceLabel(field.confidence) ? <span className="rounded bg-slate-100 px-1.5 py-0.5">{confidenceLabel(field.confidence)}</span> : null}
+                      </div>
+                      {field.evidence ? <p className="mt-2 break-words text-xs text-muted-foreground">근거: {field.evidence}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {tableSections.length ? (
+          <div className="space-y-3">
+            {tableSections.map((section, sectionIndex) => {
+              const rows = aiParsedRows(section.rows);
+              const columns = aiParsedColumns(section, rows);
+              return (
+                <details key={`table-${sectionIndex}`} open className="rounded-lg border bg-white p-4">
+                  <summary className="cursor-pointer text-sm font-semibold">
+                    {section.title || "검토 후보 표"}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">AI가 읽은 표 구조 · 확정값 아님</span>
+                  </summary>
+                  <div className="mt-3 overflow-auto">
+                    <table className="min-w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-left text-xs text-muted-foreground">
+                          {columns.map((column) => <th key={column} className="border px-2 py-2 font-medium">{column}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((row, rowIndex) => {
+                          const cells = readRecord(row.cells);
+                          return (
+                            <tr key={`${row.row_index ?? rowIndex}`} className="align-top">
+                              {columns.map((column) => <td key={column} className="border px-2 py-2">{displayValue(cells[column])}</td>)}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    {section.source ? <Badge variant="outline">source: {section.source}</Badge> : null}
+                    {section.table_type_guess ? <Badge variant="outline">table: {section.table_type_guess}</Badge> : null}
+                    {confidenceLabel(section.confidence) ? <Badge variant="outline">confidence {confidenceLabel(section.confidence)}</Badge> : null}
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {noteSections.length ? (
+          <div className="rounded-lg border bg-white p-4">
+            <p className="text-sm font-semibold">문서 안내/메모</p>
+            <ul className="mt-3 grid gap-2 text-sm text-slate-700">
+              {noteSections.flatMap((section) => Array.isArray(section.items) ? section.items : []).map((item, index) => (
+                <li key={`${item}-${index}`} className="rounded-md bg-slate-50 px-3 py-2">{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {blockedCandidates.length ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-red-700" />
+              <div>
+                <p className="text-sm font-semibold text-red-900">차단된 후보</p>
+                <p className="mt-1 text-xs text-red-800">아래 후보는 위험 가능성이 있어 확정/export에서 제외되었습니다.</p>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {blockedCandidates.map((field, index) => (
+                <div key={`${field.key}-${index}`} className="rounded-md border border-red-200 bg-white p-3 text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs text-muted-foreground">{field.key || field.normalized_key || "차단 후보"}</p>
+                      <p className="mt-1 font-medium">{displayValue(field.value)}</p>
+                    </div>
+                    <Badge variant="outline" className={aiStatusClass("blocked")}>차단됨</Badge>
+                  </div>
+                  <div className="mt-2 grid gap-1 text-xs text-red-800 sm:grid-cols-2">
+                    {field.risk ? <span>risk: {field.risk}</span> : null}
+                    {field.reason ? <span>reason: {field.reason}</span> : null}
+                    {field.normalized_key ? <span>field: {field.normalized_key}</span> : null}
+                    {field.source ? <span>source: {field.source}</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {(unmappedFields.length || warnings.length) ? (
+          <details className="rounded-lg border bg-white p-4">
+            <summary className="cursor-pointer text-sm font-semibold">미매핑 후보 / AI 구조화 경고</summary>
+            {unmappedFields.length ? (
+              <div className="mt-3">
+                <p className="text-xs font-medium uppercase text-muted-foreground">미매핑 후보</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {unmappedFields.map((field, index) => (
+                    <div key={`${field.key}-${index}`} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
+                      <span className="font-medium">{field.key || "알 수 없는 키"}</span>
+                      <span className="mx-1 text-muted-foreground">=</span>
+                      <span>{displayValue(field.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {warnings.length ? (
+              <div className="mt-4">
+                <p className="text-xs font-medium uppercase text-muted-foreground">AI 구조화 경고</p>
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-xs text-slate-700">
+                  {JSON.stringify(warnings, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+          </details>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -1468,6 +1713,7 @@ export default function DocumentDetailPage() {
           <TaxonomyPolicyCard document={document} />
           <QualityDiagnosisCard document={document} />
           <OfficialTableSourceCard document={document} />
+          <AiParsedDocumentCard document={document} />
           <WorkflowPanel document={document} />
           <Card className={document.review_required ? "border-amber-300 bg-amber-50/40" : ""}>
             <CardHeader>

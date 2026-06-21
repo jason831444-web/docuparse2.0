@@ -138,6 +138,55 @@ export interface VLCandidateMetadata {
   vl_candidate_summary?: VLCandidateSummary;
 }
 
+export interface AiParsedField {
+  key?: string | null;
+  value?: unknown;
+  normalized_key?: string | null;
+  confidence?: number | string | null;
+  source?: string | null;
+  evidence?: string | null;
+  status?: "candidate" | "unmapped" | "blocked" | string | null;
+  bbox?: unknown;
+  reason?: string | null;
+  risk?: string | null;
+}
+
+export interface AiParsedTableRow {
+  row_index?: number | string | null;
+  cells?: Record<string, unknown>;
+  canonical_cells?: Record<string, unknown>;
+  source?: string | null;
+  status?: string | null;
+  confidence?: number | string | null;
+}
+
+export interface AiParsedSection {
+  title?: string | null;
+  type?: "key_value" | "table" | "notes" | string | null;
+  fields?: AiParsedField[];
+  columns?: string[];
+  rows?: AiParsedTableRow[];
+  items?: string[];
+  source?: string | null;
+  status?: string | null;
+  confidence?: number | string | null;
+  table_type_guess?: string | null;
+}
+
+export interface AiParsedDocument {
+  version?: number;
+  source?: string | null;
+  title?: string | null;
+  document_type_hint?: string | null;
+  document_type_confidence?: number | string | null;
+  policy?: Record<string, unknown>;
+  sections?: AiParsedSection[];
+  unmapped_fields?: AiParsedField[];
+  blocked_candidates?: AiParsedField[];
+  warnings?: Array<Record<string, unknown> | string>;
+  canonical_snapshot?: Record<string, unknown>;
+}
+
 export interface FolderSummary {
   label: string;
   value: string;
