@@ -878,11 +878,15 @@ class DocumentProcessor:
         header_supplement: str | None = None
         raw_text_document_number = self.parser._extract_document_number(text)
         structured_document_number = self._vl_structured_document_number(metadata)
+        document_profile = self.parser._manufacturing_profile(text)
         if raw_text_document_number:
             header_supplement_metadata["skipped_reason"] = "raw_text_document_number_found"
         elif structured_document_number:
             header_supplement_metadata["skipped_reason"] = "structured_candidate_document_number_found"
             header_supplement_metadata["document_number_source"] = "vl_structured_candidate"
+        elif document_profile in {"purchase_memo", "pos_daily_settlement", "receipt"}:
+            header_supplement_metadata["skipped_reason"] = f"{document_profile}_document_number_optional"
+            header_supplement_metadata["document_profile"] = document_profile
         elif not quality_page_images:
             header_supplement_metadata["skipped_reason"] = "no_page_image_available"
         else:
@@ -1030,7 +1034,6 @@ class DocumentProcessor:
                     candidates.append(("header_crop", output_path))
         except Exception:
             candidates = []
-        candidates.append(("full_page", image_path))
         return candidates
 
     def _visible_header_lines_only(self, lines: list[str]) -> list[str]:

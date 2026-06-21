@@ -46,6 +46,40 @@ MANUFACTURING_TYPE_INDICATORS = [
     ]),
 ]
 
+MANUFACTURING_PROFILE_SIGNATURES = {
+    "purchase_memo": [
+        r"발주\s*메모",
+        r"구매\s*메모",
+        r"purchase\s+memo",
+        r"handwritten-like\s+purchase\s+memo",
+        r"단가\s*확인\s*필요",
+        r"자재\s*입고\s*요청",
+    ],
+    "pos_daily_settlement": [
+        r"POS\s*일일\s*정산",
+        r"일\s*정산",
+        r"daily\s+sales\s+settlement",
+        r"실판매금액",
+        r"순판매금액",
+        r"카드합계",
+        r"온라인결제",
+    ],
+    "receipt": [
+        r"영수증번호",
+        r"영수증",
+        r"\bRC[-_ ]?\d{4}",
+        r"\breceipt\b",
+        r"감사합니다",
+    ],
+    "internal_transfer": [
+        r"자재\s*이동\s*요청서",
+        r"internal\s+transfer",
+        r"출고창고",
+        r"입고창고",
+        r"이동사유",
+    ],
+}
+
 CATEGORY_KEYWORDS = {
     "purchase_order": ["발주서", "발주 번호", "po no", "purchase order", "납기일", "발주일"],
     "quotation": ["견적서", "견적 번호", "quotation", "quote", "유효기간", "견적금액"],
@@ -53,6 +87,8 @@ CATEGORY_KEYWORDS = {
     "delivery_note": ["납품서", "납품 번호", "delivery note", "납품일", "인수자"],
     "packing_list": ["포장명세서", "packing list", "포장 수량", "box", "carton"],
     "inspection_report": ["검사성적서", "inspection report", "검사 결과", "합격", "불합격"],
+    "purchase_memo": ["발주 메모", "구매 메모", "purchase memo", "단가 확인필요", "자재 입고 요청"],
+    "pos_daily_settlement": ["pos 일일정산", "일정산", "daily sales settlement", "실판매금액", "순판매금액"],
     "return_note": ["반품", "차감", "return", "credit note", "rtn"],
     "internal_transfer": ["사업장간", "자재 이동", "내부 이동", "internal transfer", "trf"],
     "contract": ["계약서", "contract", "계약 기간", "계약 금액"],
@@ -218,6 +254,15 @@ class DocumentParser:
 
     def _guess_document_type(self, text: str, filename: str) -> DocumentType:
         content = text.lower()
+        profile = self._manufacturing_profile(text)
+        if profile == "pos_daily_settlement":
+            return DocumentType.general_document
+        if profile == "purchase_memo":
+            return DocumentType.memo
+        if profile == "receipt":
+            return DocumentType.receipt
+        if profile == "internal_transfer":
+            return DocumentType.general_document
         first_lines_for_return = "\n".join(line.strip() for line in text.splitlines()[:8])
         if re.search(r"\b(?:RTN|RCM)[-_ ]?\d{4}|credit\s+(?:note|memo)|return\s+note", text, flags=re.IGNORECASE) or re.search(r"(반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|차감\s*요청|반품\s*요청)", first_lines_for_return, flags=re.IGNORECASE):
             return DocumentType.general_document
@@ -275,7 +320,7 @@ class DocumentParser:
             return DocumentType.contract
         if self._score_korean_manufacturing(haystack, ["세금계산서", "invoice", "청구서"]) >= 1:
             return DocumentType.invoice
-        receipt_score = sum(keyword in haystack for keyword in ["receipt", "subtotal", "total", "tax", "change", "visa"])
+        receipt_score = sum(keyword in haystack for keyword in ["receipt", "subtotal", "total", "tax", "change", "visa", "영수증", "영수증번호", "감사합니다"])
         invoice_score = sum(keyword in haystack for keyword in ["invoice", "invoice number", "invoice #", "vendor", "bill to", "amount due", "total due"])
         presentation_score = sum(keyword in haystack for keyword in ["presentation", "slide", "speaker notes", "speaking notes", "talk track", "rehearse", "script"])
         guide_score = sum(keyword in haystack for keyword in ["installation guide", "setup guide", "technical guide", "project setup", "install", "configuration", "environment variables", "dependencies"])
@@ -296,14 +341,34 @@ class DocumentParser:
             return DocumentType.memo
         return DocumentType.general_document if len(text) > 250 else DocumentType.other
 
+    def _manufacturing_profile(self, text: str) -> str | None:
+        compact_source = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not compact_source:
+            return None
+        scores: list[tuple[int, str]] = []
+        for profile, patterns in MANUFACTURING_PROFILE_SIGNATURES.items():
+            score = sum(1 for pattern in patterns if re.search(pattern, compact_source, flags=re.IGNORECASE))
+            if score:
+                scores.append((score, profile))
+        if not scores:
+            return None
+        scores.sort(key=lambda entry: (-entry[0], entry[1]))
+        best_score, best_profile = scores[0]
+        if best_profile == "internal_transfer" and best_score < 2:
+            return None
+        return best_profile if best_score >= 1 else None
+
     def _score_korean_manufacturing(self, haystack: str, keywords: list[str]) -> int:
         return sum(1 for keyword in keywords if keyword.lower() in haystack)
 
     def _extract_date(self, text: str) -> date | None:
         candidates = re.findall(r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|[A-Z][a-z]+ \d{1,2}, \d{4})\b", text)
         candidates.extend(re.findall(r"\b\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\b", text))
+        candidates.extend(re.findall(r"\b(?:20\d{2}|19\d{2})\d{2}\d{2}\b", text))
         for candidate in candidates:
             normalized = candidate
+            if re.fullmatch(r"(?:20\d{2}|19\d{2})\d{2}\d{2}", normalized):
+                normalized = f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:8]}"
             if re.search(r"[년월일./-]", normalized):
                 parts = re.findall(r"\d{1,4}", normalized)
                 if len(parts) >= 3:
@@ -508,7 +573,7 @@ class DocumentParser:
             return None
         if re.search(
             r"(옵션|설치비|별도협의|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|담당|"
-            r"문서번호|작성일|검사일|유효기간|Lot\s*No)",
+            r"문서번호|작성일|검사일|유효기간|Lot\s*No|영수증번호)",
             text,
             flags=re.IGNORECASE,
         ):
@@ -569,7 +634,7 @@ class DocumentParser:
     def _extract_labeled_date(self, text: str, labels: list[str]) -> date | None:
         label_pattern = "|".join(re.escape(label) for label in labels)
         match = re.search(
-            rf"(?:{label_pattern})\s*[:：]?\s*(\d{{4}}[.\-/년]\s*\d{{1,2}}[.\-/월]\s*\d{{1,2}}[일]?)",
+            rf"(?:{label_pattern})\s*[:：]?\s*((?:\d{{4}}[.\-/년]\s*\d{{1,2}}[.\-/월]\s*\d{{1,2}}[일]?)|(?:20\d{{2}}|19\d{{2}})\d{{2}}\d{{2}})",
             text,
             flags=re.IGNORECASE,
         )
@@ -599,6 +664,7 @@ class DocumentParser:
                 return transfer_number
         labels = [
             "발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호",
+            "영수증번호", "승인번호", "전표번호", "정산번호", "메모번호",
             "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
         ]
         normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
@@ -668,7 +734,7 @@ class DocumentParser:
             r"\b(?:RTN|RCM)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bTRF[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bMV[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
-            r"\b(?:PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)+(?:[-_][A-Z]{1,10}){0,2}\b",
+            r"\b(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{3,4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)*(?:[-_][A-Z]{1,10}){0,2}\b",
             r"\bINV(?:[-_ ]+[A-Z]{2,10}){1,3}[-_ ]+\d{3,4}\b",
         ]
         candidates: list[str] = []
@@ -684,7 +750,7 @@ class DocumentParser:
 
     def _normalize_document_number(self, value: object) -> str | None:
         raw = str(value or "").strip(" -:：[](){}")
-        if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX)\b", raw, flags=re.IGNORECASE) and re.search(r"\s", raw):
+        if re.match(r"^(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX)\b", raw, flags=re.IGNORECASE) and re.search(r"\s", raw):
             text = re.sub(r"[\s_]+", "-", raw)
         else:
             text = re.sub(r"\s+", "", raw)
@@ -730,7 +796,7 @@ class DocumentParser:
         if self._looks_like_business_label(text):
             return -100
         score = 0
-        if re.match(r"^(?:PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX-PO)-", text, flags=re.IGNORECASE):
+        if re.match(r"^(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX-PO)-", text, flags=re.IGNORECASE):
             score += 40
         if re.match(r"^FAX(?:-[A-Z0-9]{2,10})*-PO-", text, flags=re.IGNORECASE):
             score += 40
@@ -874,6 +940,12 @@ class DocumentParser:
             foreign_invoice_items = self._extract_foreign_invoice_vertical_line_items(lines)
             if foreign_invoice_items:
                 return self._dedupe_line_items(foreign_invoice_items)[:80]
+        purchase_memo_items = self._extract_purchase_memo_line_items(lines)
+        if purchase_memo_items:
+            return self._dedupe_line_items(purchase_memo_items)[:80]
+        receipt_items = self._extract_receipt_line_items(lines, doc_type)
+        if receipt_items:
+            return self._dedupe_line_items(receipt_items)[:80]
         numbered_items = self._extract_numbered_vertical_table_items(lines, doc_type)
         if self._should_prefer_numbered_vertical_items(numbered_items, lines, doc_type):
             return self._dedupe_line_items(numbered_items)[:80]
@@ -1353,7 +1425,7 @@ class DocumentParser:
                     item["inspection_result"] = match.group("result")
                 return item
         if doc_type in {DocumentType.delivery_note, DocumentType.general_document, DocumentType.memo, DocumentType.other}:
-            internal_code = self._internal_item_code_from_line(text)
+            internal_code = self._internal_item_code_from_line(text) if doc_type != DocumentType.delivery_note else None
             if internal_code:
                 internal_item = self._parse_inline_internal_transfer_row(text, internal_code)
                 if internal_item:
@@ -2389,7 +2461,7 @@ class DocumentParser:
 
     def _extract_inspection_report_line_items(self, lines: list[str]) -> list[dict]:
         text = "\n".join(lines)
-        if not re.search(r"(입고검사|검사성적서|검사번호|Lot\s*No|합격수량|불량수량)", text, flags=re.IGNORECASE):
+        if not re.search(r"(입고\s*검사|검사\s*(?:성적서|기록서|번호)|Lot\s*No|합격수량|불량수량)", text, flags=re.IGNORECASE):
             return []
         table_items = self._extract_inspection_report_table_items(lines)
         if table_items:
@@ -2475,7 +2547,7 @@ class DocumentParser:
         text = str(value or "").strip()
         if re.search(r"\b(?:S\d{2,3}C|SCM\d+|SUS\d*|AL\d*|PIN|SHAFT|PLATE|BOLT|WASHER|BRG|PCB|M\d+)\b", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(하우징|핀|볼트|와셔|브라켓|판재|샤프트|플레이트|커넥터|하네스|케이블|베어링|기어|부싱)", text):
+        if re.search(r"(하우징|핀|볼트|너트|와셔|브라켓|판재|환봉|샤프트|플레이트|커넥터|하네스|케이블|베어링|기어|부싱|소스|양파|닭정육|감자|포장|필름)", text):
             return True
         return False
 
@@ -2533,7 +2605,7 @@ class DocumentParser:
 
     def _extract_inline_inspection_quantity_rows(self, lines: list[str]) -> list[dict]:
         text = "\n".join(lines)
-        if not re.search(r"(입고수량|합격수량|불량수량|판정)", text):
+        if not re.search(r"(입고수량|합격수량|불량수량|판정|편정|재검|조건부\s*합격)", text):
             return []
         if not re.search(r"(검사|품질|합격|불량|판정)", text):
             return []
@@ -2546,9 +2618,45 @@ class DocumentParser:
             if item:
                 items.append(self._normalize_line_item(item))
                 continue
+            item = self._parse_inline_inspection_result_row(value)
+            if item:
+                items.append(self._normalize_line_item(item))
+                continue
             if self._looks_like_sparse_inspection_non_item(value):
                 continue
         return self._dedupe_line_items(items)[:30]
+
+    def _parse_inline_inspection_result_row(self, value: str) -> dict | None:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if not text or not self._looks_like_sparse_inspection_item_name(text):
+            return None
+        match = re.match(
+            r"^\d{1,3}\s+"
+            r"(?P<body>.+?)\s+"
+            r"(?P<code>[A-Z][A-Z0-9]{1,12}(?:[-_][A-Z0-9]{1,12})+)\s+"
+            r"(?P<received>\d{1,6}(?:,\d{3})?)\s+"
+            r"(?P<inspection_item>외관\s*/?\s*치수|치수\s*확인|외관|검사|수량\s*확인|[A-Za-z가-힣/]{2,20})\s+"
+            r"(?P<result>조건부\s*합격|조건부합격|불합격|합격|재검|보류|OK|NG)"
+            r"(?:\s+(?P<note>.*))?$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        item: dict = {
+            "item_name": self._clean_value(match.group("body")),
+            "document_item_code": self._clean_code_value(match.group("code")),
+            "quantity": match.group("received"),
+            "received_quantity": match.group("received"),
+            "unit": "EA",
+            "inspection_item": self._clean_value(match.group("inspection_item")),
+            "inspection_result": self._clean_value(match.group("result")),
+            "review_flags": ["inspection_result_row_review_required"],
+        }
+        note = self._clean_value(match.group("note"))
+        if note:
+            item["note"] = note
+        return item if item.get("item_name") else None
 
     def _parse_inline_inspection_quantity_row(self, value: str) -> dict | None:
         text = str(value or "").strip()
@@ -2746,13 +2854,99 @@ class DocumentParser:
 
     def _internal_item_code_from_line(self, line: str) -> str | None:
         text = str(line or "").strip()
-        match = re.search(r"\b[A-Z]-[A-Z0-9][A-Z0-9-]{3,}", text, flags=re.IGNORECASE)
+        match = re.search(r"\b[A-Z][A-Z0-9]{0,12}-[A-Z0-9][A-Z0-9-]{1,}\b", text, flags=re.IGNORECASE)
         if not match:
             return None
         code = match.group(0)
+        if re.match(r"^(?:DOC|PO|QT|INV|DN|TS|IQC|QC|RCM|RTN|PM|POS|TRF|MV)-", code, flags=re.IGNORECASE):
+            return None
         code = re.sub(r"(?<=\d)[Oo](?=\d|$|-)", "0", code)
         code = re.sub(r"(?<=\d)[Oo]{2}\b", "00", code)
         return code
+
+    def _extract_purchase_memo_line_items(self, lines: list[str]) -> list[dict]:
+        text = "\n".join(lines)
+        if self._manufacturing_profile(text) != "purchase_memo":
+            return []
+        items: list[dict] = []
+        for raw in lines:
+            line = re.sub(r"\s+", " ", str(raw or "").strip(" -•·\t"))
+            if not line or not re.search(r"[A-Za-z가-힣]", line):
+                continue
+            if self._looks_like_business_label(line) or self._looks_like_instruction_or_note(line):
+                continue
+            match = re.match(
+                r"^(?P<body>.+?)\s+"
+                r"(?P<quantity>\d{1,6}(?:,\d{3})?)\s*(?P<unit>EA|KG|BOX|ROLL|PCS?|개|박스|롤)\b"
+                r"(?:\s*단가\s*(?P<unit_price>\d[\d,]*|확인\s*필요|확인필요))?.*$",
+                line,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                continue
+            body = self._clean_value(match.group("body"))
+            if not body:
+                continue
+            item_name, item_code, specification = self._split_vl_inline_item_identity(body)
+            item: dict = {
+                "item_name": item_name or body,
+                "item_code": item_code,
+                "specification": specification,
+                "quantity": match.group("quantity"),
+                "unit": match.group("unit").upper(),
+                "validation_warnings": ["purchase_memo_row_review_required"],
+            }
+            unit_price = self._clean_value(match.group("unit_price"))
+            if unit_price and re.fullmatch(r"\d[\d,]*", unit_price):
+                item["unit_price"] = unit_price
+            elif unit_price:
+                item["validation_warnings"].append("unit_price_missing_review_required")
+            items.append(self._normalize_line_item(item))
+        return self._dedupe_line_items(items)
+
+    def _extract_receipt_line_items(self, lines: list[str], doc_type: DocumentType | None) -> list[dict]:
+        text = "\n".join(lines)
+        if doc_type != DocumentType.receipt and self._manufacturing_profile(text) != "receipt":
+            return []
+        items: list[dict] = []
+        for raw in lines:
+            line = re.sub(r"\s+", " ", str(raw or "").strip(" -•·\t"))
+            if not line or self._looks_like_numbered_table_footer(line):
+                continue
+            if self._looks_like_business_label(line) or self._looks_like_instruction_or_note(line):
+                continue
+            item = self._parse_receipt_inline_row(line)
+            if item:
+                items.append(self._normalize_line_item(item))
+        return self._dedupe_line_items(items)
+
+    def _parse_receipt_inline_row(self, line: str) -> dict | None:
+        text = str(line or "").strip()
+        if not re.search(r"[A-Za-z가-힣]", text):
+            return None
+        match = re.match(
+            r"^(?P<body>.+?)\s+"
+            r"(?P<quantity>\d{1,6}(?:\.\d+)?)\s*(?P<unit>EA|KG|BOX|ROLL|PCS?|개|박스|롤|봉|팩)\s*[xX*]?\s*"
+            r"(?P<unit_price>\d[\d,]*)"
+            r"(?:\s+(?P<line_total>\d[\d,]*))?\s*$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        body = self._clean_value(match.group("body"))
+        if not body or re.search(r"(공급가액|부가세|합계|total|vat|tax)", body, flags=re.IGNORECASE):
+            return None
+        item: dict = {
+            "item_name": body,
+            "quantity": match.group("quantity"),
+            "unit": match.group("unit").upper(),
+            "unit_price": match.group("unit_price"),
+            "validation_warnings": ["receipt_row_review_required"],
+        }
+        if match.group("line_total"):
+            item["line_total"] = match.group("line_total")
+        return item
 
     def _nearest_item_name_before(self, lines: list[str], index: int) -> str | None:
         for candidate in reversed(lines[max(0, index - 3):index]):
@@ -4397,6 +4591,9 @@ class DocumentParser:
 
     def _guess_category(self, text: str) -> str | None:
         lowered = text.lower()
+        profile = self._manufacturing_profile(text)
+        if profile:
+            return profile
         if self._has_return_or_credit_signal(text):
             return "credit_note" if re.search(r"차감|크레딧|credit\s+(?:note|memo)", text, flags=re.IGNORECASE) else "return_note"
         if self._has_internal_transfer_signal(text):
