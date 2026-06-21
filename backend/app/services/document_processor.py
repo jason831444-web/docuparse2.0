@@ -2320,6 +2320,7 @@ class DocumentProcessor:
             document.tags = sorted(set([*(document.tags or []), "pos_daily_settlement", "unsupported_pos_settlement"]))
             document.review_required = True
             document.low_confidence_fields = sorted(set([*(document.low_confidence_fields or []), "unsupported_pos_settlement"]))
+            self._normalize_party_fields(document)
             return issues
 
         self._normalize_party_fields(document)

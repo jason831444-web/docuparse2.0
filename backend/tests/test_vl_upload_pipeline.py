@@ -282,6 +282,28 @@ def test_final_party_safety_removes_document_numbers_and_upload_paths():
     assert document.merchant_name is None
 
 
+def test_pos_safety_branch_still_removes_identifier_party_values():
+    document = _document(
+        document_type=DocumentType.receipt,
+        vendor_name="IDOC-026",
+        merchant_name="IDOC-026",
+        line_items=[
+            {"item_name": "순 판매 금액", "line_total": 1000},
+            {"item_name": "카드 합계", "line_total": 900},
+            {"item_name": "주문 횟수", "quantity": 3},
+        ],
+    )
+
+    _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "POS 일정산\n영수증번호 IDOC-026\n순 판매 금액 1,000\n카드 합계 900\n주문 횟수 3",
+    )
+
+    assert document.category == "pos_daily_settlement"
+    assert document.vendor_name is None
+    assert document.merchant_name is None
+
+
 def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields():
     text = """
     견적서
