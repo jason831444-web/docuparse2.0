@@ -1702,14 +1702,23 @@ class DocumentProcessor:
                 party = self._normalize_party_name(value)
                 if not party:
                     continue
-                if (
-                    not document.vendor_name
-                    and self._ai_field_is_store_or_merchant(field)
-                    and self._ai_party_candidate_can_fill_vendor(document, fields, raw_text)
-                ):
-                    document.vendor_name = sanitize_for_postgres(party)
-                    self._record_ai_mapping_source(document, "vendor_name")
-                    applied["applied_fields"].append("vendor_name")
+                if self._ai_field_is_store_or_merchant(field):
+                    if self._ai_party_candidate_can_fill_vendor(document, fields, raw_text):
+                        if not document.vendor_name:
+                            document.vendor_name = sanitize_for_postgres(party)
+                            self._record_ai_mapping_source(document, "vendor_name")
+                            applied["applied_fields"].append("vendor_name")
+                        if not document.merchant_name:
+                            document.merchant_name = sanitize_for_postgres(party)
+                            self._record_ai_mapping_source(document, "merchant_name")
+                            applied["applied_fields"].append("merchant_name")
+                    else:
+                        applied["review_only_fields"].append({
+                            "field": key or field.get("key"),
+                            "value": value,
+                            "reason": "store_candidate_without_pos_or_receipt_context",
+                        })
+                    continue
                 if not document.customer_name:
                     document.customer_name = sanitize_for_postgres(party)
                     self._record_ai_mapping_source(document, "customer_name")

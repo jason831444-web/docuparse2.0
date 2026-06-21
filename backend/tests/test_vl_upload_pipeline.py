@@ -124,7 +124,7 @@ def test_final_business_safety_removes_date_fragment_total_amount():
 
 
 def test_ai_parsed_store_candidate_fills_receipt_vendor_without_guessing_customer():
-    document = _document(document_type=DocumentType.receipt, vendor_name=None, customer_name=None)
+    document = _document(document_type=DocumentType.receipt, vendor_name=None, customer_name=None, merchant_name=None)
     metadata = {}
     ai_parsed = {
         "sections": [
@@ -152,12 +152,14 @@ def test_ai_parsed_store_candidate_fills_receipt_vendor_without_guessing_custome
     )
 
     assert document.vendor_name == "시흥공구마트"
-    assert document.customer_name == "시흥공구마트"
+    assert document.merchant_name == "시흥공구마트"
+    assert document.customer_name is None
     assert metadata["ai_parsed_document_mapping"]["applied_fields"].count("vendor_name") == 1
+    assert metadata["ai_parsed_document_mapping"]["applied_fields"].count("merchant_name") == 1
 
 
 def test_ai_parsed_store_candidate_fills_pos_vendor_from_settlement_signal():
-    document = _document(document_type=DocumentType.general_document, vendor_name=None, customer_name=None)
+    document = _document(document_type=DocumentType.general_document, vendor_name=None, customer_name=None, merchant_name=None)
     metadata = {}
     ai_parsed = {
         "sections": [
@@ -185,7 +187,84 @@ def test_ai_parsed_store_candidate_fills_pos_vendor_from_settlement_signal():
     )
 
     assert document.vendor_name == "대야역 분식"
-    assert document.customer_name == "대야역 분식"
+    assert document.merchant_name == "대야역 분식"
+    assert document.customer_name is None
+
+
+def test_ai_parsed_store_candidate_does_not_fill_party_without_pos_signal():
+    document = _document(document_type=DocumentType.general_document, vendor_name=None, customer_name=None, merchant_name=None)
+    metadata = {}
+    ai_parsed = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {
+                        "key": "Store",
+                        "value": "A-01 원자재",
+                        "normalized_key": "customer_name",
+                        "evidence": "Store A-01 원자재",
+                        "status": "candidate",
+                    }
+                ],
+            }
+        ]
+    }
+
+    _processor(FakeVLWorker())._apply_ai_parsed_document_candidates(
+        document,
+        ai_parsed,
+        metadata,
+        "자재 이동 요청서\nStore A-01 원자재",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    mapping = metadata["ai_parsed_document_mapping"]
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+    assert not mapping["applied_fields"]
+    assert mapping["review_only_fields"][0]["reason"] == "store_candidate_without_pos_or_receipt_context"
+
+
+def test_ai_parsed_warehouse_candidates_do_not_fill_vendor_or_customer():
+    document = _document(document_type=DocumentType.general_document, vendor_name=None, customer_name=None)
+    metadata = {}
+    ai_parsed = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {
+                        "key": "출고창고",
+                        "value": "A-01 원자재",
+                        "normalized_key": "source_warehouse",
+                        "evidence": "출고창고 A-01 원자재",
+                        "status": "candidate",
+                    },
+                    {
+                        "key": "입고창고",
+                        "value": "B-02 가공",
+                        "normalized_key": "destination_warehouse",
+                        "evidence": "입고창고 B-02 가공",
+                        "status": "candidate",
+                    },
+                ],
+            }
+        ]
+    }
+
+    _processor(FakeVLWorker())._apply_ai_parsed_document_candidates(
+        document,
+        ai_parsed,
+        metadata,
+        "자재 이동 요청서\n출고창고 A-01 원자재\n입고창고 B-02 가공",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert "ai_parsed_document_mapping" not in metadata
 
 
 def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields():
