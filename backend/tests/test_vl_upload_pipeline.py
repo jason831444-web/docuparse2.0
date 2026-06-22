@@ -1895,6 +1895,41 @@ def test_ai_parsed_document_receipt_fragments_are_review_only_candidates():
     assert candidate["line_total"] == "3100"
 
 
+def test_receipt_with_pos_item_name_is_not_pos_daily_settlement():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.receipt, tags=["receipt"], line_items=[])
+
+    assert not processor._looks_like_pos_settlement_document(
+        document,
+        "대성식자재 영수증번호 DOC-026 POS 영수증 용지 5BOX 33000 165000 합계 531320",
+        [],
+    )
+
+
+def test_inspection_context_does_not_create_receipt_candidates_from_pos_item_name():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.inspection_report, tags=["inspection_report"], line_items=[])
+    ai_doc = {
+        "sections": [
+            {
+                "type": "table",
+                "title": "입고 검사 목록",
+                "columns": ["품명", "입고수량", "판정"],
+                "rows": [],
+            }
+        ]
+    }
+
+    result = processor._build_ai_review_row_candidates(
+        document,
+        ai_doc,
+        "입고 검사기록서 POS 영수증 용지 POS-PAPER 50 외관/치수 재검",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert result["receipt_item_candidates"] == []
+
+
 def test_ai_parsed_document_purchase_memo_rows_are_requested_item_candidates():
     processor = DocumentProcessor()
     document = _document(document_type=DocumentType.memo, category="purchase_memo", tags=["purchase_memo"], line_items=[])

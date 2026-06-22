@@ -2356,6 +2356,8 @@ class DocumentProcessor:
     def _receipt_review_row_candidates(self, document: Document, raw_text: str, semantic_text: str) -> list[dict[str, Any]]:
         if self._pos_daily_settlement_signal(semantic_text):
             return []
+        if self._ai_parsed_inspection_context(document, {}, semantic_text):
+            return []
         doc_type = self._document_type_value(document.document_type)
         tags = {str(tag or "").casefold() for tag in (document.tags or [])}
         receipt_context = doc_type == "receipt" or "receipt" in tags or bool(re.search(r"(영수증|receipt|승인번호|카드사)", raw_text or "", flags=re.IGNORECASE))
@@ -3281,10 +3283,14 @@ class DocumentProcessor:
             text,
             flags=re.IGNORECASE,
         )
+        settlement_metric = self._pos_metric_pattern().search(text)
+        strong_settlement_label = re.search(r"(pos\s*메인|pos\s*일\s*정산|일\s*정산|매출\s*정산)", text, flags=re.IGNORECASE)
         if re.search(r"(pos|일\s*정산|매출\s*정산)", text, flags=re.IGNORECASE):
-            if manufacturing_document_signal and not re.search(r"(pos\s*메인|pos\s*일\s*정산|일\s*정산|매출\s*정산)", text, flags=re.IGNORECASE):
+            if manufacturing_document_signal and not strong_settlement_label:
                 return False
-            return True
+            if re.search(r"(영수증|receipt|영수증\s*번호)", text, flags=re.IGNORECASE) and not (settlement_metric and strong_settlement_label):
+                return False
+            return bool(strong_settlement_label or settlement_metric)
         if manufacturing_document_signal:
             return False
         if document.document_type == DocumentType.receipt or re.search(r"영수증\s*번호|receipt\s*(?:no|number)", text, flags=re.IGNORECASE):
