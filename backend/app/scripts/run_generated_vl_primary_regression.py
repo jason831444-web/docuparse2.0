@@ -397,6 +397,17 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
                 }
             )
             continue
+        if actual_key == "document_number" and _fixture_document_number_label_mismatch(expected_value, actual_value):
+            warnings.append(
+                {
+                    "code": "fixture_label_mismatch",
+                    "expected_value": expected_value,
+                    "actual_value": actual_value,
+                    "field": "document_number",
+                    "reason": "expected_value_looks_like_fixture_file_id",
+                }
+            )
+            continue
         if actual_key == "document_type" and _return_credit_type_matches(expected, actual):
             continue
         if actual_key == "document_type":
@@ -465,6 +476,17 @@ def _document_type_difference_code(expected: dict[str, Any], actual: dict[str, A
     if raw_hint and raw_hint == actual_type and raw_hint != expected_type:
         return "fixture_label_mismatch"
     return "document_type_mismatch"
+
+
+def _fixture_document_number_label_mismatch(expected_value: Any, actual_value: Any) -> bool:
+    expected_text = str(expected_value or "").strip()
+    actual_text = str(actual_value or "").strip()
+    if not expected_text or not actual_text:
+        return False
+    if not re.fullmatch(r"DOC[-_ ]?\d{3,4}", expected_text, flags=re.IGNORECASE):
+        return False
+    business_prefixes = r"(?:PO|INV|DN|RCM|RC|TS|IQC|IOC|MV|QT|PM|POS|TRF|RTN)"
+    return bool(re.match(rf"^{business_prefixes}[-_A-Z0-9 ]*\d", actual_text, flags=re.IGNORECASE))
 
 
 def _taxonomy_supports_expected_type(expected_type: str, actual: dict[str, Any]) -> bool:

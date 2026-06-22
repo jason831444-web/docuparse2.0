@@ -284,6 +284,17 @@ def test_compare_separates_fixture_label_mismatch_from_type_mismatch():
     assert "document_type_mismatch" not in codes
 
 
+def test_compare_separates_fixture_document_number_from_business_document_number():
+    expected = {"document_type": "invoice", "document_number": "DOC-002"}
+    actual = {"document_type": "invoice", "document_number": "INV-2026-0002", "line_items": []}
+
+    result = compare_expected_actual(expected, actual, {})
+
+    codes = {issue["code"] for issue in result["warnings"]}
+    assert "fixture_label_mismatch" in codes
+    assert "document_number_mismatch" not in codes
+
+
 def test_compare_accepts_taxonomy_alias_for_general_document_expected_type():
     expected = {"document_type": "general_document"}
     actual = {

@@ -10,6 +10,10 @@ from app.services.canonical_schema import canonical_field_for_header
 DATE_PATTERN = r"(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{6})"
 DOCUMENT_NUMBER_PATTERN = r"\b(?:PO|INV|DN|RCM|RC|TS|IQC|MV|QT|PM|POS|DOC)[-_]?[A-Z0-9]{0,8}[-_]?\d{2,6}(?:[-_]\d{1,6})?\b"
 AMOUNT_PATTERN = r"(?:[-+]?\d{1,3}(?:,\d{3})+|[-+]?\d+)(?:\.\d+)?"
+STRONG_POS_CONTEXT_PATTERN = re.compile(
+    r"(?:POS|일\s*정산|정산|daily\s*sales|settlement|payment|cash|card|terminal|승인번호|카드사|현금|카드)",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,7 @@ KEY_ALIASES: tuple[tuple[str, str, float], ...] = (
     ("document_number", r"(?:문서번호|발주번호|주문번호|견적번호|송장번호|Invoice\s*No\.?|PO\s*No\.?|Order\s*Ref|관리번호|전표번호|Ref\s*No\.?)", 0.9),
     ("document_date", r"(?:작성일|작성일자|발행일|요청일|납품일|검사일|거래일시|거래일|Date|Invoice\s*Date|Order\s*Date)", 0.84),
     ("due_date", r"(?:납기일|납품예정일|Due\s*Date|Delivery\s*Date)", 0.84),
-    ("supplier_name", r"(?:공급자|공급업체|Vendor|Supplier|상호)", 0.78),
+    ("supplier_name", r"(?:공급자|공급업체|Vendor|Supplier)", 0.78),
     ("customer_name", r"(?:공급받는자|거래처|고객사|Customer|Store|Merchant|매장)", 0.78),
     ("source_warehouse", r"(?:출고창고|From\s*Warehouse|Source\s*Warehouse)", 0.84),
     ("destination_warehouse", r"(?:입고창고|To\s*Warehouse|Destination\s*Warehouse)", 0.84),
@@ -142,6 +146,18 @@ class AiParsedDocumentBuilder:
         lines = _clean_lines(raw_text)
         fields: list[dict[str, Any]] = []
         seen: set[tuple[str | None, str, str]] = set()
+        for field in self._party_fields_from_blocks(lines):
+            key = (field.get("normalized_key"), field.get("key") or "", field.get("value") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            fields.append(field)
+        for field in self._top_line_party_candidates(lines, raw_text):
+            key = (field.get("normalized_key"), field.get("key") or "", field.get("value") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            fields.append(field)
         for index, line in enumerate(lines):
             field = self._field_from_line(line)
             if field is None:
@@ -160,6 +176,71 @@ class AiParsedDocumentBuilder:
             seen.add(key)
             fields.append(field)
         return fields
+
+    def _party_fields_from_blocks(self, lines: list[str]) -> list[dict[str, Any]]:
+        fields: list[dict[str, Any]] = []
+        for index, line in enumerate(lines[:80]):
+            role = self._party_role_label(line)
+            if not role:
+                continue
+            value = self._company_value_from_line(line)
+            evidence = line
+            if value is None:
+                for next_line in lines[index + 1 : index + 4]:
+                    if self._party_role_label(next_line) or self._line_starts_non_party_block(next_line):
+                        break
+                    value = self._company_value_from_line(next_line)
+                    evidence = f"{line} {next_line}"
+                    if value:
+                        break
+            value = _sanitize_party_candidate(value)
+            if not value:
+                continue
+            normalized_key = "supplier_name" if role == "supplier" else "customer_name"
+            fields.append(self._make_field("공급자" if role == "supplier" else "공급받는자", value, normalized_key, 0.82, evidence, "candidate"))
+        return fields
+
+    def _top_line_party_candidates(self, lines: list[str], raw_text: str) -> list[dict[str, Any]]:
+        strong_pos = bool(STRONG_POS_CONTEXT_PATTERN.search(raw_text or ""))
+        candidates: list[dict[str, Any]] = []
+        for line in lines[:8]:
+            value = _sanitize_party_candidate(line)
+            if not value:
+                continue
+            if self._line_starts_non_party_block(line):
+                continue
+            if re.search(r"(영수증|receipt|거래명세서|발주서|견적서|납품서|세금계산서|검사|자재\s*이동|일\s*정산)", line, flags=re.IGNORECASE):
+                continue
+            status = "candidate" if strong_pos and re.search(r"(마트|상점|store|merchant|market)", line, flags=re.IGNORECASE) else "review_only"
+            normalized_key = "merchant_name" if strong_pos else "party_name"
+            confidence = 0.72 if strong_pos else 0.48
+            candidates.append(self._make_field("상단 거래처 후보", value, normalized_key, confidence, line, status))
+            break
+        return candidates
+
+    def _party_role_label(self, line: str) -> str | None:
+        if re.search(r"(공급자|공급업체|매입처|vendor|supplier)", line, flags=re.IGNORECASE):
+            return "supplier"
+        if re.search(r"(공급받는자|고객사|거래처|수신|buyer|customer|bill\s*to|ship\s*to)", line, flags=re.IGNORECASE):
+            return "customer"
+        return None
+
+    def _company_value_from_line(self, line: str) -> str | None:
+        match = re.search(
+            r"(?:상호|회사명|업체명|거래처명|고객사|수신|vendor|supplier|customer|buyer)\s*[:：]?\s*(?P<value>[^\n:：]{2,50})",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return match.group("value")
+        return None
+
+    def _line_starts_non_party_block(self, line: str) -> bool:
+        return bool(re.search(
+            r"^(?:사업자|등록번호|대표|업태|업종|담당|담당자|주소|전화|이메일|품목|No\b|문서번호|작성일|발행일|견적일|납품일|검사일|거래일|합계|공급가액|세액)",
+            line,
+            flags=re.IGNORECASE,
+        ))
 
     def table_sections(self, tables: list[dict[str, Any]], raw_text: str) -> list[dict[str, Any]]:
         sections: list[dict[str, Any]] = []
@@ -281,7 +362,10 @@ class AiParsedDocumentBuilder:
             return None
         for normalized_key, key_pattern, confidence in KEY_ALIASES:
             if re.fullmatch(rf"{key_pattern}\s*[:：]?", line, flags=re.IGNORECASE):
-                return self._make_field(line.strip(" :："), next_line, normalized_key, max(0.5, confidence - 0.08), f"{line} {next_line}", "candidate")
+                value = next_line
+                if normalized_key in {"supplier_name", "customer_name"}:
+                    value = _sanitize_party_candidate(value) or next_line
+                return self._make_field(line.strip(" :："), value, normalized_key, max(0.5, confidence - 0.08), f"{line} {next_line}", "candidate")
         return None
 
     def _field_from_strong_pattern(self, line: str) -> dict[str, Any] | None:
@@ -401,4 +485,37 @@ class AiParsedDocumentBuilder:
 
 
 def _clean_lines(raw_text: str) -> list[str]:
-    return [line.strip() for line in str(raw_text or "").splitlines() if line and line.strip()]
+    cleaned: list[str] = []
+    for raw_line in str(raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        folded = line.casefold()
+        if re.search(r"(^|\s)/(?:workspace|tmp|var|users)/", folded) or re.search(
+            r"(vl_remote_uploads|vl_rendered_pages|uploads/|document_details/).+\.(?:pdf|png|jpe?g|webp|tiff?)",
+            folded,
+        ):
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
+def _sanitize_party_candidate(value: Any) -> str | None:
+    text = str(value or "").strip(" :：")
+    if not text:
+        return None
+    text = re.sub(r"^(?:상호|회사명|업체명|거래처명|공급자|공급업체|공급받는자|고객사|수신)\s*[:：]?\s*", "", text).strip()
+    text = re.sub(r"\s*(?:사업자|등록번호|대표|업태|업종|담당|담당자|주소|전화|이메일|품목|No\b|문서번호|작성일|발행일|견적일|납품일|검사일|거래일|합계|공급가액|세액).*$", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
+    text = re.sub(r"\s*(?:\(?주\)?|주식회사)$", "", text).strip()
+    if not text or len(text) > 40:
+        return None
+    if re.search(r"[/\\]|^\d|[_]{2,}|-{3,}|(?:20\d{2}[./-]\d{1,2})", text):
+        return None
+    if re.search(r"(문서번호|발주서|견적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|비고|출고창고|입고창고|창고|warehouse)", text, flags=re.IGNORECASE):
+        return None
+    if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|번길|주소)", text):
+        return None
+    if not re.search(r"[가-힣A-Za-z]", text):
+        return None
+    return text

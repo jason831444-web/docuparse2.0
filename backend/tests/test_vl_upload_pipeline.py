@@ -267,6 +267,42 @@ def test_ai_parsed_warehouse_candidates_do_not_fill_vendor_or_customer():
     assert "ai_parsed_document_mapping" not in metadata
 
 
+def test_ai_parsed_review_only_party_candidate_does_not_fill_confirmed_fields():
+    document = _document(document_type=DocumentType.delivery_note, vendor_name=None, customer_name=None, merchant_name=None)
+    metadata = {}
+    ai_parsed = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {
+                        "key": "상단 거래처 후보",
+                        "value": "대한유통",
+                        "normalized_key": "party_name",
+                        "evidence": "대한유통",
+                        "status": "review_only",
+                        "confidence": 0.48,
+                    }
+                ],
+            }
+        ]
+    }
+
+    _processor(FakeVLWorker())._apply_ai_parsed_document_candidates(
+        document,
+        ai_parsed,
+        metadata,
+        "대한유통\n납품서\n문서번호 DN-2026-0003",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    mapping = metadata["ai_parsed_document_mapping"]
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+    assert mapping["review_only_fields"][0]["reason"] == "ai_parsed_document_review_only"
+
+
 def test_final_party_safety_removes_document_numbers_and_upload_paths():
     document = _document(
         document_type=DocumentType.receipt,

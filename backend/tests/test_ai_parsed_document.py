@@ -82,3 +82,45 @@ def test_ai_parsed_document_header_ocr_skip_policy_uses_candidates_and_optional_
     optional_decision = builder.should_skip_header_ocr(raw_text="영수증\n거래일시 2026.06.13", document_type_hint="receipt")
     assert optional_decision["skip"] is True
     assert optional_decision["reason"] == "document_type_policy_document_number_optional"
+
+
+def test_ai_parsed_document_removes_path_lines_and_keeps_party_candidates():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="\n".join(
+            [
+                "/workspace/docuparse-gpu-test/uploads/vl_remote_uploads/abc-DOC-001.jpg",
+                "세금계산서",
+                "공급자",
+                "상호: (주)삼광유통",
+                "사업자번호 123-45-67890",
+                "공급받는자",
+                "상호: (주)신우정밀",
+            ]
+        ),
+        tables=[],
+        document_type_hint="invoice",
+    )
+
+    fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
+    values = {field["normalized_key"]: field["value"] for field in fields if field.get("normalized_key") in {"supplier_name", "customer_name"}}
+    evidence = "\n".join(str(field.get("evidence") or "") for field in fields)
+    assert values == {"supplier_name": "삼광유통", "customer_name": "신우정밀"}
+    assert "/workspace/" not in evidence
+
+
+def test_ai_parsed_document_top_line_party_is_review_only_without_pos_context():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="대한유통\n납품서\n문서번호 DN-2026-0003",
+        tables=[],
+        document_type_hint="delivery_note",
+    )
+
+    fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
+    top_line = next(field for field in fields if field["key"] == "상단 거래처 후보")
+    assert top_line["value"] == "대한유통"
+    assert top_line["status"] == "review_only"
+    assert top_line["normalized_key"] == "party_name"
