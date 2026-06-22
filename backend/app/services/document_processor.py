@@ -2494,6 +2494,10 @@ class DocumentProcessor:
                 continue
             if not current_role:
                 continue
+            if re.search(r"^(사업자|등록번호|대표|업태|업종|담당|담당자|주소|전화|이메일|품목|No\b|문서번호|작성일|발행일|견적일|납품일|검사일|거래일)", line, flags=re.IGNORECASE):
+                current_role = None
+                wait_for_value_after_key = False
+                continue
             key_value = re.sub(r"^(상호|회사명|업체명|거래처명|고객사|수신)\s*[:：]?\s*", "", line).strip()
             if key_value != line:
                 candidate = self._normalize_party_name(key_value)
@@ -2507,7 +2511,7 @@ class DocumentProcessor:
                     continue
                 wait_for_value_after_key = True
                 continue
-            if wait_for_value_after_key or self._looks_like_standalone_party_value(line):
+            if wait_for_value_after_key:
                 candidate = self._normalize_party_name(line)
                 if candidate:
                     if current_role == "vendor" and not vendor:
@@ -2525,7 +2529,7 @@ class DocumentProcessor:
         else:
             label = r"(?:공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
             stop = r"(?:비고|품목|No\b|문서번호|작성일|발행일)"
-        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|회사명|업체명|거래처명)?\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
+        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|회사명|업체명|거래처명)\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if not match:
             return None
@@ -2629,6 +2633,10 @@ class DocumentProcessor:
         if re.search(r"\d{2,4}[-)\s]?\d{3,4}[-\s]?\d{4}", text):
             return True
         if re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?\b", text):
+            return True
+        if re.search(r"[_]{3,}|-{3,}|^\d|일로부터|납기|월말|정산|검수|입고|TEST", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(세금\s*계산서|입고\s*검사|검사\s*기록|검사\s*성적|견적서|발주서|납품서|거래\s*명세서|영수증|자재\s*이동|commercial\s+invoice)", text, flags=re.IGNORECASE):
             return True
         if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|로\s*\d|번길|주소)", text):
             return True
