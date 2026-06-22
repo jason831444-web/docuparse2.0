@@ -249,6 +249,55 @@ def test_dangerous_contamination_counts_confirmed_no_price_amounts():
     assert regression.dangerous_contamination_failures(failures) == failures
 
 
+def test_expected_metadata_row_uses_aliases_for_report_display():
+    expected = regression._expected_from_metadata_row(
+        {
+            "filename": "receipt.jpg",
+            "document_type": "receipt",
+            "receipt_no": "RC-2026-0001",
+            "merchant_name": "가온마트",
+            "transaction_date": "2026.06.12",
+            "total": 75500,
+            "line_items": 3,
+        }
+    )
+
+    assert expected["document_number"] == "RC-2026-0001"
+    assert expected["vendor"] == "가온마트"
+    assert expected["issue_date"] == "2026.06.12"
+    assert expected["total_amount"] == 75500
+    assert regression.summarize_expected(expected)["line_item_count"] == 3
+
+
+def test_compare_separates_fixture_label_mismatch_from_type_mismatch():
+    expected = {"document_type": "quotation"}
+    actual = {
+        "document_type": "purchase_order",
+        "raw_text": "발주서\n문서번호 PO-2026-0001\n공급업체 한빛정밀",
+        "workflow_metadata": {"taxonomy": {"document_profile": "purchase_order"}},
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    codes = {issue["code"] for issue in result["warnings"]}
+    assert "fixture_label_mismatch" in codes
+    assert "document_type_mismatch" not in codes
+
+
+def test_compare_accepts_taxonomy_alias_for_general_document_expected_type():
+    expected = {"document_type": "general_document"}
+    actual = {
+        "document_type": "memo",
+        "category": "purchase_memo",
+        "tags": ["purchase_memo"],
+        "workflow_metadata": {"taxonomy": {"document_profile": "purchase_memo"}},
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert "document_type_mismatch" not in {issue["code"] for issue in result["warnings"]}
+
+
 def test_compare_matches_rows_by_internal_item_code_when_document_code_is_ocr_truncated():
     expected = {
         "no_price_document": True,

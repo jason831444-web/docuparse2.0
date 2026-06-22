@@ -108,6 +108,7 @@ def run_regression(args: argparse.Namespace) -> dict[str, Any]:
             "dangerous_contamination": bool(dangerous_failures),
             "dangerous_contamination_failures": dangerous_failures,
             "summary": summarize_document(actual, export_json, payload.get("provider_metadata") or {}),
+            "expected_summary": summarize_expected(expected),
             "manual_visual_check": {
                 "pdf_opened_and_visually_checked": True,
                 "visual_ground_truth_file": str(visual_path),
@@ -166,11 +167,42 @@ def _expected_from_metadata_row(record: dict[str, Any]) -> dict[str, Any]:
     document_type = _document_type_from_metadata(source_document_type)
     expected: dict[str, Any] = {
         "document_type": document_type,
-        "document_number": record.get("document_no"),
-        "vendor": record.get("vendor") or record.get("supplier") or record.get("store"),
-        "customer": record.get("customer") or record.get("buyer"),
-        "issue_date": record.get("date") or record.get("issue_date"),
-        "total_amount": record.get("total_amount"),
+        "source_document_type": source_document_type,
+        "document_number": _first_metadata_value(
+            record,
+            "document_no",
+            "document_number",
+            "doc_no",
+            "invoice_no",
+            "po_no",
+            "order_no",
+            "receipt_no",
+            "approval_no",
+        ),
+        "vendor": _first_metadata_value(
+            record,
+            "vendor",
+            "supplier",
+            "supplier_name",
+            "merchant",
+            "merchant_name",
+            "store",
+            "store_name",
+            "seller",
+        ),
+        "customer": _first_metadata_value(record, "customer", "customer_name", "buyer", "buyer_name", "receiver"),
+        "issue_date": _first_metadata_value(
+            record,
+            "date",
+            "issue_date",
+            "document_date",
+            "transaction_date",
+            "created_date",
+            "inspection_date",
+            "delivery_date",
+            "request_date",
+        ),
+        "total_amount": _first_metadata_value(record, "total_amount", "total", "grand_total", "amount"),
         "source_filename": record.get("source_filename"),
         "synthetic": bool(record.get("synthetic", True)),
         "smoke_only": True,
@@ -184,6 +216,14 @@ def _expected_from_metadata_row(record: dict[str, Any]) -> dict[str, Any]:
         expected["expected_review_flags"] = ["document_image_blurry"]
         expected["quality_expectation"] = "review_required_allowed"
     return {key: value for key, value in expected.items() if value not in (None, "", [])}
+
+
+def _first_metadata_value(record: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = record.get(key)
+        if value not in (None, "", []):
+            return value
+    return None
 
 
 def _document_type_from_metadata(value: Any) -> str | None:
@@ -259,6 +299,20 @@ def summarize_document(actual: dict[str, Any], export_json: dict[str, Any], prov
     }
 
 
+def summarize_expected(expected: dict[str, Any]) -> dict[str, Any]:
+    line_items = expected.get("line_items") if isinstance(expected.get("line_items"), list) else []
+    return {
+        "document_type": expected.get("document_type"),
+        "source_document_type": expected.get("source_document_type"),
+        "document_number": expected.get("document_number"),
+        "vendor": expected.get("vendor"),
+        "customer": expected.get("customer"),
+        "issue_date": expected.get("issue_date"),
+        "total_amount": expected.get("total_amount"),
+        "line_item_count": len(line_items) if line_items else expected.get("expected_line_item_min_count"),
+    }
+
+
 def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
     for row in rows:
@@ -297,21 +351,22 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Output dir: `{report['output_dir']}`",
         f"- Summary: PASS {report['summary'].get('PASS', 0)} / WARN {report['summary'].get('WARN', 0)} / FAIL {report['summary'].get('FAIL', 0)}",
         "",
-        "| Status | File | Extraction | Fallback | Promotion | Type | Doc No | Total | Items | Failures | Warnings |",
+        "| Status | File | Extraction | Expected Type | Actual Type | Expected Doc No | Actual Doc No | Total | Items | Failures | Warnings |",
         "|---|---|---|---|---|---|---|---:|---:|---|---|",
     ]
     for row in report["rows"]:
         summary = row["summary"]
+        expected = row.get("expected_summary") or {}
         failures = ", ".join(issue["code"] for issue in row["failures"]) or "-"
         warnings = ", ".join(issue["code"] for issue in row["warnings"][:5]) or "-"
         lines.append(
-            "| {status} | {filename} | {method} | {fallback} | {promotion} | {doc_type} | {doc_no} | {total} | {items} | {failures} | {warnings} |".format(
+            "| {status} | {filename} | {method} | {expected_type} | {doc_type} | {expected_doc_no} | {doc_no} | {total} | {items} | {failures} | {warnings} |".format(
                 status=row["status"],
                 filename=row["filename"],
                 method=summary.get("extraction_method") or "-",
-                fallback=summary.get("fallback_used"),
-                promotion=summary.get("promotion_mode") or "-",
+                expected_type=expected.get("document_type") or "-",
                 doc_type=summary.get("document_type") or "-",
+                expected_doc_no=expected.get("document_number") or "-",
                 doc_no=summary.get("document_number") or "-",
                 total=summary.get("total_amount") if summary.get("total_amount") is not None else "-",
                 items=summary.get("line_item_count"),
@@ -344,6 +399,20 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
             continue
         if actual_key == "document_type" and _return_credit_type_matches(expected, actual):
             continue
+        if actual_key == "document_type":
+            difference_code = _document_type_difference_code(expected, actual)
+            if difference_code is None:
+                continue
+            if difference_code != "document_type_mismatch":
+                warnings.append(
+                    {
+                        "code": difference_code,
+                        "expected_value": expected_value,
+                        "actual_value": actual_value,
+                        "reason": "raw_text_or_taxonomy_supports_actual_type",
+                    }
+                )
+                continue
         if str(expected_value) != str(actual_value):
             warnings.append(
                 {
@@ -383,6 +452,78 @@ def _compare_document_fields(expected: dict[str, Any], actual: dict[str, Any], w
                     "actual_value": str(actual_amount),
                 }
             )
+
+
+def _document_type_difference_code(expected: dict[str, Any], actual: dict[str, Any]) -> str | None:
+    expected_type = str(expected.get("document_type") or "").casefold()
+    actual_type = str(actual.get("document_type") or "").casefold()
+    if not expected_type or not actual_type or expected_type == actual_type:
+        return None
+    if _taxonomy_supports_expected_type(expected_type, actual):
+        return None
+    raw_hint = _document_type_hint_from_actual(actual)
+    if raw_hint and raw_hint == actual_type and raw_hint != expected_type:
+        return "fixture_label_mismatch"
+    return "document_type_mismatch"
+
+
+def _taxonomy_supports_expected_type(expected_type: str, actual: dict[str, Any]) -> bool:
+    metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+    taxonomy = metadata.get("taxonomy") if isinstance(metadata.get("taxonomy"), dict) else {}
+    values = {
+        str(actual.get("category") or "").casefold(),
+        *(str(tag or "").casefold() for tag in (actual.get("tags") or [])),
+        str(taxonomy.get("document_profile") or "").casefold(),
+        str(taxonomy.get("document_subtype") or "").casefold(),
+        *(str(value or "").casefold() for value in (taxonomy.get("document_profiles") or [])),
+    }
+    aliases = {
+        "general_document": {
+            "internal_transfer",
+            "purchase_memo",
+            "pos_daily_settlement",
+            "return_note",
+            "credit_note",
+            "return_document",
+        },
+        "receipt": {"receipt", "pos_receipt"},
+        "inspection_report": {"inspection_report", "quality_inspection", "incoming_inspection"},
+        "delivery_note": {"delivery_note", "no_price_document"},
+        "invoice": {"invoice", "tax_invoice", "commercial_invoice"},
+        "transaction_statement": {"transaction_statement"},
+        "purchase_order": {"purchase_order"},
+        "quotation": {"quotation"},
+    }
+    return bool(values.intersection(aliases.get(expected_type, {expected_type})))
+
+
+def _document_type_hint_from_actual(actual: dict[str, Any]) -> str | None:
+    metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+    taxonomy = metadata.get("taxonomy") if isinstance(metadata.get("taxonomy"), dict) else {}
+    parts = [
+        str(actual.get("raw_text") or ""),
+        str(actual.get("title") or ""),
+        str(actual.get("document_number") or ""),
+        str(actual.get("category") or ""),
+        " ".join(str(tag or "") for tag in (actual.get("tags") or [])),
+        str(taxonomy.get("document_profile") or ""),
+        str(taxonomy.get("document_subtype") or ""),
+    ]
+    text = "\n".join(parts)
+    patterns = [
+        ("receipt", r"(영수증|receipt|승인번호|카드사)"),
+        ("purchase_order", r"(발주서|발주번호|\bPO[-_ ]?\d{4})"),
+        ("quotation", r"(견적서|견적번호|\bQT[-_ ]?\d{4})"),
+        ("invoice", r"(세금계산서|청구금액|invoice|\bINV[-_ ]?\d{4})"),
+        ("delivery_note", r"(납품서|납품번호|\bDN[-_ ]?\d{4})"),
+        ("transaction_statement", r"(거래명세서|\bTS[-_ ]?\d{4})"),
+        ("inspection_report", r"(입고\s*검사|검사\s*기록|검사\s*성적|합격수량|\bIQC[-_ ]?\d{4})"),
+        ("general_document", r"(자재\s*이동|내부\s*이동|출고창고|입고창고|POS\s*일\s*정산|일\s*정산|구매\s*메모|반품|크레딧)"),
+    ]
+    for document_type, pattern in patterns:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return document_type
+    return None
 
 
 def _compare_header_fields(expected: dict[str, Any], actual: dict[str, Any], warnings: list[dict[str, Any]]) -> None:

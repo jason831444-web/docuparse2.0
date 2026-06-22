@@ -219,6 +219,7 @@ class DocumentProcessor:
         stage_timings: dict[str, int] = {}
         stage_events: list[dict[str, Any]] = []
         prepare_metadata: dict[str, Any] = {}
+        postprocess_details: dict[str, Any] = {}
         document.processing_status = ProcessingStatus.processing
         document.processing_error = None
         db.add(document)
@@ -250,7 +251,7 @@ class DocumentProcessor:
                 )
             else:
                 normalized = self.ingestion.ingest(stored_path, document.original_filename, document.mime_type)
-            raw_text = normalized.normalized_text
+            raw_text = self._clean_vl_raw_text(normalized.normalized_text)
             parser_started = time.perf_counter()
             parsed = self.parser.parse(raw_text, document.original_filename)
             self._record_elapsed(stage_timings, "parser_ms", parser_started)
@@ -424,18 +425,25 @@ class DocumentProcessor:
                     document.ai_document_type = parsed.document_type
                     document.category = parsed.category or parsed.document_type.value
                     document.tags = [parsed.document_type.value]
-                item_master_started = time.perf_counter()
-                document.line_items = sanitize_for_postgres(
-                    self.item_master_matcher.match_line_items(
-                        db,
-                        self._line_items_for_extraction_method(
-                            document.line_items or [],
-                            normalized.extraction_method,
-                            preserve_signed_amount_rows=preserve_return_credit_amounts,
-                        ),
+                item_master_skip_reason = self._item_master_skip_reason(document, raw_text, parsed)
+                if item_master_skip_reason:
+                    stage_timings["item_master_ms"] = 0
+                    postprocess_details["item_master_skipped_reason"] = item_master_skip_reason
+                    postprocess_details["item_master_skipped"] = True
+                else:
+                    item_master_started = time.perf_counter()
+                    document.line_items = sanitize_for_postgres(
+                        self.item_master_matcher.match_line_items(
+                            db,
+                            self._line_items_for_extraction_method(
+                                document.line_items or [],
+                                normalized.extraction_method,
+                                preserve_signed_amount_rows=preserve_return_credit_amounts,
+                            ),
+                        )
                     )
-                )
-                self._record_elapsed(stage_timings, "item_master_ms", item_master_started)
+                    self._record_elapsed(stage_timings, "item_master_ms", item_master_started)
+                    postprocess_details["item_master_skipped"] = False
                 if preserve_return_credit_amounts:
                     document.line_items = sanitize_for_postgres(
                         self._restore_return_credit_visible_amounts(
@@ -490,6 +498,8 @@ class DocumentProcessor:
             document.urgency_level = workflow.urgency_level
             document.follow_up_required = workflow.follow_up_required
             workflow_metadata = workflow.workflow_metadata or {}
+            if postprocess_details:
+                workflow_metadata["postprocess_details"] = postprocess_details
             if ai_merge_review_issues:
                 issues = list(workflow_metadata.get("normalized_review_issues") or [])
                 existing = {
@@ -1012,6 +1022,28 @@ class DocumentProcessor:
             if extracted:
                 return extracted
         return None
+
+    def _clean_vl_raw_text(self, text: str) -> str:
+        cleaned_lines: list[str] = []
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if self._looks_like_generated_upload_path_line(line):
+                continue
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
+
+    def _looks_like_generated_upload_path_line(self, line: str) -> bool:
+        text = str(line or "").strip()
+        if not text:
+            return False
+        folded = text.casefold()
+        if not re.search(r"(/workspace/|/tmp/|vl[_-]?(?:remote[_-]?uploads|rendered[_-]?pages)|uploads?[/\\])", folded):
+            return False
+        if re.search(r"\.(?:pdf|png|jpe?g|webp|tiff?|bmp)(?:$|\s*$)", folded):
+            return True
+        return bool(re.fullmatch(r".*(?:/workspace/|/tmp/).+", folded))
 
     def _document_quality_for_source(self, stored_path: Path) -> tuple[dict | None, list[Path]]:
         suffix = stored_path.suffix.casefold().lstrip(".")
@@ -2286,10 +2318,27 @@ class DocumentProcessor:
             )
         return line_items or []
 
+    def _item_master_skip_reason(self, document: Document, raw_text: str, parsed: object | None = None) -> str | None:
+        line_items = [item for item in (document.line_items or []) if isinstance(item, dict)]
+        if self._looks_like_pos_settlement_document(document, raw_text, line_items):
+            return "pos_daily_settlement_not_manufacturing_item_document"
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        parsed_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
+        if doc_type == "receipt" or parsed_type == "receipt":
+            semantic_text = "\n".join([
+                str(raw_text or ""),
+                str(document.category or ""),
+                " ".join(str(tag or "") for tag in (document.tags or [])),
+            ])
+            if not self._purchase_memo_signal(semantic_text):
+                return "receipt_not_manufacturing_item_document"
+        return None
+
     def _apply_final_business_safety_overrides(self, document: Document, raw_text: str) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         line_items = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
         self._promote_receipt_top_line_merchant_candidate(document, raw_text)
+        self._promote_party_block_candidates(document, raw_text)
 
         if self._return_credit_signal_for_document(document, raw_text):
             previous_type = document.document_type
@@ -2408,6 +2457,98 @@ class DocumentProcessor:
         document.customer_name = self._normalize_party_name(document.customer_name)
         document.merchant_name = self._normalize_party_name(document.merchant_name)
 
+    def _promote_party_block_candidates(self, document: Document, raw_text: str) -> None:
+        if document.vendor_name and document.customer_name:
+            return
+        vendor, customer = self._party_block_candidates(raw_text)
+        if vendor and not document.vendor_name:
+            document.vendor_name = sanitize_for_postgres(vendor)
+            self._record_party_mapping_source(document, "vendor_name", "raw_text_party_block")
+        if customer and not document.customer_name:
+            document.customer_name = sanitize_for_postgres(customer)
+            self._record_party_mapping_source(document, "customer_name", "raw_text_party_block")
+
+    def _party_block_candidates(self, raw_text: str) -> tuple[str | None, str | None]:
+        text = self._clean_vl_raw_text(raw_text)
+        vendor = self._party_block_regex_candidate(text, "vendor")
+        customer = self._party_block_regex_candidate(text, "customer")
+        if vendor and customer:
+            return vendor, customer
+
+        current_role: str | None = None
+        wait_for_value_after_key = False
+        for raw_line in text.splitlines()[:80]:
+            line = self._clean_text_fragment(raw_line)
+            if not line:
+                continue
+            role, inline_value = self._party_role_from_line(line)
+            if role:
+                current_role = role
+                wait_for_value_after_key = False
+                candidate = self._normalize_party_name(inline_value)
+                if candidate:
+                    if role == "vendor" and not vendor:
+                        vendor = candidate
+                    elif role == "customer" and not customer:
+                        customer = candidate
+                continue
+            if not current_role:
+                continue
+            key_value = re.sub(r"^(상호|회사명|업체명|거래처명|고객사|수신)\s*[:：]?\s*", "", line).strip()
+            if key_value != line:
+                candidate = self._normalize_party_name(key_value)
+                if candidate:
+                    if current_role == "vendor" and not vendor:
+                        vendor = candidate
+                    elif current_role == "customer" and not customer:
+                        customer = candidate
+                    current_role = None
+                    wait_for_value_after_key = False
+                    continue
+                wait_for_value_after_key = True
+                continue
+            if wait_for_value_after_key or self._looks_like_standalone_party_value(line):
+                candidate = self._normalize_party_name(line)
+                if candidate:
+                    if current_role == "vendor" and not vendor:
+                        vendor = candidate
+                    elif current_role == "customer" and not customer:
+                        customer = candidate
+                    current_role = None
+                    wait_for_value_after_key = False
+        return vendor, customer
+
+    def _party_block_regex_candidate(self, text: str, role: str) -> str | None:
+        if role == "vendor":
+            label = r"(?:공급자|공급업체|매입처|vendor|supplier)"
+            stop = r"(?:공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
+        else:
+            label = r"(?:공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
+            stop = r"(?:비고|품목|No\b|문서번호|작성일|발행일)"
+        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|회사명|업체명|거래처명)?\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        return self._normalize_party_name(match.group("value"))
+
+    def _party_role_from_line(self, line: str) -> tuple[str | None, str | None]:
+        match = re.match(r"^(공급자|공급업체|매입처|vendor|supplier)\s*[:：]?\s*(.*)$", line, flags=re.IGNORECASE)
+        if match:
+            return "vendor", match.group(2).strip() or None
+        match = re.match(r"^(공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)\s*[:：]?\s*(.*)$", line, flags=re.IGNORECASE)
+        if match:
+            return "customer", match.group(2).strip() or None
+        return None, None
+
+    def _looks_like_standalone_party_value(self, line: str) -> bool:
+        if self._looks_like_non_party_identifier(line):
+            return False
+        if re.search(r"(상호|회사명|업체명|거래처명|사업자|등록번호|대표|업태|담당|전화|주소)", line):
+            return False
+        if re.search(r"(품목|규격|수량|단가|공급가액|세액|합계|비고|문서번호|작성일|발행일)", line):
+            return False
+        return bool(re.search(r"[가-힣A-Za-z]", line)) and len(line) <= 40
+
     def _promote_receipt_top_line_merchant_candidate(self, document: Document, raw_text: str) -> None:
         if document.vendor_name and document.merchant_name:
             return
@@ -2485,6 +2626,16 @@ class DocumentProcessor:
         if "/" in text or "\\" in text:
             if re.search(r"(/workspace/|/uploads?/|vl[_ -]?(?:remote[_ -]?uploads|rendered[_ -]?pages)|\\uploads?\\)", folded):
                 return True
+        if re.search(r"\d{2,4}[-)\s]?\d{3,4}[-\s]?\d{4}", text):
+            return True
+        if re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?\b", text):
+            return True
+        if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|로\s*\d|번길|주소)", text):
+            return True
+        if re.search(r"(출고창고|입고창고|source\s*warehouse|destination\s*warehouse|warehouse)", text, flags=re.IGNORECASE):
+            return True
+        if len(text) > 60:
+            return True
         if re.fullmatch(
             r"(?:I?DOC|PO|INV|DN|RCM|TS|IQC|MV|QT|PM|POS|RC)[-_ ]?[Oo0]?\d{2,}(?:[-_ ]?\d+)?",
             text,

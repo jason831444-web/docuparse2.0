@@ -282,6 +282,50 @@ def test_final_party_safety_removes_document_numbers_and_upload_paths():
     assert document.merchant_name is None
 
 
+def test_vl_raw_text_cleaner_removes_generated_upload_path_lines():
+    processor = _processor(FakeVLWorker())
+
+    cleaned = processor._clean_vl_raw_text(
+        "/workspace/docuparse-gpu-test/uploads/vl_remote_uploads/abc-DOC-001.jpg\n"
+        "발주서\n문서번호 PO-2026-0001\n"
+        "/workspace/docuparse-gpu-test/uploads/vl_rendered_pages/abc-page-1.png\n"
+        "대성정공"
+    )
+
+    assert "/workspace/" not in cleaned
+    assert cleaned.splitlines() == ["발주서", "문서번호 PO-2026-0001", "대성정공"]
+
+
+def test_party_sanitizer_removes_address_phone_and_warehouse_values():
+    document = _document(
+        document_type=DocumentType.general_document,
+        vendor_name="경기도 시흥시 공단로 18 | 031-555-1290",
+        customer_name="출고창고 A-01 원자재",
+        merchant_name="66.92.198.186:11059",
+    )
+
+    _processor(FakeVLWorker())._normalize_party_fields(document)
+
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+
+
+def test_supplier_customer_block_promotes_labeled_party_candidates():
+    document = _document(document_type=DocumentType.invoice, vendor_name=None, customer_name=None)
+
+    _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "세금계산서\n공급자\n상호: (주)삼광유동\n사업자번호 123-45-67890\n"
+        "공급받는자\n상호: (주)신우정밀\n품목 수량 단가",
+    )
+
+    assert document.vendor_name == "삼광유동"
+    assert document.customer_name == "신우정밀"
+    assert document.field_sources["vendor_name"] == "raw_text_party_block"
+    assert document.field_sources["customer_name"] == "raw_text_party_block"
+
+
 def test_pos_safety_branch_still_removes_identifier_party_values():
     document = _document(
         document_type=DocumentType.receipt,
@@ -302,6 +346,21 @@ def test_pos_safety_branch_still_removes_identifier_party_values():
     assert document.category == "pos_daily_settlement"
     assert document.vendor_name is None
     assert document.merchant_name is None
+
+
+def test_item_master_skip_reason_for_pos_and_receipt_documents():
+    processor = _processor(FakeVLWorker())
+    pos_doc = _document(
+        document_type=DocumentType.general_document,
+        title="일정산",
+        category="pos_daily_settlement",
+        tags=["pos_daily_settlement"],
+        line_items=[{"item_name": "순 판매 금액", "line_total": 1000}],
+    )
+    receipt_doc = _document(document_type=DocumentType.receipt, line_items=[{"item_name": "절삭유", "quantity": 2}])
+
+    assert processor._item_master_skip_reason(pos_doc, "POS 일정산\n순 판매 금액 1,000") == "pos_daily_settlement_not_manufacturing_item_document"
+    assert processor._item_master_skip_reason(receipt_doc, "영수증\n절삭유 2 38,000") == "receipt_not_manufacturing_item_document"
 
 
 def test_receipt_top_line_promotes_merchant_and_vendor_candidate():
