@@ -1828,6 +1828,114 @@ def test_ai_parsed_document_pos_settlement_table_is_not_promoted_to_line_items()
     ]
 
 
+def test_ai_parsed_document_inspection_table_with_pos_item_is_preserved_not_pos_settlement():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.general_document, category="pos_daily_settlement", tags=["incoming_inspection"], line_items=[])
+    workflow_metadata = {}
+    ai_doc = {
+        "policy": {"amount_allowed": False},
+        "sections": [
+            {
+                "type": "table",
+                "title": "입고 검사 목록",
+                "columns": ["No", "품명", "Lot Code", "입고수량", "판정", "비고"],
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "cells": {"품명": "POS 영수증 용지", "Lot Code": "POS-PAPER", "입고수량": "50", "판정": "재검", "비고": "스크래치 확인"},
+                        "canonical_cells": {
+                            "item_name": "POS 영수증 용지",
+                            "lot_code": "POS-PAPER",
+                            "received_quantity": "50",
+                            "inspection_result": "재검",
+                            "note": "스크래치 확인",
+                            "line_total": "999999",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    issues = processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "입고 검사기록서 검사항목 판정 POS 영수증 용지 POS-PAPER 50 재검",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.category != "pos_daily_settlement"
+    assert document.line_items[0]["item_name"] == "POS 영수증 용지"
+    assert "line_total" not in document.line_items[0]
+    assert workflow_metadata["inspection_row_candidates"][0]["fields"]["item_name"] == "POS 영수증 용지"
+    assert "ai_parsed_document_table_candidate_promoted_for_review" in {issue["code"] for issue in issues}
+
+
+def test_ai_parsed_document_receipt_fragments_are_review_only_candidates():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.receipt, tags=["receipt"], line_items=[])
+    workflow_metadata = {}
+    ai_doc = {"sections": [{"type": "notes", "items": ["영수증"]}], "policy": {"amount_allowed": True}}
+    raw_text = "청년식당\nPCB Connector 12P\n5EA X 620 3100\n합계 3,100\n카드승인번호 RC-001"
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        raw_text,
+        "image_ocr_fast_path",
+    )
+
+    assert document.line_items == []
+    candidate = workflow_metadata["receipt_item_candidates"][0]
+    assert candidate["status"] == "review_only"
+    assert candidate["item_name"] == "PCB Connector 12P"
+    assert candidate["quantity"] == "5"
+    assert candidate["line_total"] == "3100"
+
+
+def test_ai_parsed_document_purchase_memo_rows_are_requested_item_candidates():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.memo, category="purchase_memo", tags=["purchase_memo"], line_items=[])
+    workflow_metadata = {}
+    ai_doc = {"sections": [{"type": "notes", "items": ["구매 메모"]}], "policy": {"amount_allowed": False}}
+    raw_text = "구매 메모\n-SUS 볼트 M5x20 300EA 단가 확인필요\n- PCB Connector 12P 50EA 단가 620"
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        raw_text,
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    candidates = workflow_metadata["requested_item_candidates"]
+    assert [candidate["item_name"] for candidate in candidates] == ["SUS 볼트 M5x20", "PCB Connector 12P"]
+    assert candidates[0]["price_status"] == "review_required"
+    assert candidates[1]["unit_price"] == "620"
+    assert document.line_items == []
+
+
+def test_ai_parsed_document_records_gap_analysis_when_rows_are_missing_after_fast_path():
+    processor = DocumentProcessor()
+    document = _document(document_type=DocumentType.purchase_order, line_items=[])
+    workflow_metadata = {}
+    ai_doc = {"sections": [{"type": "notes", "items": ["Puchne Orde"]}], "policy": {"amount_allowed": True}}
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "Puchne Orde 총목코드 공급가역",
+        "image_ocr_fast_path",
+    )
+
+    analysis = workflow_metadata["line_item_gap_analysis"]
+    assert analysis["reason"] == "raw_text_missing_rows+vl_fallback_fast_path"
+    assert analysis["status"] == "no_review_row_candidates"
+
+
 def test_vl_upload_pipeline_is_noop_when_worker_is_disabled():
     worker = FakeVLWorker(enabled=False)
     document = _document(document_number="QT-UNCHANGED")

@@ -651,6 +651,37 @@ def test_compare_warns_when_expected_line_item_min_count_is_not_met():
     assert warning["warn_group"] == "extraction_quality"
 
 
+def test_compare_line_item_gap_reports_review_row_candidate_counts():
+    expected = {
+        "document_type": "receipt",
+        "expected_line_item_min_count": 4,
+    }
+    actual = {
+        "document_type": "receipt",
+        "tags": ["receipt"],
+        "line_items": [{"item_name": "양파", "quantity": 1}],
+        "workflow_metadata": {
+            "receipt_item_candidates": [
+                {"item_name": "PCB Connector", "status": "review_only"},
+                {"item_name": "SUS 볼트", "status": "review_only"},
+            ],
+            "review_row_candidates": [
+                {"item_name": "PCB Connector", "status": "review_only"},
+                {"item_name": "SUS 볼트", "status": "review_only"},
+            ],
+        },
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    warning = next(issue for issue in result["warnings"] if issue["code"] == "line_item_min_count_not_met")
+    analysis = warning["analysis"]
+    assert analysis["reason"] == "receipt_fragments_preserved_for_review"
+    assert analysis["review_row_candidate_count"] == 2
+    assert analysis["receipt_item_candidate_count"] == 2
+    assert analysis["next_action"] == "show_receipt_item_candidates_for_manual_review"
+
+
 def test_compare_splits_no_price_expected_safe_from_quality_warns():
     expected = {
         "document_type": "delivery_note",

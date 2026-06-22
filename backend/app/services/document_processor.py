@@ -1631,6 +1631,10 @@ class DocumentProcessor:
             "party_review_candidates": [],
             "document_number_candidates": [],
             "date_candidates": [],
+            "review_row_candidates": [],
+            "receipt_item_candidates": [],
+            "requested_item_candidates": [],
+            "inspection_row_candidates": [],
             "table_line_items_added": 0,
             "table_line_items_skipped_reasons": [],
         }
@@ -1641,6 +1645,21 @@ class DocumentProcessor:
 
         semantic_issues = self._apply_ai_parsed_semantic_policy(document, ai_parsed_document, raw_text)
         issues.extend(semantic_issues)
+        review_row_candidates = self._build_ai_review_row_candidates(
+            document,
+            ai_parsed_document,
+            raw_text,
+            extraction_method,
+        )
+        for key in (
+            "review_row_candidates",
+            "receipt_item_candidates",
+            "requested_item_candidates",
+            "inspection_row_candidates",
+        ):
+            applied[key] = review_row_candidates.get(key) or []
+        if review_row_candidates.get("line_item_gap_analysis"):
+            applied["line_item_gap_analysis"] = review_row_candidates["line_item_gap_analysis"]
 
         added_items = (
             self._ai_parsed_table_line_item_candidates(document, ai_parsed_document, raw_text)
@@ -1683,6 +1702,11 @@ class DocumentProcessor:
             or applied["party_review_candidates"]
             or applied["document_number_candidates"]
             or applied["date_candidates"]
+            or applied["review_row_candidates"]
+            or applied["receipt_item_candidates"]
+            or applied["requested_item_candidates"]
+            or applied["inspection_row_candidates"]
+            or applied.get("line_item_gap_analysis")
             or applied["table_line_items_added"]
             or applied["table_line_items_skipped_reasons"]
         ):
@@ -1693,6 +1717,16 @@ class DocumentProcessor:
                 workflow_metadata["document_number_candidates"] = applied["document_number_candidates"]
             if applied["date_candidates"]:
                 workflow_metadata["date_candidates"] = applied["date_candidates"]
+            for key in (
+                "review_row_candidates",
+                "receipt_item_candidates",
+                "requested_item_candidates",
+                "inspection_row_candidates",
+            ):
+                if applied[key]:
+                    workflow_metadata[key] = applied[key]
+            if applied.get("line_item_gap_analysis"):
+                workflow_metadata["line_item_gap_analysis"] = applied["line_item_gap_analysis"]
         return issues
 
     def _ai_parsed_key_value_fields(self, ai_parsed_document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2030,6 +2064,16 @@ class DocumentProcessor:
             if previous_type == "purchase_order":
                 document.review_required = True
             return issues
+        if self._ai_parsed_inspection_context(document, ai_parsed_document, combined):
+            if str(document.category or "").casefold() == "pos_daily_settlement":
+                document.category = "inspection_report"
+            tags = {
+                str(tag or "")
+                for tag in (document.tags or [])
+                if str(tag or "").casefold() not in {"pos_daily_settlement", "unsupported_pos_settlement"}
+            }
+            tags.update({"inspection_report", "no_price_document"})
+            document.tags = sorted(tag for tag in tags if tag)
         if self._internal_transfer_signal_for_document(document, combined):
             document.document_type = DocumentType.general_document
             document.ai_document_type = DocumentType.general_document
@@ -2113,6 +2157,8 @@ class DocumentProcessor:
         return bool(re.search(r"\b(?:TRF|MV)[-_ ]?\d{4}|자재\s*이동|내부\s*이동|출고창고|입고창고|이동사유|금액\s*/?\s*세액\s*없음", combined, flags=re.IGNORECASE))
 
     def _pos_daily_settlement_signal(self, text: str) -> bool:
+        if self._inspection_text_signal(text):
+            return False
         settlement_metric = re.search(
             r"(일\s*정산|매출\s*정산|순\s*판매\s*금액|실\s*판매\s*금액|총\s*판매\s*금액|카드\s*합계|현금\s*합계|온라인\s*결제|주문\s*횟수)",
             text,
@@ -2125,6 +2171,14 @@ class DocumentProcessor:
     def _purchase_memo_signal(self, text: str) -> bool:
         return bool(re.search(r"(구매\s*메모|발주\s*메모|purchase\s+memo|단가\s*확인\s*필요|자재\s*입고\s*요청|\bPM[-_ ]?\d{4})", text, flags=re.IGNORECASE))
 
+    def _inspection_text_signal(self, text: str) -> bool:
+        return bool(re.search(
+            r"(입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|inspection\s+report|"
+            r"검사\s*항목|입고\s*수량|합격\s*수량|불량\s*수량|판정|품질\s*확인)",
+            text or "",
+            flags=re.IGNORECASE,
+        ))
+
     def _ai_parsed_table_line_item_candidates(
         self,
         document: Document,
@@ -2132,7 +2186,8 @@ class DocumentProcessor:
         raw_text: str,
     ) -> list[dict[str, Any]]:
         semantic_text = self._ai_parsed_semantic_text(document, ai_parsed_document, raw_text)
-        if self._pos_daily_settlement_signal(semantic_text):
+        inspection_context = self._ai_parsed_inspection_context(document, ai_parsed_document, semantic_text)
+        if self._pos_daily_settlement_signal(semantic_text) and not inspection_context:
             return []
         if getattr(document.document_type, "value", str(document.document_type or "")) == "receipt" and not self._purchase_memo_signal(semantic_text):
             return []
@@ -2205,6 +2260,241 @@ class DocumentProcessor:
         item["review_flags"] = sorted(flags)
         item.setdefault("confidence", row.get("confidence") or 0.62)
         return item
+
+    def _build_ai_review_row_candidates(
+        self,
+        document: Document,
+        ai_parsed_document: dict[str, Any],
+        raw_text: str,
+        extraction_method: str | None,
+    ) -> dict[str, Any]:
+        semantic_text = self._ai_parsed_semantic_text(document, ai_parsed_document, raw_text)
+        inspection_candidates = self._inspection_review_row_candidates(document, ai_parsed_document, semantic_text)
+        receipt_candidates = self._receipt_review_row_candidates(document, raw_text, semantic_text)
+        requested_candidates = self._purchase_memo_review_row_candidates(document, raw_text, semantic_text)
+        review_candidates = [*inspection_candidates, *receipt_candidates, *requested_candidates]
+        result: dict[str, Any] = {
+            "review_row_candidates": review_candidates,
+            "receipt_item_candidates": receipt_candidates,
+            "requested_item_candidates": requested_candidates,
+            "inspection_row_candidates": inspection_candidates,
+        }
+        should_record_gap_analysis = (
+            extraction_method == "image_ocr_fast_path"
+            or any(
+                isinstance(section, dict) and section.get("type") == "table"
+                for section in ai_parsed_document.get("sections") or []
+            )
+            or self._purchase_memo_signal(semantic_text)
+            or self._ai_parsed_inspection_context(document, ai_parsed_document, semantic_text)
+            or self._document_type_value(document.document_type) == "receipt"
+        )
+        if not review_candidates and should_record_gap_analysis:
+            table_sections = [
+                section for section in ai_parsed_document.get("sections") or []
+                if isinstance(section, dict) and section.get("type") == "table"
+            ]
+            result["line_item_gap_analysis"] = {
+                "status": "no_review_row_candidates",
+                "reason": self._line_item_gap_reason(document, raw_text, ai_parsed_document, extraction_method),
+                "ai_table_section_count": len(table_sections),
+                "ai_table_row_count": sum(len(section.get("rows") or []) for section in table_sections),
+                "extraction_method": extraction_method,
+            }
+        return result
+
+    def _ai_parsed_inspection_context(self, document: Document, ai_parsed_document: dict[str, Any], text: str) -> bool:
+        doc_type = self._document_type_value(document.document_type)
+        if doc_type == "inspection_report":
+            return True
+        if str(document.category or "").casefold() in {"inspection_report", "incoming_inspection"}:
+            return True
+        if {"inspection_report", "incoming_inspection"}.intersection({str(tag or "").casefold() for tag in (document.tags or [])}):
+            return True
+        for section in ai_parsed_document.get("sections") or []:
+            if not isinstance(section, dict) or section.get("type") != "table":
+                continue
+            table_type = str(section.get("table_type_guess") or "").casefold()
+            columns = " ".join(str(column or "") for column in section.get("columns") or [])
+            if table_type in {"inspection_report", "incoming_inspection", "inspection_rows"} or self._inspection_text_signal(columns):
+                return True
+        return self._inspection_text_signal(text)
+
+    def _inspection_review_row_candidates(
+        self,
+        document: Document,
+        ai_parsed_document: dict[str, Any],
+        semantic_text: str,
+    ) -> list[dict[str, Any]]:
+        if not self._ai_parsed_inspection_context(document, ai_parsed_document, semantic_text):
+            return []
+        candidates: list[dict[str, Any]] = []
+        for section in ai_parsed_document.get("sections") or []:
+            if not isinstance(section, dict) or section.get("type") != "table":
+                continue
+            columns = [str(column or "") for column in section.get("columns") or []]
+            if not (self._inspection_text_signal(" ".join(columns)) or self._inspection_text_signal(str(section.get("title") or ""))):
+                continue
+            for row in section.get("rows") or []:
+                item = self._line_item_from_ai_table_row(row, no_price=True)
+                if not item:
+                    continue
+                candidate = {
+                    "section_type": "inspection_rows",
+                    "status": "review_only",
+                    "source": row.get("source") or "ai_parsed_document.table",
+                    "document_context": "inspection_report",
+                    "fields": item,
+                    "cells": row.get("cells") if isinstance(row.get("cells"), dict) else {},
+                    "row_index": row.get("row_index"),
+                    "confidence": row.get("confidence") or item.get("confidence") or 0.6,
+                    "reason": "inspection_table_row_preserved_for_review",
+                }
+                candidates.append(candidate)
+        return candidates
+
+    def _receipt_review_row_candidates(self, document: Document, raw_text: str, semantic_text: str) -> list[dict[str, Any]]:
+        if self._pos_daily_settlement_signal(semantic_text):
+            return []
+        doc_type = self._document_type_value(document.document_type)
+        tags = {str(tag or "").casefold() for tag in (document.tags or [])}
+        receipt_context = doc_type == "receipt" or "receipt" in tags or bool(re.search(r"(영수증|receipt|승인번호|카드사)", raw_text or "", flags=re.IGNORECASE))
+        if not receipt_context or self._purchase_memo_signal(semantic_text):
+            return []
+        lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
+        candidates: list[dict[str, Any]] = []
+        for index, line in enumerate(lines):
+            if self._receipt_footer_or_payment_line(line):
+                continue
+            parsed = self._parse_receipt_quantity_amount_line(line)
+            if not parsed:
+                continue
+            item_name = self._nearest_receipt_item_name(lines, index)
+            if not item_name:
+                continue
+            candidate = {
+                "section_type": "receipt_items",
+                "status": "review_only",
+                "source": "vl_raw_text.receipt_fragment",
+                "document_context": "receipt",
+                "item_name": item_name,
+                "quantity": parsed.get("quantity"),
+                "unit": parsed.get("unit"),
+                "unit_price": parsed.get("unit_price"),
+                "line_total": parsed.get("line_total"),
+                "evidence": line,
+                "reason": "receipt_fragmented_row_preserved_for_review",
+                "confidence": 0.46,
+            }
+            candidates.append(candidate)
+            if len(candidates) >= 40:
+                break
+        return candidates
+
+    def _purchase_memo_review_row_candidates(self, document: Document, raw_text: str, semantic_text: str) -> list[dict[str, Any]]:
+        if not self._purchase_memo_signal(semantic_text):
+            return []
+        candidates: list[dict[str, Any]] = []
+        for line in [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]:
+            if self._summary_footer_pattern().search(line):
+                continue
+            match = re.search(
+                r"^[\-•·*]?\s*(?P<item>.+?)\s+(?P<qty>\d+(?:[.,]\d+)?)\s*(?P<unit>EA|PCS|개|BOX|KG|ROLL|SET|매)\s*(?:단가\s*(?P<price>[0-9,]+|확인\s*필요|별도\s*협의|미확정))?",
+                line,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                continue
+            item_name = re.sub(r"^[\-•·*]\s*", "", match.group("item") or "").strip()
+            if not item_name or self._summary_footer_pattern().search(item_name):
+                continue
+            price = (match.group("price") or "").strip()
+            candidate: dict[str, Any] = {
+                "section_type": "requested_items",
+                "status": "review_only",
+                "source": "vl_raw_text.purchase_memo_line",
+                "document_context": "purchase_memo",
+                "item_name": item_name,
+                "quantity": match.group("qty"),
+                "unit": match.group("unit"),
+                "evidence": line,
+                "reason": "purchase_memo_visible_request_row_preserved_for_review",
+                "confidence": 0.54,
+            }
+            if price and re.search(r"\d", price):
+                candidate["unit_price"] = price
+            elif price:
+                candidate["price_status"] = "review_required"
+            candidates.append(candidate)
+            if len(candidates) >= 40:
+                break
+        return candidates
+
+    def _parse_receipt_quantity_amount_line(self, line: str) -> dict[str, Any] | None:
+        text = line.replace(",", "")
+        match = re.search(
+            r"(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>EA|PCS|개|BOX|KG|G|ROLL|SET|병|개입)?\s*[xX×]\s*(?P<unit_price>-?\d+(?:\.\d+)?)\s+(?P<total>-?\d+(?:\.\d+)?)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            match = re.search(
+                r"(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>EA|PCS|개|BOX|KG|G|ROLL|SET|병|개입)\s+(?P<unit_price>-?\d+(?:\.\d+)?)\s+(?P<total>-?\d+(?:\.\d+)?)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if not match:
+            return None
+        return {
+            "quantity": match.group("qty"),
+            "unit": match.group("unit"),
+            "unit_price": match.group("unit_price"),
+            "line_total": match.group("total"),
+        }
+
+    def _nearest_receipt_item_name(self, lines: list[str], index: int) -> str | None:
+        for offset in range(1, 4):
+            candidate_index = index - offset
+            if candidate_index < 0:
+                break
+            candidate = lines[candidate_index].strip()
+            if not candidate or self._receipt_footer_or_payment_line(candidate):
+                continue
+            if self._parse_receipt_quantity_amount_line(candidate):
+                continue
+            if re.fullmatch(r"[\d,.\-\s]+", candidate):
+                continue
+            if len(candidate) > 60:
+                continue
+            return candidate
+        return None
+
+    def _receipt_footer_or_payment_line(self, line: str) -> bool:
+        return bool(re.search(
+            r"(합계|총액|부가세|과세|면세|결제|카드|현금|승인|거스름|받은\s*금액|vat|total|subtotal|tax)",
+            line or "",
+            flags=re.IGNORECASE,
+        ))
+
+    def _line_item_gap_reason(
+        self,
+        document: Document,
+        raw_text: str,
+        ai_parsed_document: dict[str, Any],
+        extraction_method: str | None,
+    ) -> str:
+        table_sections = [
+            section for section in ai_parsed_document.get("sections") or []
+            if isinstance(section, dict) and section.get("type") == "table"
+        ]
+        reason = "raw_text_missing_rows"
+        if any(section.get("rows") for section in table_sections):
+            reason = "ai_table_has_rows_but_not_promoted"
+        elif re.search(r"(?m)^\s*\d{1,3}\s+", raw_text or ""):
+            reason = "raw_text_has_rows_but_reconstructor_needed"
+        if extraction_method == "image_ocr_fast_path":
+            reason = f"{reason}+vl_fallback_fast_path"
+        return reason
 
     def _document_type_value(self, value: Any) -> str | None:
         if value is None:

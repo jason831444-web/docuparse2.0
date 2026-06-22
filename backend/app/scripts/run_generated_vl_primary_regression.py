@@ -926,12 +926,33 @@ def _classify_line_item_min_count_gap(actual: dict[str, Any]) -> dict[str, Any]:
         reason = "raw_text_has_rows_but_reconstructor_needed"
     if extraction_method == "image_ocr_fast_path":
         reason = f"{reason}+vl_fallback_fast_path"
+    review_row_candidates = metadata.get("review_row_candidates") if isinstance(metadata.get("review_row_candidates"), list) else []
+    receipt_item_candidates = metadata.get("receipt_item_candidates") if isinstance(metadata.get("receipt_item_candidates"), list) else []
+    requested_item_candidates = metadata.get("requested_item_candidates") if isinstance(metadata.get("requested_item_candidates"), list) else []
+    inspection_row_candidates = metadata.get("inspection_row_candidates") if isinstance(metadata.get("inspection_row_candidates"), list) else []
+    if inspection_row_candidates:
+        reason = "inspection_table_rows_preserved_for_review"
+    elif receipt_item_candidates:
+        reason = "receipt_fragments_preserved_for_review"
+    elif requested_item_candidates:
+        reason = "purchase_memo_rows_preserved_for_review"
+    next_action = {
+        "inspection_table_rows_preserved_for_review": "review_inspection_rows_without_generating_amounts",
+        "receipt_fragments_preserved_for_review": "show_receipt_item_candidates_for_manual_review",
+        "purchase_memo_rows_preserved_for_review": "show_requested_item_candidates_for_manual_review",
+        "pos_settlement_not_line_items": "keep_pos_summary_as_review_only",
+    }.get(reason, "improve_vl_quality_or_table_reconstruction")
     return {
         "reason": reason,
         "ai_table_section_count": len(table_sections),
         "ai_table_row_count": table_row_count,
+        "review_row_candidate_count": len(review_row_candidates),
+        "receipt_item_candidate_count": len(receipt_item_candidates),
+        "requested_item_candidate_count": len(requested_item_candidates),
+        "inspection_row_candidate_count": len(inspection_row_candidates),
         "raw_text_numbered_rows_present": bool(re.search(r"(?m)^\s*\d{1,3}\s+", raw_text)),
         "extraction_method": extraction_method or None,
+        "next_action": next_action,
     }
 
 
