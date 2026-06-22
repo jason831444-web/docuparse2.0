@@ -28,7 +28,7 @@ def test_ai_parsed_document_preserves_key_value_table_and_notes():
     assert result["document_type_hint"] == "internal_transfer"
     key_value = next(section for section in result["sections"] if section["type"] == "key_value")
     normalized_keys = {field["normalized_key"] for field in key_value["fields"]}
-    assert {"document_number", "document_date", "source_warehouse", "destination_warehouse", "requester"} <= normalized_keys
+    assert {"document_number", "request_date", "source_warehouse", "destination_warehouse", "requester"} <= normalized_keys
     table = next(section for section in result["sections"] if section["type"] == "table")
     assert table["columns"] == ["No", "품목", "규격", "수량", "단위", "이동사유"]
     assert table["rows"][0]["cells"]["품목"] == "S45C PIN"
@@ -139,3 +139,32 @@ def test_ai_parsed_document_does_not_keep_doc_title_as_party_candidate():
     assert all(field.get("value") != "doc_title" for field in fields)
     date_field = next(field for field in fields if field.get("normalized_key") == "document_date")
     assert date_field["value"] == "2026.06.05"
+
+
+def test_ai_parsed_document_separates_reference_and_approval_numbers():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="반품/크레딧 메모\n문서번호 RCM-2026-0009\n원문서 TS-2026-0034\n승인번호 RC-2026-0029",
+        tables=[],
+        document_type_hint="general_document",
+    )
+
+    fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
+    values = {(field["normalized_key"], field["value"]) for field in fields}
+    assert ("document_number", "RCM-2026-0009") in values
+    assert ("reference_document_number", "TS-2026-0034") in values
+    assert ("approval_number", "RC-2026-0029") in values
+
+
+def test_ai_parsed_document_does_not_treat_store_as_customer_without_pos_signal():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="자재 이동 요청서\nStore A-01 원자재\n출고창고 A-01 원자재",
+        tables=[],
+        document_type_hint="internal_transfer",
+    )
+
+    fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
+    assert not any(field.get("normalized_key") == "customer_name" for field in fields)

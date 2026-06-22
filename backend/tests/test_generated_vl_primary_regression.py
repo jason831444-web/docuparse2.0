@@ -646,7 +646,41 @@ def test_compare_warns_when_expected_line_item_min_count_is_not_met():
 
     assert result["status"] == "WARN"
     assert not result["failures"]
-    assert "line_item_min_count_not_met" in {issue["code"] for issue in result["warnings"]}
+    warning = result["warnings"][0]
+    assert warning["code"] == "line_item_min_count_not_met"
+    assert warning["warn_group"] == "extraction_quality"
+
+
+def test_compare_splits_no_price_expected_safe_from_quality_warns():
+    expected = {
+        "document_type": "delivery_note",
+        "no_price_document": True,
+    }
+    actual = {
+        "document_type": "delivery_note",
+        "review_required": True,
+        "tags": ["no_price_document"],
+        "line_items": [{"item_name": "S45C PIN", "quantity": 120}],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    warning = result["warnings"][0]
+    assert warning["code"] == "no_price_expected_safe"
+    assert warning["warn_group"] == "safe_review"
+
+
+def test_summarize_rows_counts_warn_groups():
+    summary = regression.summarize_rows(
+        [
+            {"status": "WARN", "dangerous_contamination": False, "warnings": [{"warn_group": "extraction_quality"}]},
+            {"status": "WARN", "dangerous_contamination": False, "warnings": [{"warn_group": "safe_review"}]},
+            {"status": "PASS", "dangerous_contamination": False, "warnings": []},
+        ]
+    )
+
+    assert summary["actual_quality_warn_count"] == 1
+    assert summary["safe_review_warn_count"] == 1
 
 
 def test_compare_warns_when_expected_quality_flag_is_missing():

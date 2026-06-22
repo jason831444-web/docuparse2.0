@@ -1628,6 +1628,9 @@ class DocumentProcessor:
             "applied_fields": [],
             "review_only_fields": [],
             "blocked_fields": [],
+            "party_review_candidates": [],
+            "document_number_candidates": [],
+            "date_candidates": [],
             "table_line_items_added": 0,
             "table_line_items_skipped_reasons": [],
         }
@@ -1639,7 +1642,11 @@ class DocumentProcessor:
         semantic_issues = self._apply_ai_parsed_semantic_policy(document, ai_parsed_document, raw_text)
         issues.extend(semantic_issues)
 
-        added_items = self._ai_parsed_table_line_item_candidates(document, ai_parsed_document, raw_text)
+        added_items = (
+            self._ai_parsed_table_line_item_candidates(document, ai_parsed_document, raw_text)
+            if extraction_method == "paddleocr_vl_1_6_gguf_primary_reader"
+            else []
+        )
         if added_items:
             existing = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
             merged = list(existing)
@@ -1664,10 +1671,28 @@ class DocumentProcessor:
                     "line_items",
                 ))
         elif any(section.get("type") == "table" for section in ai_parsed_document.get("sections") or [] if isinstance(section, dict)):
-            applied["table_line_items_skipped_reasons"].append("no_safe_promotable_table_rows")
+            reason = "no_safe_promotable_table_rows"
+            if extraction_method != "paddleocr_vl_1_6_gguf_primary_reader":
+                reason = "non_vl_primary_table_metadata_only"
+            applied["table_line_items_skipped_reasons"].append(reason)
 
-        if applied["applied_fields"] or applied["review_only_fields"] or applied["blocked_fields"] or applied["table_line_items_added"] or applied["table_line_items_skipped_reasons"]:
+        if (
+            applied["applied_fields"]
+            or applied["review_only_fields"]
+            or applied["blocked_fields"]
+            or applied["party_review_candidates"]
+            or applied["document_number_candidates"]
+            or applied["date_candidates"]
+            or applied["table_line_items_added"]
+            or applied["table_line_items_skipped_reasons"]
+        ):
             workflow_metadata["ai_parsed_document_mapping"] = applied
+            if applied["party_review_candidates"]:
+                workflow_metadata["party_review_candidates"] = applied["party_review_candidates"]
+            if applied["document_number_candidates"]:
+                workflow_metadata["document_number_candidates"] = applied["document_number_candidates"]
+            if applied["date_candidates"]:
+                workflow_metadata["date_candidates"] = applied["date_candidates"]
         return issues
 
     def _ai_parsed_key_value_fields(self, ai_parsed_document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1701,10 +1726,13 @@ class DocumentProcessor:
                     "value": value,
                     "reason": f"ai_parsed_document_{status}",
                 })
+                self._record_ai_review_candidate(applied, field, key, value, status=status, raw_text=raw_text)
                 continue
             if not self._safe_ai_scalar_value(value):
                 applied["review_only_fields"].append({"field": key or field.get("key"), "reason": "unsafe_or_long_value"})
+                self._record_ai_review_candidate(applied, field, key, value, status="review_only", reason="unsafe_or_long_value", raw_text=raw_text)
                 continue
+            self._record_ai_review_candidate(applied, field, key, value, status="candidate", raw_text=raw_text)
             if key == "document_number" and not document.document_number:
                 number = self.parser._normalize_document_number(value)
                 if number and self._safe_ai_document_number(number):
@@ -1713,6 +1741,13 @@ class DocumentProcessor:
                     applied["applied_fields"].append("document_number")
                 else:
                     applied["review_only_fields"].append({"field": "document_number", "value": value, "reason": "weak_document_number_pattern"})
+                continue
+            if key in {"reference_document_number", "approval_number"}:
+                applied["review_only_fields"].append({
+                    "field": key,
+                    "value": value,
+                    "reason": "identifier_role_candidate_review_required",
+                })
                 continue
             if key in {"document_date", "date", "issue_date", "invoice_date", "order_date", "request_date", "inspection_date"}:
                 parsed_date = self._parse_ai_candidate_date(value)
@@ -1771,6 +1806,152 @@ class DocumentProcessor:
                     document.merchant_name = sanitize_for_postgres(party)
                     self._record_ai_mapping_source(document, "merchant_name")
                     applied["applied_fields"].append("merchant_name")
+
+    def _record_ai_review_candidate(
+        self,
+        applied: dict[str, Any],
+        field: dict[str, Any],
+        key: str,
+        value: Any,
+        *,
+        status: str,
+        raw_text: str,
+        reason: str | None = None,
+    ) -> None:
+        if key in {
+            "supplier_name",
+            "supplier",
+            "vendor",
+            "vendor_name",
+            "customer_name",
+            "customer",
+            "party",
+            "party_name",
+            "merchant",
+            "merchant_name",
+            "store",
+            "bill_to",
+            "ship_to",
+        }:
+            self._record_party_review_candidate(applied, field, key, value, status=status, raw_text=raw_text, reason=reason)
+        elif key in {"document_number", "reference_document_number", "approval_number"}:
+            self._record_identifier_review_candidate(applied, field, key, value, status=status, reason=reason)
+        elif key in {"document_date", "date", "issue_date", "invoice_date", "order_date", "request_date", "inspection_date", "settlement_date", "transaction_date", "delivery_date", "due_date"}:
+            self._record_date_review_candidate(applied, field, key, value, status=status, reason=reason)
+
+    def _record_party_review_candidate(
+        self,
+        applied: dict[str, Any],
+        field: dict[str, Any],
+        key: str,
+        value: Any,
+        *,
+        status: str,
+        raw_text: str,
+        reason: str | None = None,
+    ) -> None:
+        normalized = self._normalize_party_name(value)
+        source_label = str(field.get("key") or key or "").strip()
+        role = self._party_review_role_for_key(key, source_label, raw_text)
+        field_name = {
+            "vendor": "vendor_name",
+            "customer": "customer_name",
+            "merchant": "merchant_name",
+        }.get(role, "party_name")
+        candidate_status = "review_only"
+        blocked_reason = None
+        if not normalized:
+            candidate_status = "blocked"
+            blocked_reason = "party_candidate_failed_sanitizer"
+        candidate = {
+            "field": field_name,
+            "role": role,
+            "value": value,
+            "normalized_value": normalized,
+            "source": field.get("source") or "vl_raw_text",
+            "source_label": source_label,
+            "evidence": field.get("evidence"),
+            "confidence": field.get("confidence"),
+            "status": candidate_status,
+            "reason": reason or "party_candidate_review_required",
+        }
+        if blocked_reason:
+            candidate["blocked_reason"] = blocked_reason
+        self._append_unique_candidate(applied["party_review_candidates"], candidate, ("field", "role", "normalized_value", "value", "source_label"))
+
+    def _party_review_role_for_key(self, key: str, source_label: str, raw_text: str) -> str:
+        label = f"{key} {source_label}".casefold()
+        if re.search(r"(supplier|vendor|공급자|공급업체|매입처|판매자|seller)", label, flags=re.IGNORECASE):
+            return "vendor"
+        if re.search(r"(customer|buyer|bill\s*to|ship\s*to|공급받는자|거래처|납품처|고객사|수신)", label, flags=re.IGNORECASE):
+            return "customer"
+        if re.search(r"(store|merchant|매장|가맹점)", label, flags=re.IGNORECASE):
+            if self._pos_daily_settlement_signal(raw_text) or re.search(r"(영수증|receipt|pos\b|카드|현금|승인번호)", raw_text or "", flags=re.IGNORECASE):
+                return "merchant"
+            return "unknown"
+        if key in {"supplier_name", "supplier", "vendor", "vendor_name"}:
+            return "vendor"
+        if key in {"customer_name", "customer", "bill_to", "ship_to"}:
+            return "customer"
+        if key in {"merchant_name", "merchant"}:
+            return "merchant"
+        return "party"
+
+    def _record_identifier_review_candidate(
+        self,
+        applied: dict[str, Any],
+        field: dict[str, Any],
+        key: str,
+        value: Any,
+        *,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        candidate = {
+            "field": key,
+            "role": key,
+            "value": value,
+            "normalized_value": self.parser._normalize_document_number(value) if value not in (None, "") else None,
+            "source": field.get("source") or "vl_raw_text",
+            "source_label": field.get("key") or key,
+            "evidence": field.get("evidence"),
+            "confidence": field.get("confidence"),
+            "status": "review_only" if key != "document_number" or status != "candidate" else "confirmed_candidate",
+            "reason": reason or "identifier_role_candidate",
+        }
+        self._append_unique_candidate(applied["document_number_candidates"], candidate, ("field", "normalized_value", "value", "source_label"))
+
+    def _record_date_review_candidate(
+        self,
+        applied: dict[str, Any],
+        field: dict[str, Any],
+        key: str,
+        value: Any,
+        *,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        parsed = self._parse_ai_candidate_date(value)
+        candidate = {
+            "field": key,
+            "role": key,
+            "value": value,
+            "normalized_value": parsed.isoformat() if parsed else None,
+            "source": field.get("source") or "vl_raw_text",
+            "source_label": field.get("key") or key,
+            "evidence": field.get("evidence"),
+            "confidence": field.get("confidence"),
+            "status": "review_only" if status != "candidate" else "confirmed_candidate",
+            "reason": reason or "date_role_candidate",
+        }
+        self._append_unique_candidate(applied["date_candidates"], candidate, ("field", "normalized_value", "value", "source_label"))
+
+    def _append_unique_candidate(self, candidates: list[dict[str, Any]], candidate: dict[str, Any], keys: tuple[str, ...]) -> None:
+        signature = tuple(candidate.get(key) for key in keys)
+        for existing in candidates:
+            if tuple(existing.get(key) for key in keys) == signature:
+                return
+        candidates.append(candidate)
 
     def _ai_party_candidate_can_fill_vendor(self, document: Document, fields: list[dict[str, Any]], raw_text: str = "") -> bool:
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
@@ -2536,22 +2717,22 @@ class DocumentProcessor:
 
     def _party_block_regex_candidate(self, text: str, role: str) -> str | None:
         if role == "vendor":
-            label = r"(?:공급자|공급업체|매입처|vendor|supplier)"
-            stop = r"(?:공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
+            label = r"(?:공급자|공급업체|매입처|vendor|supplier|seller)"
+            stop = r"(?:공급받는자|거래처|납품처|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
         else:
-            label = r"(?:공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
+            label = r"(?:공급받는자|거래처|납품처|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
             stop = r"(?:비고|품목|No\b|문서번호|작성일|발행일)"
-        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|회사명|업체명|거래처명)\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
+        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|회사명|업체명|거래처명|거래처|납품처)?\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if not match:
             return None
         return self._normalize_party_name(match.group("value"))
 
     def _party_role_from_line(self, line: str) -> tuple[str | None, str | None]:
-        match = re.match(r"^(공급자|공급업체|매입처|vendor|supplier)\s*[:：]?\s*(.*)$", line, flags=re.IGNORECASE)
+        match = re.match(r"^(공급자|공급업체|매입처|vendor|supplier|seller)\s*[:：]?\s*(.*)$", line, flags=re.IGNORECASE)
         if match:
             return "vendor", match.group(2).strip() or None
-        match = re.match(r"^(공급받는자|고객사|수신|buyer|customer|bill\s*to|ship\s*to)\s*[:：]?\s*(.*)$", line, flags=re.IGNORECASE)
+        match = re.match(r"^(공급받는자|거래처|납품처|고객사|수신|buyer|customer|bill\s*to|ship\s*to)\s*[:：]?\s*(.*)$", line, flags=re.IGNORECASE)
         if match:
             return "customer", match.group(2).strip() or None
         return None, None
@@ -2624,7 +2805,7 @@ class DocumentProcessor:
             return None
         if re.search(r"^(담당|담당자|회계|검사자|작성자|검수자)\s*[:：]", text):
             return None
-        text = re.sub(r"^(상호|업체|거래처|공급자|공급업체|공급받는자|고객사|수신|받는곳)\s*[:：]?\s*", "", text).strip()
+        text = re.sub(r"^(상호|업체|거래처명|거래처|납품처|공급자|공급업체|공급받는자|고객사|수신|받는곳)\s*[:：]?\s*", "", text).strip()
         if self._looks_like_non_party_identifier(text):
             return None
         text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
@@ -2646,9 +2827,13 @@ class DocumentProcessor:
             return True
         if re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?\b", text):
             return True
-        if re.search(r"[_]{3,}|-{3,}|^\d|일로부터|납기|월말|정산|검수|입고|TEST", text, flags=re.IGNORECASE):
+        if re.search(r"[_]{3,}|-{3,}|^\d|일로부터|납기|월말|정산|검수|입고", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(세금\s*계산서|입고\s*검사|검사\s*기록|검사\s*성적|견적서|발주서|납품서|거래\s*명세서|영수증|자재\s*이동|commercial\s+invoice)", text, flags=re.IGNORECASE):
+        if re.fullmatch(r"(?:test|sample|doc[_ -]?title|page\s*\d+)", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(세금\s*계산서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|transaction\s+statement|purchase\s+order|quotation|invoice|견적서|발주서|납품서|거래\s*명세서|영수증|자재\s*이동|commercial\s+invoice)", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(담당|당당|검사자|작성자|검수자|회계팀|구매팀|품질팀|품길팀|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액)", text, flags=re.IGNORECASE):
             return True
         if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|로\s*\d|번길|주소)", text):
             return True

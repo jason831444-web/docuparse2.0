@@ -60,11 +60,18 @@ DOCUMENT_POLICIES: dict[str, DocumentPolicy] = {
 
 
 KEY_ALIASES: tuple[tuple[str, str, float], ...] = (
+    ("reference_document_number", r"(?:원문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|Related\s*Doc(?:ument)?\.?)", 0.82),
+    ("approval_number", r"(?:승인번호|카드\s*승인번호|Approval\s*No\.?|Receipt\s*Approval)", 0.78),
     ("document_number", r"(?:문서번호|발주번호|주문번호|견적번호|송장번호|Invoice\s*No\.?|PO\s*No\.?|Order\s*Ref|관리번호|전표번호|Ref\s*No\.?)", 0.9),
-    ("document_date", r"(?:작성일|작성일자|발행일|요청일|납품일|검사일|거래일시|거래일|Date|Invoice\s*Date|Order\s*Date)", 0.84),
+    ("inspection_date", r"(?:검사일|Inspection\s*Date)", 0.84),
+    ("request_date", r"(?:요청일|Request\s*Date)", 0.84),
+    ("delivery_date", r"(?:납품일|Delivery\s*Date)", 0.84),
+    ("settlement_date", r"(?:정산일|거래일시|거래일|Transaction\s*Date|Settlement\s*Date)", 0.84),
+    ("document_date", r"(?:작성일|작성일자|발행일|문서일자|Date|Invoice\s*Date|Order\s*Date)", 0.84),
     ("due_date", r"(?:납기일|납품예정일|Due\s*Date|Delivery\s*Date)", 0.84),
     ("supplier_name", r"(?:공급자|공급업체|Vendor|Supplier)", 0.78),
-    ("customer_name", r"(?:공급받는자|거래처|고객사|Customer|Store|Merchant|매장)", 0.78),
+    ("customer_name", r"(?:공급받는자|거래처|납품처|고객사|Customer|Buyer|Bill\s*to|Ship\s*to)", 0.78),
+    ("merchant_name", r"(?:Store|Merchant|매장|가맹점)", 0.74),
     ("source_warehouse", r"(?:출고창고|From\s*Warehouse|Source\s*Warehouse)", 0.84),
     ("destination_warehouse", r"(?:입고창고|To\s*Warehouse|Destination\s*Warehouse)", 0.84),
     ("requester", r"(?:요청자|담당자|담당|Contact|Requester)", 0.78),
@@ -505,7 +512,7 @@ def _sanitize_party_candidate(value: Any) -> str | None:
     text = _clean_scalar_value(value)
     if not text:
         return None
-    text = re.sub(r"^(?:상호|회사명|업체명|거래처명|공급자|공급업체|공급받는자|고객사|수신)\s*[:：]?\s*", "", text).strip()
+    text = re.sub(r"^(?:상호|회사명|업체명|거래처명|거래처|납품처|공급자|공급업체|공급받는자|고객사|수신)\s*[:：]?\s*", "", text).strip()
     text = re.sub(r"\s*(?:사업자|등록번호|대표|업태|업종|담당|담당자|주소|전화|이메일|품목|No\b|문서번호|작성일|발행일|견적일|납품일|검사일|거래일|합계|공급가액|세액).*$", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
     text = re.sub(r"\s*(?:\(?주\)?|주식회사)$", "", text).strip()
@@ -513,7 +520,11 @@ def _sanitize_party_candidate(value: Any) -> str | None:
         return None
     if re.search(r"[/\\]|^\d|[_]{2,}|-{3,}|(?:20\d{2}[./-]\d{1,2})", text):
         return None
-    if re.search(r"(doc[_ -]?title|sample|샘플|생품|생플|문서번호|운서번호|발주서|견적서|겨적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|비고|출고창고|입고창고|창고|warehouse|purchase\s*order|quotation|invoice)", text, flags=re.IGNORECASE):
+    if re.search(r"(doc[_ -]?title|sample|샘플|생품|생플|문서번호|운서번호|발주서|견적서|겨적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|transaction\s+statement|purchase\s+order|commercial\s+invoice|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|금액|비고|출고창고|입고창고|창고|warehouse|quotation|invoice)", text, flags=re.IGNORECASE):
+        return None
+    if re.search(r"(담당|당당|검사자|회계팀|구매팀|품질팀|품길팀|연락처|전화|사업자\s*번호|등록번호)", text, flags=re.IGNORECASE):
+        return None
+    if re.fullmatch(r"(?:I?DOC|PO|INV|DN|RCM|TS|IQC|IOC|MV|QT|PM|POS|RC|RTN|TRF)[-_ ]?[A-Z0-9Oo-]{2,}", text, flags=re.IGNORECASE):
         return None
     if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|번길|주소)", text):
         return None

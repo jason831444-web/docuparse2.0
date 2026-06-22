@@ -37,6 +37,20 @@ DANGEROUS_CONTAMINATION_FAILURE_CODES = {
     "vendor_sku_not_item_row",
     "review_candidate_leaked_to_export",
 }
+WARNING_GROUP_BY_CODE = {
+    "customer_missing": "extraction_quality",
+    "vendor_missing": "extraction_quality",
+    "customer_mismatch": "extraction_quality",
+    "vendor_mismatch": "extraction_quality",
+    "line_item_min_count_not_met": "extraction_quality",
+    "issue_date_missing": "extraction_quality",
+    "document_number_missing": "extraction_quality",
+    "no_price_expected_safe": "safe_review",
+    "no_price_review_required": "safe_review",
+    "no_price_document_review_required": "safe_review",
+    "fixture_label_mismatch": "fixture_issue",
+    "document_type_taxonomy_alias": "taxonomy_alias",
+}
 
 
 def main() -> None:
@@ -260,12 +274,14 @@ def compare_expected_actual(expected: dict[str, Any], actual: dict[str, Any], ex
     _detect_export_candidate_leak(export_json or {}, failures)
 
     if no_price_document and actual.get("review_required") and not failures:
+        code = "no_price_expected_safe" if _no_price_expected_safe(expected, actual) else "no_price_review_required"
         warnings.append(
             {
-                "code": "no_price_document_review_required",
+                "code": code,
                 "message": "No-price documents may require review for quantity/crop issues, but export must not be blocked for missing total.",
             }
         )
+    warnings = [_annotate_warning_group(warning, expected, actual) for warning in warnings]
     status = "FAIL" if failures else ("WARN" if warnings or expected.get("visual_crop") else "PASS")
     return {"status": status, "failures": failures, "warnings": warnings}
 
@@ -315,12 +331,24 @@ def summarize_expected(expected: dict[str, Any]) -> dict[str, Any]:
 
 def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     counts = {"PASS": 0, "WARN": 0, "FAIL": 0}
+    warn_groups: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
+        for warning in row.get("warnings") or []:
+            if not isinstance(warning, dict):
+                continue
+            group = str(warning.get("warn_group") or "extraction_quality")
+            warn_groups[group] = warn_groups.get(group, 0) + 1
     return {
         "total": len(rows),
         **counts,
         "dangerous_contamination_count": sum(1 for row in rows if row.get("dangerous_contamination")),
+        "warn_group_counts": warn_groups,
+        "actual_quality_warn_count": warn_groups.get("extraction_quality", 0),
+        "safe_review_warn_count": warn_groups.get("safe_review", 0),
+        "fixture_issue_count": warn_groups.get("fixture_issue", 0),
+        "expected_unset_count": warn_groups.get("expected_unset", 0),
+        "taxonomy_alias_count": warn_groups.get("taxonomy_alias", 0),
     }
 
 
@@ -476,6 +504,44 @@ def _document_type_difference_code(expected: dict[str, Any], actual: dict[str, A
     if raw_hint and raw_hint == actual_type and raw_hint != expected_type:
         return "fixture_label_mismatch"
     return "document_type_mismatch"
+
+
+def _annotate_warning_group(warning: dict[str, Any], expected: dict[str, Any], actual: dict[str, Any]) -> dict[str, Any]:
+    annotated = dict(warning)
+    code = str(annotated.get("code") or "")
+    group = WARNING_GROUP_BY_CODE.get(code)
+    if group is None and code.endswith("_missing") and not annotated.get("expected_value"):
+        group = "expected_unset"
+    if group is None and code in {"document_type_taxonomy_alias"}:
+        group = "taxonomy_alias"
+    if group is None and code.endswith("_mismatch"):
+        group = "extraction_quality"
+    if group is None and code.endswith("_missing"):
+        group = "extraction_quality"
+    annotated["warn_group"] = group or "extraction_quality"
+    return annotated
+
+
+def _no_price_expected_safe(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    expected_type = str(expected.get("document_type") or "").casefold()
+    actual_type = str(actual.get("document_type") or "").casefold()
+    metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+    taxonomy = metadata.get("taxonomy") if isinstance(metadata.get("taxonomy"), dict) else {}
+    tags = {str(tag or "").casefold() for tag in (actual.get("tags") or [])}
+    tags.update(str(value or "").casefold() for value in taxonomy.get("document_profiles") or [])
+    tags.update(
+        str(value or "").casefold()
+        for value in (
+            actual.get("category"),
+            taxonomy.get("document_profile"),
+            taxonomy.get("document_subtype"),
+        )
+        if value not in (None, "")
+    )
+    safe_types = {"delivery_note", "inspection_report", "internal_transfer", "inventory_movement_document", "receipt", "pos_daily_settlement"}
+    if expected_type in safe_types or actual_type in safe_types:
+        return True
+    return bool(tags.intersection({"no_price_document", "inspection_report", "internal_transfer", "material_transfer_rows", "settlement_summary"}))
 
 
 def _fixture_document_number_label_mismatch(expected_value: Any, actual_value: Any) -> bool:
@@ -776,6 +842,7 @@ def _detect_document_expectations(
                 "code": "line_item_min_count_not_met",
                 "expected_value": min_count,
                 "actual_value": len(line_items),
+                "analysis": _classify_line_item_min_count_gap(actual),
             }
         )
 
@@ -828,6 +895,44 @@ def _detect_review_flags(expected_items: list[dict[str, Any]], actual: dict[str,
         acceptable = aliases.get(flag, {flag})
         if not present.intersection(acceptable):
             warnings.append({"code": "expected_review_flag_missing", "expected_flag": flag})
+
+
+def _classify_line_item_min_count_gap(actual: dict[str, Any]) -> dict[str, Any]:
+    metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+    ai_doc = metadata.get("ai_parsed_document") if isinstance(metadata.get("ai_parsed_document"), dict) else {}
+    sections = ai_doc.get("sections") if isinstance(ai_doc.get("sections"), list) else []
+    table_sections = [section for section in sections if isinstance(section, dict) and section.get("type") == "table"]
+    table_row_count = sum(len(section.get("rows") or []) for section in table_sections)
+    raw_text = str(actual.get("raw_text") or "")
+    issue_codes = {
+        str(issue.get("code") or "")
+        for issue in (metadata.get("normalized_review_issues") or [])
+        if isinstance(issue, dict)
+    }
+    doc_type = str(actual.get("document_type") or "").casefold()
+    category = str(actual.get("category") or "").casefold()
+    tags = {str(tag or "").casefold() for tag in (actual.get("tags") or [])}
+    extraction_method = str(actual.get("extraction_method") or "")
+    reason = "raw_text_missing_rows"
+    if table_row_count:
+        reason = "ai_table_has_rows_but_not_promoted"
+    if doc_type == "receipt" or "receipt" in tags:
+        reason = "receipt_items_should_be_separate"
+    elif category == "purchase_memo" or "purchase_memo" in tags:
+        reason = "purchase_memo_bullet_parser_needed"
+    elif "pos_daily_settlement" in tags or category == "pos_daily_settlement" or "unsupported_pos_daily_settlement_review_required" in issue_codes:
+        reason = "pos_settlement_not_line_items"
+    elif re.search(r"(?m)^\s*\d{1,3}\s+", raw_text):
+        reason = "raw_text_has_rows_but_reconstructor_needed"
+    if extraction_method == "image_ocr_fast_path":
+        reason = f"{reason}+vl_fallback_fast_path"
+    return {
+        "reason": reason,
+        "ai_table_section_count": len(table_sections),
+        "ai_table_row_count": table_row_count,
+        "raw_text_numbered_rows_present": bool(re.search(r"(?m)^\s*\d{1,3}\s+", raw_text)),
+        "extraction_method": extraction_method or None,
+    }
 
 
 def _detect_export_candidate_leak(export_json: dict[str, Any], failures: list[dict[str, Any]]) -> None:

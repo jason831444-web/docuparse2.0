@@ -362,6 +362,112 @@ def test_supplier_customer_block_promotes_labeled_party_candidates():
     assert document.field_sources["customer_name"] == "raw_text_party_block"
 
 
+def test_trade_partner_label_is_preserved_as_customer_review_candidate():
+    processor = _processor(FakeVLWorker())
+    document = _document(document_type=DocumentType.delivery_note, vendor_name="대성정공", customer_name=None, merchant_name="대성정공")
+    workflow_metadata = {}
+    ai_doc = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {
+                        "key": "거래처",
+                        "value": "대성정공",
+                        "normalized_key": "customer_name",
+                        "evidence": "거래처 대성정공",
+                        "confidence": 0.78,
+                        "status": "candidate",
+                    }
+                ],
+            }
+        ],
+    }
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "납품서\n거래처 대성정공\n단가 미기재 납품서",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.customer_name is None
+    candidates = workflow_metadata["party_review_candidates"]
+    assert candidates == [
+        {
+            "field": "customer_name",
+            "role": "customer",
+            "value": "대성정공",
+            "normalized_value": "대성정공",
+            "source": "vl_raw_text",
+            "source_label": "거래처",
+            "evidence": "거래처 대성정공",
+            "confidence": 0.78,
+            "status": "review_only",
+            "reason": "party_candidate_review_required",
+        }
+    ]
+
+
+def test_return_credit_reference_number_is_not_document_number_candidate():
+    processor = _processor(FakeVLWorker())
+    document = _document(document_type=DocumentType.general_document, document_number="RCM-2026-0009", customer_name=None)
+    workflow_metadata = {}
+    ai_doc = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {"key": "거래처", "value": "신우금속", "normalized_key": "customer_name", "evidence": "거래처 신우금속"},
+                    {"key": "원문서", "value": "TS-2026-0034", "normalized_key": "reference_document_number", "evidence": "원문서 TS-2026-0034"},
+                ],
+            }
+        ]
+    }
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "반품/크레딧 메모\n문서번호 RCM-2026-0009\n거래처 신우금속\n원문서 TS-2026-0034",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.document_number == "RCM-2026-0009"
+    assert document.customer_name is None
+    assert workflow_metadata["party_review_candidates"][0]["role"] == "customer"
+    assert workflow_metadata["document_number_candidates"][0]["field"] == "reference_document_number"
+    assert workflow_metadata["document_number_candidates"][0]["normalized_value"] == "TS-2026-0034"
+
+
+def test_receipt_approval_number_is_kept_separate_from_document_number():
+    processor = _processor(FakeVLWorker())
+    document = _document(document_type=DocumentType.receipt, document_number=None)
+    workflow_metadata = {}
+    ai_doc = {
+        "sections": [
+            {
+                "type": "key_value",
+                "fields": [
+                    {"key": "승인번호", "value": "RC-2026-0029", "normalized_key": "approval_number", "evidence": "승인번호 RC-2026-0029"},
+                ],
+            }
+        ]
+    }
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "영수증\n승인번호 RC-2026-0029\n카드 결제",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert document.document_number is None
+    assert workflow_metadata["document_number_candidates"][0]["field"] == "approval_number"
+
+
 def test_pos_safety_branch_still_removes_identifier_party_values():
     document = _document(
         document_type=DocumentType.receipt,
