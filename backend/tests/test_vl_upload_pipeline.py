@@ -304,6 +304,44 @@ def test_pos_safety_branch_still_removes_identifier_party_values():
     assert document.merchant_name is None
 
 
+def test_receipt_top_line_promotes_merchant_and_vendor_candidate():
+    document = _document(document_type=DocumentType.receipt, vendor_name=None, merchant_name=None)
+
+    _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "가온마트\n영수증번호:\nDOC-041\n일자:\n20260612\n양파 15kg 2BOX",
+    )
+
+    assert document.vendor_name == "가온마트"
+    assert document.merchant_name == "가온마트"
+    assert document.field_sources["vendor_name"] == "receipt_top_line_candidate"
+    assert document.field_sources["merchant_name"] == "receipt_top_line_candidate"
+
+
+def test_receipt_top_line_skips_paths_and_identifier_lines():
+    document = _document(document_type=DocumentType.receipt, vendor_name=None, merchant_name=None)
+
+    _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "/workspace/docuparse-gpu-test/uploads/vl_rendered_pages/abc-DOC-065.png\n가온마트\n영수증번호:DOC-065\n일자:2026.06.15",
+    )
+
+    assert document.vendor_name == "가온마트"
+    assert document.merchant_name == "가온마트"
+
+
+def test_receipt_top_line_does_not_promote_general_document_without_receipt_signal():
+    document = _document(document_type=DocumentType.general_document, vendor_name=None, merchant_name=None)
+
+    _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "가온마트\n문서번호 DOC-001\n납품서\nNo 품목 수량",
+    )
+
+    assert document.vendor_name is None
+    assert document.merchant_name is None
+
+
 def test_vl_upload_pipeline_promotes_valid_worker_candidate_to_confirmed_fields():
     text = """
     견적서

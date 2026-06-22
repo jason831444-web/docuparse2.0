@@ -2289,6 +2289,7 @@ class DocumentProcessor:
     def _apply_final_business_safety_overrides(self, document: Document, raw_text: str) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         line_items = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
+        self._promote_receipt_top_line_merchant_candidate(document, raw_text)
 
         if self._return_credit_signal_for_document(document, raw_text):
             previous_type = document.document_type
@@ -2407,6 +2408,57 @@ class DocumentProcessor:
         document.customer_name = self._normalize_party_name(document.customer_name)
         document.merchant_name = self._normalize_party_name(document.merchant_name)
 
+    def _promote_receipt_top_line_merchant_candidate(self, document: Document, raw_text: str) -> None:
+        if document.vendor_name and document.merchant_name:
+            return
+        if not self._receipt_context_signal(document, raw_text):
+            return
+        candidate = self._receipt_top_line_party_candidate(raw_text)
+        if not candidate:
+            return
+        if not document.merchant_name:
+            document.merchant_name = sanitize_for_postgres(candidate)
+            self._record_party_mapping_source(document, "merchant_name", "receipt_top_line_candidate")
+        if not document.vendor_name:
+            document.vendor_name = sanitize_for_postgres(candidate)
+            self._record_party_mapping_source(document, "vendor_name", "receipt_top_line_candidate")
+
+    def _receipt_context_signal(self, document: Document, raw_text: str) -> bool:
+        doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
+        text = " ".join([
+            str(raw_text or ""),
+            str(document.category or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+        ])
+        return doc_type == "receipt" or bool(re.search(r"(영수증|receipt|영수증\s*번호|receipt\s*(?:no|number))", text, flags=re.IGNORECASE))
+
+    def _receipt_top_line_party_candidate(self, raw_text: str) -> str | None:
+        for raw_line in str(raw_text or "").splitlines()[:12]:
+            line = self._normalize_party_name(raw_line)
+            if not line:
+                continue
+            if not self._looks_like_receipt_top_line_party(line):
+                continue
+            return line
+        return None
+
+    def _looks_like_receipt_top_line_party(self, value: str) -> bool:
+        text = self._clean_text_fragment(value)
+        if not text or len(text) > 40:
+            return False
+        if self._looks_like_non_party_identifier(text):
+            return False
+        if re.search(
+            r"(영수증|receipt|문서번호|영수증\s*번호|일자|date|합계|공급\s*가액|부가세|vat|"
+            r"품목|수량|단가|금액|doc[_ -]?title|sample|샘플|생품|생플|content|image|pos\b)",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return False
+        if re.search(r"\d", text):
+            return False
+        return bool(re.search(r"[가-힣A-Za-z]", text))
+
     def _normalize_party_name(self, value: Any) -> str | None:
         text = str(value or "").strip()
         if not text:
@@ -2442,6 +2494,11 @@ class DocumentProcessor:
         if re.fullmatch(r"(?:영수증|문서|전표|승인)?\s*(?:번호|no\.?|number)?\s*[:：]?\s*(?:I?DOC|PO|INV|DN|RCM|TS|IQC|MV|QT|PM|POS|RC)[-_ ]?[Oo0]?\d{2,}", text, flags=re.IGNORECASE):
             return True
         return False
+
+    def _record_party_mapping_source(self, document: Document, field: str, source: str) -> None:
+        field_sources = dict(document.field_sources or {})
+        field_sources[field] = source
+        document.field_sources = sanitize_for_postgres(field_sources)
 
     def _business_safety_issue(self, code: str, message: str, field: str) -> dict[str, Any]:
         return {
