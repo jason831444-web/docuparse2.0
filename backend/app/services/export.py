@@ -34,6 +34,12 @@ def serialize_document(document: Document) -> dict:
     taxonomy = _export_taxonomy(document)
     policy = _export_policy(document, taxonomy)
     export_conflict_blocked = _return_credit_purchase_order_export_conflict(document, taxonomy)
+    if export_conflict_blocked:
+        data["line_items"] = []
+        data["subtotal"] = None
+        data["tax"] = None
+        data["extracted_amount"] = None
+        data["currency"] = None
     data["document_taxonomy"] = taxonomy
     data["export_policy"] = policy
     data["canonical_export"] = {
