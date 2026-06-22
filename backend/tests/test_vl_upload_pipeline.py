@@ -1613,15 +1613,18 @@ def test_ai_parsed_document_key_values_fill_missing_canonical_fields_without_ove
     assert issues == []
     assert document.document_number == "MV-2026-0010"
     assert document.issue_date == date(2026, 6, 18)
-    assert document.vendor_name == "대성정공"
-    assert document.customer_name == "한빛정밀"
+    assert document.vendor_name is None
+    assert document.customer_name is None
     assert document.field_sources["document_number"] == "ai_parsed_document.key_value"
     assert workflow_metadata["ai_parsed_document_mapping"]["applied_fields"] == [
         "document_number",
         "issue_date",
-        "vendor_name",
-        "customer_name",
     ]
+    review_only = workflow_metadata["ai_parsed_document_mapping"]["review_only_fields"]
+    assert {field["value"] for field in review_only if field["reason"] == "party_candidate_review_required"} == {
+        "대성정공",
+        "한빛정밀",
+    }
 
 
 def test_ai_parsed_document_table_rows_promote_safe_no_price_line_item_candidates():

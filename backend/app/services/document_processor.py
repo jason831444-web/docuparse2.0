@@ -1733,15 +1733,11 @@ class DocumentProcessor:
                 continue
             if key in {"supplier_name", "supplier", "vendor", "vendor_name"} and not document.vendor_name:
                 party = self._normalize_party_name(value)
-                if party and self._ai_party_candidate_is_safe_for_confirmed(field, raw_text):
-                    document.vendor_name = sanitize_for_postgres(party)
-                    self._record_ai_mapping_source(document, "vendor_name")
-                    applied["applied_fields"].append("vendor_name")
-                elif party:
+                if party:
                     applied["review_only_fields"].append({
                         "field": key,
                         "value": value,
-                        "reason": "party_candidate_not_safe_for_confirmed",
+                        "reason": "party_candidate_review_required",
                     })
                 continue
             if key in {"customer_name", "customer", "party", "party_name", "store", "merchant", "merchant_name", "bill_to", "ship_to"}:
@@ -1766,40 +1762,15 @@ class DocumentProcessor:
                         })
                     continue
                 if not document.customer_name:
-                    if self._ai_party_candidate_is_safe_for_confirmed(field, raw_text):
-                        document.customer_name = sanitize_for_postgres(party)
-                        self._record_ai_mapping_source(document, "customer_name")
-                        applied["applied_fields"].append("customer_name")
-                    else:
-                        applied["review_only_fields"].append({
-                            "field": key,
-                            "value": value,
-                            "reason": "party_candidate_not_safe_for_confirmed",
-                        })
+                    applied["review_only_fields"].append({
+                        "field": key,
+                        "value": value,
+                        "reason": "party_candidate_review_required",
+                    })
                 elif not document.merchant_name:
                     document.merchant_name = sanitize_for_postgres(party)
                     self._record_ai_mapping_source(document, "merchant_name")
                     applied["applied_fields"].append("merchant_name")
-
-    def _ai_party_candidate_is_safe_for_confirmed(self, field: dict[str, Any], raw_text: str) -> bool:
-        confidence = field.get("confidence")
-        try:
-            confidence_value = float(confidence)
-        except Exception:
-            confidence_value = 0.78
-        evidence = str(field.get("evidence") or "")
-        key_text = " ".join(str(field.get(name) or "") for name in ("key", "normalized_key", "evidence"))
-        if confidence_value < 0.74:
-            return False
-        if re.search(r"(상단\s*거래처\s*후보|party_name)", key_text, flags=re.IGNORECASE):
-            return False
-        if self._looks_like_non_party_identifier(field.get("value")):
-            return False
-        if re.search(r"(상호|회사명|업체명|거래처명|공급자|공급업체|공급받는자|고객사|수신|vendor|supplier|customer|buyer)", f"{evidence} {key_text}", flags=re.IGNORECASE):
-            return True
-        if self._ai_field_is_store_or_merchant(field):
-            return bool(self._pos_daily_settlement_signal(raw_text) or re.search(r"(영수증|receipt|승인번호|카드사)", raw_text or "", flags=re.IGNORECASE))
-        return False
 
     def _ai_party_candidate_can_fill_vendor(self, document: Document, fields: list[dict[str, Any]], raw_text: str = "") -> bool:
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
