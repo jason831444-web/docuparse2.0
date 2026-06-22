@@ -378,9 +378,10 @@ class AiParsedDocumentBuilder:
         return None
 
     def _make_field(self, key: str, value: str, normalized_key: str | None, confidence: float, evidence: str, status: str) -> dict[str, Any]:
+        value_text = _clean_scalar_value(value)
         return {
             "key": str(key).strip(" :："),
-            "value": str(value).strip(" :："),
+            "value": value_text,
             "normalized_key": normalized_key,
             "confidence": round(confidence, 3),
             "source": "vl_raw_text",
@@ -501,7 +502,7 @@ def _clean_lines(raw_text: str) -> list[str]:
 
 
 def _sanitize_party_candidate(value: Any) -> str | None:
-    text = str(value or "").strip(" :：")
+    text = _clean_scalar_value(value)
     if not text:
         return None
     text = re.sub(r"^(?:상호|회사명|업체명|거래처명|공급자|공급업체|공급받는자|고객사|수신)\s*[:：]?\s*", "", text).strip()
@@ -512,10 +513,16 @@ def _sanitize_party_candidate(value: Any) -> str | None:
         return None
     if re.search(r"[/\\]|^\d|[_]{2,}|-{3,}|(?:20\d{2}[./-]\d{1,2})", text):
         return None
-    if re.search(r"(문서번호|발주서|견적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|비고|출고창고|입고창고|창고|warehouse)", text, flags=re.IGNORECASE):
+    if re.search(r"(doc[_ -]?title|sample|샘플|생품|생플|문서번호|운서번호|발주서|견적서|겨적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|비고|출고창고|입고창고|창고|warehouse|purchase\s*order|quotation|invoice)", text, flags=re.IGNORECASE):
         return None
     if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|번길|주소)", text):
         return None
     if not re.search(r"[가-힣A-Za-z]", text):
         return None
+    return text
+
+
+def _clean_scalar_value(value: Any) -> str:
+    text = str(value or "").strip(" :：")
+    text = re.split(r"(?:\\n|\n|\r)", text, maxsplit=1)[0].strip(" :：")
     return text

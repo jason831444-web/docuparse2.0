@@ -124,3 +124,18 @@ def test_ai_parsed_document_top_line_party_is_review_only_without_pos_context():
     assert top_line["value"] == "대한유통"
     assert top_line["status"] == "review_only"
     assert top_line["normalized_key"] == "party_name"
+
+
+def test_ai_parsed_document_does_not_keep_doc_title_as_party_candidate():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="doc_title\n납품서\n작성일 2026.06.05\\n인수자 서명: ________",
+        tables=[],
+        document_type_hint="delivery_note",
+    )
+
+    fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
+    assert all(field.get("value") != "doc_title" for field in fields)
+    date_field = next(field for field in fields if field.get("normalized_key") == "document_date")
+    assert date_field["value"] == "2026.06.05"
