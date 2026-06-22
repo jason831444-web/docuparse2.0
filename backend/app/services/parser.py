@@ -170,6 +170,7 @@ class DocumentParser:
     """Heuristic parser. This is the extension point for an LLM or trained extractor later."""
 
     def parse(self, raw_text: str, filename: str = "") -> ParsedDocument:
+        raw_text = self._normalize_raw_text_lines(raw_text)
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         joined = "\n".join(lines)
         doc_type = self._guess_document_type(joined, filename)
@@ -423,6 +424,8 @@ class DocumentParser:
         for index, line in enumerate(lines):
             if self._looks_like_computed_or_note_amount(line):
                 continue
+            if self._generic_total_labels(labels) and self._line_is_component_amount_summary(line):
+                continue
             match = re.search(
                 rf"(?:^|\s)(?:{label_pattern})\s*(?:KRW|USD|₩|원|\$)?\s*[:：]?\s*(?:KRW|USD|₩|원|\$)?\s*([-+]?\d[\d,]*(?:\.\d+)?[A-Za-z]?)\s*(?:원|KRW|USD)?",
                 line,
@@ -441,6 +444,16 @@ class DocumentParser:
                     values.append(value)
         values = [value for value in values if value is not None]
         return values[-1] if values else None
+
+    def _generic_total_labels(self, labels: list[str]) -> bool:
+        normalized = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
+        return bool(normalized.intersection({"합계", "총액", "total", "totalamount", "amountdue", "grandtotal"}))
+
+    def _line_is_component_amount_summary(self, line: str) -> bool:
+        text = str(line or "")
+        if not re.search(r"(세액|부가세|vat|tax|공급가액|공급액|subtotal|supply)", text, flags=re.IGNORECASE):
+            return False
+        return bool(re.search(r"(합계|total|금월|차감)", text, flags=re.IGNORECASE))
 
     def _amount_label_lookahead(self, lines: list[str], start_index: int) -> list[str]:
         collected: list[str] = []
@@ -512,9 +525,18 @@ class DocumentParser:
         return bool(re.search(r"(실제\s*품목\s*합계|품목\s*합계는|line\s*item\s*(?:sum|total)|computed)", lowered, flags=re.IGNORECASE))
 
     def _extract_currency(self, text: str) -> str | None:
-        if re.search(r"\bUSD\b|US\$|\$\s*\d|\d[\d,]*(?:\.\d+)?\s*(?:USD|US\$)", text, flags=re.IGNORECASE):
+        if re.search(
+            r"(?im)^\s*(?:currency|통화)\s*[:：]?\s*USD\s*$|"
+            r"\b(?:total|subtotal|amount\s+due|invoice\s+total|grand\s+total)\s+USD\b|"
+            r"\bUSD\s+(?:total|subtotal|amount\s+due|invoice\s+total|grand\s+total)\b",
+            text,
+        ):
             return "USD"
         if re.search(r"\bKRW\b|₩|원", text, flags=re.IGNORECASE):
+            return "KRW"
+        if re.search(r"\bUSD\b|US\$|\$\s*\d|\d[\d,]*(?:\.\d+)?\s*(?:USD|US\$)", text, flags=re.IGNORECASE):
+            return "USD"
+        if re.search(r"[가-힣]", text) and re.search(r"(공급가액|세액|합계|단가|금액|부가세|청구금액)", text):
             return "KRW"
         return None
 
@@ -585,8 +607,8 @@ class DocumentParser:
         if self._looks_like_business_label(text) or self._looks_like_instruction_or_note(text):
             return None
         if re.search(
-            r"(옵션|설치비|별도협의|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|담당|"
-            r"문서번호|작성일|검사일|유효기간|Lot\s*No|영수증번호)",
+            r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery|설치비|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|담당|"
+            r"문서번호|작성일|검사일|유효기간|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
             text,
             flags=re.IGNORECASE,
         ):
@@ -677,12 +699,13 @@ class DocumentParser:
                 return transfer_number
         labels = [
             "발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호",
-            "영수증번호", "승인번호", "전표번호", "정산번호", "메모번호",
+            "영수증번호", "전표번호", "정산번호", "메모번호",
             "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
         ]
         normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
-        lines = [line.strip() for line in text.splitlines()]
-        strong = self._best_document_number_from_text(text)
+        primary_text = self._strip_reference_number_lines(text)
+        lines = [line.strip() for line in primary_text.splitlines()]
+        strong = self._best_document_number_from_text(primary_text)
         best_labeled: str | None = None
         for index, line in enumerate(lines[:-1]):
             if re.sub(r"[\s:：#]+", "", line.lower()) not in normalized_labels:
@@ -700,18 +723,43 @@ class DocumentParser:
         if best_labeled:
             return best_labeled
         label_pattern = "|".join(re.escape(label) for label in labels)
-        match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", text, flags=re.IGNORECASE)
+        match = re.search(rf"(?:{label_pattern})\s*[:：#]?\s*([A-Za-z0-9가-힣._/-]+)", primary_text, flags=re.IGNORECASE)
         value = self._normalize_document_number(match.group(1)) if match else None
         if value and self._document_number_score(value) >= 20:
             return value
         return None
 
     def _has_return_or_credit_signal(self, text: str) -> bool:
-        return bool(re.search(
-            r"\b(?:RTN|RCM)[-_ ]?\d{4}|반품\s*/?\s*(?:차감|크레딧)|크레딧\s*메모|반품\s*요청|차감\s*요청|credit\s+memo|credit\s+note|return\s+note",
-            text,
+        return self._return_or_credit_document_signal(text)
+
+    def _return_or_credit_document_signal(self, text: str) -> bool:
+        source = str(text or "")
+        header = "\n".join(line.strip() for line in source.splitlines()[:10])
+        if re.search(r"\b(?:RTN|RCM)[-_ ]?\d{4}", source, flags=re.IGNORECASE):
+            return True
+        if re.search(
+            r"(반품\s*/?\s*(?:차감|크레딧|메모)|반품\s*(?:전표|요청서|문서)|크레딧\s*메모|차감\s*요청|"
+            r"credit\s+(?:memo|note)|return\s+note)",
+            header,
             flags=re.IGNORECASE,
-        ))
+        ):
+            return True
+        has_reference = bool(re.search(r"(원문서|참조문서|관련문서|original\s+invoice|ref(?:erence)?\s+invoice)", source, flags=re.IGNORECASE))
+        has_reason = bool(re.search(r"(사유|reason|규격\s*불일치|차감|크레딧)", source, flags=re.IGNORECASE))
+        has_signed_amount = bool(re.search(r"(?m)(?:^|\s)-\d{1,3}(?:,\d{3})+(?:\s|$)|\(\s*\d{1,3}(?:,\d{3})+\s*\)", source))
+        return has_reference and (has_reason or has_signed_amount)
+
+    def _strip_reference_number_lines(self, text: str) -> str:
+        lines: list[str] = []
+        for line in str(text or "").splitlines():
+            if re.search(
+                r"(원문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|승인번호|카드\s*승인번호|Approval\s*No)",
+                line,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            lines.append(line)
+        return "\n".join(lines)
 
     def _has_signed_return_line_items(self, line_items: list[dict]) -> bool:
         for item in line_items or []:
@@ -3929,7 +3977,6 @@ class DocumentParser:
                 item.get("quantity"),
                 item.get("supply_amount"),
                 item.get("line_total"),
-                item.get("_dedupe_token"),
             )
             if key in seen and not preserve_duplicate:
                 continue
@@ -4617,6 +4664,9 @@ class DocumentParser:
         cleaned = re.sub(r"\s+", " ", str(value)).strip(" \t\r\n:：|")
         return cleaned or None
 
+    def _normalize_raw_text_lines(self, raw_text: str) -> str:
+        return re.sub(r"\\n", "\n", str(raw_text or ""))
+
     def _normalize_specification_value(self, value: object) -> str | None:
         cleaned = self._clean_value(value)
         if not cleaned:
@@ -4647,6 +4697,9 @@ class DocumentParser:
         total = Decimal("0")
         found = False
         for item in line_items:
+            warnings = {str(warning) for warning in (item.get("validation_warnings") or [])}
+            if warnings.intersection({"invalid_line_total", "untrusted_ocr_amount", "line_total_column_not_visible", "row_amount_hidden_do_not_infer"}):
+                continue
             value = item.get("line_total")
             decimal = self._to_decimal(str(value)) if value is not None else None
             if decimal is not None:
@@ -4802,7 +4855,10 @@ class DocumentParser:
 
     def _guess_tags(self, text: str, category: str | None, doc_type: DocumentType) -> list[str]:
         if doc_type in MANUFACTURING_TYPES:
-            return [doc_type.value]
+            tags = {doc_type.value}
+            if category and category not in {"return_note", "credit_note"}:
+                tags.add(category)
+            return sorted(tags)
         tags = {doc_type.value}
         if category:
             tags.add(category)

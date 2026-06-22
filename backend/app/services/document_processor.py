@@ -1025,7 +1025,8 @@ class DocumentProcessor:
 
     def _clean_vl_raw_text(self, text: str) -> str:
         cleaned_lines: list[str] = []
-        for raw_line in str(text or "").splitlines():
+        normalized_text = re.sub(r"\\n", "\n", str(text or ""))
+        for raw_line in normalized_text.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
@@ -2132,20 +2133,26 @@ class DocumentProcessor:
             " ".join(str(tag or "") for tag in (document.tags or [])),
         ]
         combined = "\n".join(values)
-        return_words = re.search(
-            r"(반품|크레딧|차감|환입|credit\s+(?:note|memo)|return\s+(?:note|credit)|원문서|사유\s*규격)",
-            combined,
+        header = "\n".join(line.strip() for line in str(text or "").splitlines()[:10])
+        if re.search(r"(영수증|승인번호|카드사|receipt)", combined, flags=re.IGNORECASE) and not re.search(
+            r"(반품\s*/?\s*(?:차감|크레딧|메모)|크레딧\s*메모|credit\s+(?:note|memo)|return\s+note)",
+            header,
             flags=re.IGNORECASE,
-        )
-        if re.search(r"(영수증|승인번호|카드사|receipt)", combined, flags=re.IGNORECASE) and not return_words:
+        ):
             return False
-        return bool(re.search(
-            r"\b(?:RTN|RCM)[-_ ]?\d{4}|반품\s*/?\s*(?:차감|크레딧)?|반품전표|크레딧|차감|환입|"
-            r"credit\s+(?:note|memo)|return\s+(?:note|credit)|negative|원문서|사유\s*규격|"
-            r"(?:^|\s)-\d{1,3}(?:,\d{3})+|\(\s*\d{1,3}(?:,\d{3})+\s*\)",
-            combined,
-            flags=re.IGNORECASE | re.MULTILINE,
-        ) or (return_words and re.search(r"\bRC[-_ ]?\d{4}", combined, flags=re.IGNORECASE)))
+        if re.search(r"\b(?:RTN|RCM)[-_ ]?\d{4}", combined, flags=re.IGNORECASE):
+            return True
+        if re.search(
+            r"(반품\s*/?\s*(?:차감|크레딧|메모)|반품\s*(?:전표|요청서|문서)|크레딧\s*메모|차감\s*요청|"
+            r"credit\s+(?:memo|note)|return\s+note)",
+            header,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        has_reference = bool(re.search(r"(원문서|참조문서|관련문서|original\s+invoice|ref(?:erence)?\s+invoice)", combined, flags=re.IGNORECASE))
+        has_reason = bool(re.search(r"(사유|reason|규격\s*불일치|차감|크레딧)", combined, flags=re.IGNORECASE))
+        has_signed_amount = bool(re.search(r"(?m)(?:^|\s)-\d{1,3}(?:,\d{3})+(?:\s|$)|\(\s*\d{1,3}(?:,\d{3})+\s*\)", combined))
+        return has_reference and (has_reason or has_signed_amount)
 
     def _internal_transfer_signal_for_document(self, document: Document, text: str) -> bool:
         combined = "\n".join([
@@ -2358,9 +2365,7 @@ class DocumentProcessor:
             return []
         if self._ai_parsed_inspection_context(document, {}, semantic_text):
             return []
-        doc_type = self._document_type_value(document.document_type)
-        tags = {str(tag or "").casefold() for tag in (document.tags or [])}
-        receipt_context = doc_type == "receipt" or "receipt" in tags or bool(re.search(r"(영수증|receipt|승인번호|카드사)", raw_text or "", flags=re.IGNORECASE))
+        receipt_context = self._receipt_context_signal(document, raw_text)
         if not receipt_context or self._purchase_memo_signal(semantic_text):
             return []
         lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
@@ -3113,12 +3118,18 @@ class DocumentProcessor:
 
     def _receipt_context_signal(self, document: Document, raw_text: str) -> bool:
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
-        text = " ".join([
-            str(raw_text or ""),
-            str(document.category or ""),
-            " ".join(str(tag or "") for tag in (document.tags or [])),
-        ])
-        return doc_type == "receipt" or bool(re.search(r"(영수증|receipt|영수증\s*번호|receipt\s*(?:no|number))", text, flags=re.IGNORECASE))
+        category = str(document.category or "").casefold()
+        tags = {str(tag or "").casefold() for tag in (document.tags or [])}
+        if doc_type == "receipt" or category in {"receipt", "pos_receipt"} or tags.intersection({"receipt", "pos_receipt"}):
+            return True
+        text = str(raw_text or "")
+        if re.search(r"(영수증\s*번호|receipt\s*(?:no|number))", text, flags=re.IGNORECASE):
+            return True
+        header = "\n".join(line.strip() for line in text.splitlines()[:12])
+        has_receipt_title = bool(re.search(r"(?m)^\s*(?:영수증|receipt)\s*$", header, flags=re.IGNORECASE))
+        has_payment_signal = bool(re.search(r"(합계|부가세|공급가액|카드|현금|승인번호|감사합니다|payment|cash|card|total|vat)", text, flags=re.IGNORECASE))
+        manufacturing_signal = bool(re.search(r"(입고\s*검사|검사\s*기록|검사\s*성적|발주서|납품서|견적서|거래\s*명세서|자재\s*이동|incoming\s+inspection|purchase\s+order|delivery\s+note|quotation|transaction\s+statement)", text, flags=re.IGNORECASE))
+        return has_receipt_title and has_payment_signal and not manufacturing_signal
 
     def _receipt_top_line_party_candidate(self, raw_text: str) -> str | None:
         for raw_line in str(raw_text or "").splitlines()[:12]:
@@ -3181,7 +3192,9 @@ class DocumentProcessor:
             return True
         if re.fullmatch(r"(?:test|sample|doc[_ -]?title|page\s*\d+)", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(세금\s*계산서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|transaction\s+statement|purchase\s+order|quotation|invoice|견적서|발주서|납품서|거래\s*명세서|영수증|자재\s*이동|commercial\s+invoice)", text, flags=re.IGNORECASE):
+        if re.search(r"(세금\s*계산서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|internal\s+transfer|delivery\s+note|tax\s+invoice|transaction\s+statement|purchase\s+order|quotation|invoice|견적서|발주서|납품서|거래\s*명세서|영수증|자재\s*이동|commercial\s+invoice)", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery)", text, flags=re.IGNORECASE):
             return True
         if re.search(r"(담당|당당|검사자|작성자|검수자|회계팀|구매팀|품질팀|품길팀|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액|vendor\s*sku|item\s*code|unit\s*price|line\s*total|\bqty\b|\bspec\b)", text, flags=re.IGNORECASE):
             return True
@@ -4037,7 +4050,9 @@ class DocumentProcessor:
         text = f"{category} {tags}\n" + "\n".join(line.strip() for line in str(raw_text or "").splitlines()[:12])
         if re.search(r"(credit_note|크레딧|차감|credit\s+(?:note|memo))", text, flags=re.IGNORECASE):
             return "credit_note"
-        return "return_note"
+        if re.search(r"(return_note|\bRTN[-_ ]?\d{4}|반품\s*(?:전표|요청서|문서|메모)|return\s+note)", text, flags=re.IGNORECASE):
+            return "return_note"
+        return category if category in {"return_note", "credit_note"} else "return_note"
 
     def _structured_or_parsed_return_credit_signal(self, structured: dict, parsed: object) -> bool:
         candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}

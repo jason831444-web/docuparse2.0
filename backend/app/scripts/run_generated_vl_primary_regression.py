@@ -43,6 +43,7 @@ WARNING_GROUP_BY_CODE = {
     "customer_mismatch": "extraction_quality",
     "vendor_mismatch": "extraction_quality",
     "line_item_min_count_not_met": "extraction_quality",
+    "receipt_line_items_review_required": "extraction_quality",
     "issue_date_missing": "extraction_quality",
     "document_number_missing": "extraction_quality",
     "no_price_expected_safe": "safe_review",
@@ -270,6 +271,7 @@ def compare_expected_actual(expected: dict[str, Any], actual: dict[str, Any], ex
     _detect_exchange_rate_as_amount(actual, line_items, failures)
     _detect_vendor_sku_row(line_items, failures)
     _detect_document_expectations(expected, actual, line_items, warnings, failures)
+    _detect_receipt_line_item_quality(expected, actual, line_items, warnings)
     _detect_review_flags(expected_items, actual, warnings)
     _detect_export_candidate_leak(export_json or {}, failures)
 
@@ -867,6 +869,41 @@ def _detect_document_expectations(
         for flag in required_quality_flags:
             if flag not in present:
                 warnings.append({"code": "expected_quality_flag_missing", "expected_flag": flag})
+
+
+def _detect_receipt_line_item_quality(
+    expected: dict[str, Any],
+    actual: dict[str, Any],
+    line_items: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> None:
+    doc_type = str(actual.get("document_type") or expected.get("document_type") or "").casefold()
+    category = str(actual.get("category") or "").casefold()
+    tags = {str(tag or "").casefold() for tag in (actual.get("tags") or [])}
+    if doc_type != "receipt" and category != "receipt" and "receipt" not in tags:
+        return
+    dirty_codes = {
+        "receipt_row_review_required",
+        "receipt_fragmented_row_reconstructed",
+        "receipt_fragmented_row_preserved_for_review",
+    }
+    dirty_rows = []
+    for index, item in enumerate(line_items, start=1):
+        warnings_for_item = {str(code) for code in (item.get("validation_warnings") or item.get("review_flags") or [])}
+        if warnings_for_item.intersection(dirty_codes):
+            dirty_rows.append(index)
+    metadata = actual.get("workflow_metadata") if isinstance(actual.get("workflow_metadata"), dict) else {}
+    receipt_candidates = metadata.get("receipt_item_candidates") if isinstance(metadata.get("receipt_item_candidates"), list) else []
+    if not dirty_rows and not receipt_candidates:
+        return
+    warnings.append(
+        {
+            "code": "receipt_line_items_review_required",
+            "message": "Receipt rows were reconstructed from fragmented OCR and should not pass as fully clean extraction.",
+            "dirty_line_indexes": dirty_rows,
+            "receipt_candidate_count": len(receipt_candidates),
+        }
+    )
 
 
 def _detect_review_flags(expected_items: list[dict[str, Any]], actual: dict[str, Any], warnings: list[dict[str, Any]]) -> None:

@@ -219,6 +219,64 @@ No 품목 규격 수량 단가 공급가액 세액 합계
     assert "supply_amount" not in option
 
 
+def test_delivery_note_return_note_text_does_not_force_return_category():
+    text = """
+납품서
+문서번호 DN-2026-0003
+거래처 대성정공
+No 품목 규격 수량 단위 비고
+1 S45C PIN 8X60 120 EA 반품 2박스 제외
+"""
+    parsed = DocumentParser().parse(text, "delivery_note.jpg")
+
+    assert parsed.document_type == DocumentType.delivery_note
+    assert parsed.category == "delivery_note"
+    assert "return_note" not in (parsed.tags or [])
+
+
+def test_reference_and_approval_numbers_are_not_primary_document_numbers():
+    parser = DocumentParser()
+
+    return_note = parser.parse(
+        "반품/크레딧 메모\n문서번호 RCM-2026-0009\n원문서 TS-2026-0034\n사유 규격 불일치",
+        "return_credit.pdf",
+    )
+    receipt = parser.parse("영수증\n승인번호 RC-2026-0029\n카드 결제\n합계 5,500", "receipt.jpg")
+
+    assert return_note.document_number == "RCM-2026-0009"
+    assert receipt.document_number is None
+
+
+def test_component_tax_or_supply_summary_is_not_used_as_document_total():
+    text = """
+세금계산서
+문서번호 INV-2026-0015
+월일 품목 규격 수량 단가 공급가액 세액
+06.08 고추장 소스 2kg SAUCE-GJ2 8 9,200 73,600 7,360
+공급가액 합계 181,100
+세액 합계 18,110
+"""
+    parsed = DocumentParser().parse(text, "tax_invoice_photo.png")
+
+    assert parsed.subtotal == 181100
+    assert parsed.tax == 18110
+    assert parsed.extracted_amount is None
+
+
+def test_korean_amount_context_prefers_krw_over_usd_noise():
+    text = """
+세금계산서
+문서번호 INV-2026-0015
+품목 수량 단가 공급가액 세액
+1 고추장 소스 8 9,200 73,600 7,360
+비고 USD 환율 참고
+합계 80,960원
+"""
+    parsed = DocumentParser().parse(text, "tax_invoice.png")
+
+    assert parsed.currency == "KRW"
+
+
 def test_inspection_rows_keep_pos_receipt_paper_as_item_not_receipt_category():
     text = """
 문서번호:DOC-029

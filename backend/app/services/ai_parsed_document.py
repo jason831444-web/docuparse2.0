@@ -400,6 +400,13 @@ class AiParsedDocumentBuilder:
     def _looks_like_unmapped_key_value(self, line: str) -> bool:
         if len(line) > 80 or len(line.split()) > 6:
             return False
+        if re.search(
+            r"(internal\s+transfer|delivery\s+note|tax\s+invoice|purchase\s+order|quotation|commercial\s+invoice|"
+            r"자재\s*이동|납품서|발주서|견적서|세금\s*계산서|옵션|별도\s*협의|미확정|fast[-_\s]*delivery)",
+            line,
+            flags=re.IGNORECASE,
+        ):
+            return False
         return bool(re.search(r"[:：]", line) or re.match(r"^[가-힣A-Za-z/ ]{2,16}\s+\S{2,}", line))
 
     def _table_rows(self, table: dict[str, Any], columns: list[str]) -> list[dict[str, Any]]:
@@ -494,7 +501,8 @@ class AiParsedDocumentBuilder:
 
 def _clean_lines(raw_text: str) -> list[str]:
     cleaned: list[str] = []
-    for raw_line in str(raw_text or "").splitlines():
+    normalized_text = re.sub(r"\\n", "\n", str(raw_text or ""))
+    for raw_line in normalized_text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
@@ -520,7 +528,9 @@ def _sanitize_party_candidate(value: Any) -> str | None:
         return None
     if re.search(r"[/\\]|^\d|[_]{2,}|-{3,}|(?:20\d{2}[./-]\d{1,2})", text):
         return None
-    if re.search(r"(doc[_ -]?title|sample|샘플|생품|생플|문서번호|운서번호|발주서|견적서|겨적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|transaction\s+statement|purchase\s+order|commercial\s+invoice|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|금액|비고|출고창고|입고창고|창고|warehouse|quotation|invoice)", text, flags=re.IGNORECASE):
+    if re.search(r"(doc[_ -]?title|sample|샘플|생품|생플|문서번호|운서번호|발주서|견적서|겨적서|납품서|세금\s*계산서|거래\s*명세서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|internal\s+transfer|delivery\s+note|tax\s+invoice|transaction\s+statement|purchase\s+order|commercial\s+invoice|자재\s*이동|영수증|일\s*정산|합계|공급가액|세액|품목|수량|단가|금액|비고|출고창고|입고창고|창고|warehouse|quotation|invoice)", text, flags=re.IGNORECASE):
+        return None
+    if re.search(r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery)", text, flags=re.IGNORECASE):
         return None
     if re.search(r"(담당|당당|검사자|회계팀|구매팀|품질팀|품길팀|연락처|전화|사업자\s*번호|등록번호)", text, flags=re.IGNORECASE):
         return None

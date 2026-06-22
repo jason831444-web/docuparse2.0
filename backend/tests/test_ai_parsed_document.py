@@ -168,3 +168,30 @@ def test_ai_parsed_document_does_not_treat_store_as_customer_without_pos_signal(
 
     fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
     assert not any(field.get("normalized_key") == "customer_name" for field in fields)
+
+
+def test_ai_parsed_document_splits_literal_newline_supplier_customer_blocks():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="세금계산서\\n공급자\\n상호: (주)삼광유통\\n사업자번호 123-45-67890\\n공급받는자\\n상호: (주)신우정밀",
+        tables=[],
+        document_type_hint="invoice",
+    )
+
+    fields = next(section["fields"] for section in result["sections"] if section["type"] == "key_value")
+    values = {field["normalized_key"]: field["value"] for field in fields if field.get("normalized_key") in {"supplier_name", "customer_name"}}
+    assert values == {"supplier_name": "삼광유통", "customer_name": "신우정밀"}
+
+
+def test_ai_parsed_document_blocks_titles_and_option_terms_as_party_candidates():
+    builder = AiParsedDocumentBuilder()
+
+    result = builder.build(
+        raw_text="Internal Transfer\n옵션 긴급 납품 옵션 FAST-DELIVERY 별도협의 미확정\n자재 이동 요청서",
+        tables=[],
+        document_type_hint="internal_transfer",
+    )
+
+    assert not any(section["type"] == "key_value" for section in result["sections"])
+    assert result["unmapped_fields"] == []

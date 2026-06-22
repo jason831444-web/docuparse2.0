@@ -648,6 +648,31 @@ def test_compare_warns_when_expected_line_item_min_count_is_not_met():
     assert not result["failures"]
     warning = result["warnings"][0]
     assert warning["code"] == "line_item_min_count_not_met"
+
+
+def test_compare_warns_when_receipt_line_items_are_reconstructed_review_rows():
+    expected = {
+        "document_type": "receipt",
+        "expected_line_item_min_count": 2,
+    }
+    actual = {
+        "document_type": "receipt",
+        "line_items": [
+            {
+                "item_name": "PC8 Connector",
+                "quantity": 5,
+                "line_total": 3100,
+                "validation_warnings": ["receipt_row_review_required", "receipt_fragmented_row_reconstructed"],
+            },
+            {"item_name": "양파 15kg", "quantity": 15, "line_total": 22900},
+        ],
+    }
+
+    result = compare_expected_actual(expected, actual, {})
+
+    assert result["status"] == "WARN"
+    warning = next(issue for issue in result["warnings"] if issue["code"] == "receipt_line_items_review_required")
+    assert warning["dirty_line_indexes"] == [1]
     assert warning["warn_group"] == "extraction_quality"
 
 

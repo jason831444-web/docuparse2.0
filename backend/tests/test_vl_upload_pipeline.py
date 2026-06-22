@@ -332,6 +332,14 @@ def test_vl_raw_text_cleaner_removes_generated_upload_path_lines():
     assert cleaned.splitlines() == ["발주서", "문서번호 PO-2026-0001", "대성정공"]
 
 
+def test_vl_raw_text_cleaner_splits_literal_newline_sequences():
+    processor = _processor(FakeVLWorker())
+
+    cleaned = processor._clean_vl_raw_text("세금계산서\\n공급자\\n상호: (주)삼광유통\\n공급받는자\\n상호: (주)신우정밀")
+
+    assert cleaned.splitlines() == ["세금계산서", "공급자", "상호: (주)삼광유통", "공급받는자", "상호: (주)신우정밀"]
+
+
 def test_party_sanitizer_removes_address_phone_and_warehouse_values():
     document = _document(
         document_type=DocumentType.general_document,
@@ -360,6 +368,48 @@ def test_party_sanitizer_blocks_table_headers_and_document_number_fragments():
     assert document.vendor_name is None
     assert document.customer_name is None
     assert document.merchant_name is None
+
+
+def test_party_sanitizer_blocks_document_titles_and_option_terms():
+    document = _document(
+        document_type=DocumentType.general_document,
+        vendor_name="Internal Transfer",
+        customer_name="옵션 긴급 납품 옵션 FAST-DELIVERY 별도협의",
+        merchant_name="Tax Invoice",
+    )
+
+    _processor(FakeVLWorker())._normalize_party_fields(document)
+
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+
+
+def test_receipt_candidates_do_not_trigger_from_item_name_in_manufacturing_document():
+    processor = _processor(FakeVLWorker())
+    document = _document(document_type=DocumentType.inspection_report, category="inspection_report", tags=["inspection_report"])
+    raw_text = """
+입고 검사 기록서
+No 품명 Lot/Code 입고수량 검사항목 판정 비고
+1 POS 영수증 용지 POS-PAPER 50 외관/치수 재검 스크래치 확인
+"""
+
+    assert processor._receipt_context_signal(document, raw_text) is False
+    assert processor._receipt_review_row_candidates(document, raw_text, raw_text) == []
+
+
+def test_return_credit_signal_requires_document_level_signal_not_delivery_note_exclusion_note():
+    processor = _processor(FakeVLWorker())
+    document = _document(document_type=DocumentType.delivery_note, category="delivery_note", tags=["delivery_note"], document_number="DN-2026-0003")
+
+    assert processor._return_credit_signal_for_document(
+        document,
+        "납품서\n문서번호 DN-2026-0003\n비고 반품 2박스 제외\nS45C PIN 120 EA",
+    ) is False
+    assert processor._return_credit_signal_for_document(
+        document,
+        "반품/크레딧 메모\n문서번호 RCM-2026-0009\n원문서 TS-2026-0034\n사유 규격 불일치\n-36,000",
+    ) is True
 
 
 def test_supplier_customer_block_promotes_labeled_party_candidates():
