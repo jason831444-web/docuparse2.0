@@ -2364,28 +2364,38 @@ class DocumentProcessor:
         lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
         candidates: list[dict[str, Any]] = []
         for index, line in enumerate(lines):
-            if self._receipt_footer_or_payment_line(line):
+            if self._receipt_footer_or_payment_line(line) or self._receipt_header_or_label_line(line):
                 continue
             parsed = self._parse_receipt_quantity_amount_line(line)
-            if not parsed:
-                continue
-            item_name = self._nearest_receipt_item_name(lines, index)
-            if not item_name:
-                continue
+            if parsed:
+                item_name = self._nearest_receipt_item_name(lines, index)
+                evidence = line
+            else:
+                item_name = self._receipt_item_name_at(lines, index)
+                if not item_name:
+                    continue
+                evidence_lines = self._receipt_candidate_evidence_lines(lines, index)
+                if not self._receipt_evidence_has_quantity_or_amount(evidence_lines):
+                    continue
+                parsed = self._parse_receipt_quantity_amount_line(" ".join(evidence_lines))
+                evidence = " / ".join(evidence_lines)
             candidate = {
                 "section_type": "receipt_items",
                 "status": "review_only",
                 "source": "vl_raw_text.receipt_fragment",
                 "document_context": "receipt",
                 "item_name": item_name,
-                "quantity": parsed.get("quantity"),
-                "unit": parsed.get("unit"),
-                "unit_price": parsed.get("unit_price"),
-                "line_total": parsed.get("line_total"),
-                "evidence": line,
+                "evidence": evidence,
                 "reason": "receipt_fragmented_row_preserved_for_review",
-                "confidence": 0.46,
+                "confidence": 0.46 if parsed else 0.34,
             }
+            if parsed:
+                candidate.update({
+                    "quantity": parsed.get("quantity"),
+                    "unit": parsed.get("unit"),
+                    "unit_price": parsed.get("unit_price"),
+                    "line_total": parsed.get("line_total"),
+                })
             candidates.append(candidate)
             if len(candidates) >= 40:
                 break
@@ -2457,21 +2467,69 @@ class DocumentProcessor:
             candidate_index = index - offset
             if candidate_index < 0:
                 break
-            candidate = lines[candidate_index].strip()
-            if not candidate or self._receipt_footer_or_payment_line(candidate):
-                continue
-            if self._parse_receipt_quantity_amount_line(candidate):
-                continue
-            if re.fullmatch(r"[\d,.\-\s]+", candidate):
-                continue
-            if len(candidate) > 60:
-                continue
-            return candidate
+            candidate = self._receipt_item_name_at(lines, candidate_index)
+            if candidate:
+                return candidate
         return None
+
+    def _receipt_item_name_at(self, lines: list[str], index: int) -> str | None:
+        candidate = lines[index].strip()
+        if index == 0:
+            return None
+        if not candidate or self._receipt_footer_or_payment_line(candidate) or self._receipt_header_or_label_line(candidate):
+            return None
+        if self._parse_receipt_quantity_amount_line(candidate):
+            return None
+        if re.fullmatch(r"[\d,.\-\{\}\s]+", candidate):
+            return None
+        if re.search(r"^[A-Z]?\d+(?:EA|KG|BOX|ROLL|PCS|개)|(?:EA|KG|BOX|ROLL|PCS|개)\s*[xX×]?", candidate, flags=re.IGNORECASE):
+            return None
+        if len(candidate) > 60:
+            return None
+        parts = [candidate]
+        if index + 1 < len(lines):
+            spec = lines[index + 1].strip()
+            if (
+                spec
+                and not self._receipt_footer_or_payment_line(spec)
+                and not self._receipt_header_or_label_line(spec)
+                and not self._parse_receipt_quantity_amount_line(spec)
+                and not re.fullmatch(r"[\d,.\-\{\}\s]+", spec)
+                and re.fullmatch(r"[A-Z0-9가-힣?/\-]{1,16}", spec, flags=re.IGNORECASE)
+                and not re.search(r"(EA|KG|BOX|ROLL|PCS|개)\s*[xX×]?", spec, flags=re.IGNORECASE)
+            ):
+                parts.append(spec)
+        return " ".join(parts).strip()
+
+    def _receipt_candidate_evidence_lines(self, lines: list[str], index: int) -> list[str]:
+        evidence = [lines[index].strip()]
+        for follow in lines[index + 1:index + 6]:
+            text = follow.strip()
+            if not text or self._receipt_footer_or_payment_line(text) or self._receipt_header_or_label_line(text):
+                break
+            evidence.append(text)
+            if len(evidence) >= 5:
+                break
+        return evidence
+
+    def _receipt_evidence_has_quantity_or_amount(self, lines: list[str]) -> bool:
+        text = " ".join(lines)
+        digit_groups = re.findall(r"\d+", text)
+        return bool(
+            len(digit_groups) >= 2
+            or re.search(r"(?:EA|KG|BOX|ROLL|PCS|개|EAX|B0X|BOX|ROLL|X)\b", text, flags=re.IGNORECASE)
+        )
 
     def _receipt_footer_or_payment_line(self, line: str) -> bool:
         return bool(re.search(
             r"(합계|총액|부가세|과세|면세|결제|카드|현금|승인|거스름|받은\s*금액|vat|total|subtotal|tax)",
+            line or "",
+            flags=re.IGNORECASE,
+        ))
+
+    def _receipt_header_or_label_line(self, line: str) -> bool:
+        return bool(re.search(
+            r"^(영수증\s*번호|일자|감사|매장|상호|사업자|대표|주소|전화|tel|receipt\s*(?:no|number)?|date)\b|^IDOC[-_ ]?\d+|^DOC[-_ ]?\d+",
             line or "",
             flags=re.IGNORECASE,
         ))
@@ -3212,6 +3270,12 @@ class DocumentProcessor:
             str(document.customer_name or ""),
             " ".join(str(tag or "") for tag in (document.tags or [])),
         ])
+        if (
+            str(document.category or "").casefold() in {"inspection_report", "incoming_inspection"}
+            or {"inspection_report", "incoming_inspection"}.intersection({str(tag or "").casefold() for tag in (document.tags or [])})
+            or self._inspection_text_signal(text)
+        ):
+            return False
         manufacturing_document_signal = re.search(
             r"(거래\s*명세서|발주서|견적서|세금\s*계산서|인보이스|invoice|납품서|입고\s*검사|자재\s*이동|반품|크레딧)",
             text,
