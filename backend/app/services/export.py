@@ -80,6 +80,21 @@ def serialize_document(document: Document) -> dict:
     return data
 
 
+def document_read_safety_overrides(document: Document) -> dict:
+    """Return API read overrides for values that are unsafe to show as confirmed."""
+
+    taxonomy = _export_taxonomy(document)
+    if not _return_credit_purchase_order_export_conflict(document, taxonomy):
+        return {}
+    return {
+        "line_items": [],
+        "subtotal": None,
+        "tax": None,
+        "extracted_amount": None,
+        "currency": None,
+    }
+
+
 def documents_to_csv(documents: list[Document], template: ExportTemplate | None = None) -> str:
     rows = documents_to_template_rows(documents, template) if template else documents_to_erp_rows(documents)
     frame = pd.DataFrame(rows).drop(columns=["거래처 탭", "_party_tab"], errors="ignore")

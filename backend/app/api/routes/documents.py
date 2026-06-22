@@ -29,7 +29,7 @@ from app.schemas.document import (
     ReviewIssueUpdate,
     ReviewReopenRequest,
 )
-from app.services.export import document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
+from app.services.export import document_read_safety_overrides, document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
 from app.services.category_taxonomy import category_path_for, clean_tags_for_context, display_label, normalize_category_value
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.queue_service import get_document_queue
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 def _to_read(document: Document) -> DocumentRead:
     storage = get_storage_service()
     return DocumentRead.model_validate(
-        {**document.__dict__, "file_url": storage.public_url(document.stored_file_path)}
+        {**document.__dict__, **document_read_safety_overrides(document), "file_url": storage.public_url(document.stored_file_path)}
     )
 
 

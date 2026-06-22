@@ -8,7 +8,7 @@ from zipfile import ZipFile
 import pytest
 
 from app.models.document import Document, DocumentType, ExportTemplate, ProcessingStatus
-from app.services.export import document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
+from app.services.export import document_read_safety_overrides, document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
 
 
 def _document(number: str, customer: str, amount: Decimal) -> Document:
@@ -410,6 +410,8 @@ def test_return_credit_source_conflict_blocks_priced_export_values_and_template_
     assert payload["canonical_export"]["line_items"] == []
     assert payload["canonical_export"]["document"]["total"] is None
     assert payload["canonical_export"]["document"]["currency"] is None
+    assert document_read_safety_overrides(document)["line_items"] == []
+    assert document_read_safety_overrides(document)["extracted_amount"] is None
     assert payload["canonical_export"]["policy"]["export_blocked"] is True
     assert "return_credit_source_conflicts_with_priced_export_blocked" in payload["canonical_export"]["policy"]["export_warning"]
     assert rows[0]["품목명"] == ""
