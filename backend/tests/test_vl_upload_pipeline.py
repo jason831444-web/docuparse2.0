@@ -347,6 +347,21 @@ def test_party_sanitizer_removes_address_phone_and_warehouse_values():
     assert document.merchant_name is None
 
 
+def test_party_sanitizer_blocks_table_headers_and_document_number_fragments():
+    document = _document(
+        document_type=DocumentType.invoice,
+        vendor_name="SKU Spec Qty Unit Unit Price A",
+        customer_name="INV-US-GEN- OO4",
+        merchant_name="Vendor SKU Spec Qty",
+    )
+
+    _processor(FakeVLWorker())._normalize_party_fields(document)
+
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+
+
 def test_supplier_customer_block_promotes_labeled_party_candidates():
     document = _document(document_type=DocumentType.invoice, vendor_name=None, customer_name=None)
 

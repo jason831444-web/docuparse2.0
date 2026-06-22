@@ -2833,7 +2833,7 @@ class DocumentProcessor:
             return True
         if re.search(r"(세금\s*계산서|입고\s*검사|검사\s*기록|검사\s*성적|incoming\s+inspection|transaction\s+statement|purchase\s+order|quotation|invoice|견적서|발주서|납품서|거래\s*명세서|영수증|자재\s*이동|commercial\s+invoice)", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(담당|당당|검사자|작성자|검수자|회계팀|구매팀|품질팀|품길팀|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액)", text, flags=re.IGNORECASE):
+        if re.search(r"(담당|당당|검사자|작성자|검수자|회계팀|구매팀|품질팀|품길팀|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액|vendor\s*sku|item\s*code|unit\s*price|line\s*total|\bqty\b|\bspec\b)", text, flags=re.IGNORECASE):
             return True
         if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|로\s*\d|번길|주소)", text):
             return True
@@ -2842,7 +2842,7 @@ class DocumentProcessor:
         if len(text) > 60:
             return True
         if re.fullmatch(
-            r"(?:I?DOC|PO|INV|DN|RCM|TS|IQC|MV|QT|PM|POS|RC)[-_ ]?[Oo0]?\d{2,}(?:[-_ ]?\d+)?",
+            r"(?:I?DOC|PO|INV|DN|RCM|TS|IQC|IOC|MV|QT|PM|POS|RC|RTN|TRF)[-_ ]?[A-Z0-9Oo][A-Z0-9Oo _-]*\d",
             text,
             flags=re.IGNORECASE,
         ):
