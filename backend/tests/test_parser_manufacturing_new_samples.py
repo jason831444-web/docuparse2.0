@@ -247,6 +247,17 @@ def test_reference_and_approval_numbers_are_not_primary_document_numbers():
     assert receipt.document_number is None
 
 
+def test_reference_number_on_next_line_is_not_primary_document_number():
+    parser = DocumentParser()
+
+    parsed = parser.parse(
+        "반품/크레딧 메모\n원문서\nTS-2026-0034\n사유 규격 불일치\n품목 수량 단가 공급가액 세액 합계\nAL6061 -2 18000 -36000 -3600 -39600",
+        "return_credit.pdf",
+    )
+
+    assert parsed.document_number is None
+
+
 def test_component_tax_or_supply_summary_is_not_used_as_document_total():
     text = """
 세금계산서
@@ -275,6 +286,19 @@ def test_korean_amount_context_prefers_krw_over_usd_noise():
     parsed = DocumentParser().parse(text, "tax_invoice.png")
 
     assert parsed.currency == "KRW"
+
+
+def test_receipt_item_name_usd_noise_does_not_set_usd_currency():
+    text = """
+청년식당
+영수증번호 DOC-041
+USD소스 덮밥 1EA X 9000 9000
+합계 9000
+"""
+    parsed = DocumentParser().parse(text, "receipt.jpg")
+
+    assert parsed.document_type == DocumentType.receipt
+    assert parsed.currency in {None, "KRW"}
 
 
 def test_inspection_rows_keep_pos_receipt_paper_as_item_not_receipt_category():

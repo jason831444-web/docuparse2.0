@@ -259,6 +259,52 @@ def test_csv_export_does_not_copy_document_total_into_untrusted_line_amounts():
     assert rows[0]["export_policy"] == "foreign_currency_document"
 
 
+def test_export_dedupes_line_items_and_blocks_invalid_tax_amounts():
+    document = _document("INV-1", "네오팩토리", Decimal("110"))
+    document.line_items = [
+        {"item_name": "고추장 소스", "quantity": 1, "supply_amount": 100, "tax_amount": 10, "line_total": 110},
+        {"item_name": "고추장 소스", "quantity": 1, "supply_amount": 100, "tax_amount": 10, "line_total": 110},
+        {
+            "item_name": "월일 밀린 행",
+            "quantity": 1,
+            "supply_amount": 100,
+            "tax_amount": 900,
+            "line_total": 1000,
+            "validation_warnings": ["invalid_tax_greater_than_supply"],
+        },
+    ]
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert len(payload["canonical_export"]["line_items"]) == 2
+    assert payload["canonical_export"]["line_items"][1]["supply_amount"] is None
+    assert rows[1]["공급가액"] == ""
+    assert rows[1]["세액"] == ""
+
+
+def test_receipt_dirty_line_items_are_review_candidates_not_export_rows():
+    document = _document("RC-1", "가온마트", Decimal("9000"))
+    document.document_type = DocumentType.receipt
+    document.tags = ["receipt"]
+    document.line_items = [
+        {
+            "item_name": "영수증 품목 후보",
+            "quantity": 1,
+            "line_total": 9000,
+            "validation_warnings": ["receipt_row_review_required"],
+        }
+    ]
+    document.workflow_metadata = {"receipt_item_candidates": [{"item_name": "영수증 품목 후보", "status": "review_only"}]}
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert payload["canonical_export"]["line_items"] == []
+    assert payload["canonical_export"]["review_candidates"]["receipt_item_candidates"]
+    assert rows[0]["품목명"] == ""
+
+
 def test_excel_export_contains_taxonomy_columns_in_combined_sheet():
     document = _document("INV-1", "네오팩토리", Decimal("100"))
     document.workflow_metadata = {"taxonomy": {"document_subtype": "commercial_invoice", "document_profile": "foreign_currency_document", "document_profiles": ["foreign_currency_document"]}}

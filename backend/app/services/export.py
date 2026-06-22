@@ -63,6 +63,11 @@ def serialize_document(document: Document) -> dict:
             "bbox_candidate_summary": _layout_candidate_summary(document),
             "vl_candidates": _vl_candidates(document),
             "vl_candidate_summary": _vl_candidate_summary(document),
+            "party_review_candidates": _workflow_list(document, "party_review_candidates"),
+            "document_number_candidates": _workflow_list(document, "document_number_candidates"),
+            "date_candidates": _workflow_list(document, "date_candidates"),
+            "receipt_item_candidates": _workflow_list(document, "receipt_item_candidates"),
+            "pos_settlement_summary": _workflow_dict(document, "pos_settlement_summary"),
         },
     }
     return data
@@ -168,8 +173,9 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
         layout_summary = _layout_candidate_summary(document)
         vl_summary = _vl_candidate_summary(document)
         review_reasons = _review_reason_text(document)
-        has_line_items = bool(document.line_items)
-        line_items = document.line_items or [{}]
+        line_items = _exportable_line_items(document)
+        has_line_items = bool(line_items)
+        line_items = line_items or [{}]
         for index, item in enumerate(line_items, start=1):
             rows.append({
                 "문서유형": getattr(document.document_type, "value", str(document.document_type)),
@@ -621,8 +627,98 @@ def _canonical_line_items(document: Document) -> list[dict]:
             "match_confidence": _json_safe(item.get("item_master_match_confidence")),
             "line_review_flags": _line_review_flags(document, index - 1),
         }
-        for index, item in enumerate(document.line_items or [], start=1)
+        for index, item in enumerate(_exportable_line_items(document), start=1)
     ]
+
+
+def _exportable_line_items(document: Document) -> list[dict]:
+    cleaned: list[dict] = []
+    seen: set[tuple] = set()
+    for item in document.line_items or []:
+        if not isinstance(item, dict):
+            continue
+        if _line_item_excluded_from_export(document, item):
+            continue
+        safe_item = _line_item_with_safe_amounts(item)
+        key = _line_item_export_key(safe_item)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(safe_item)
+    return cleaned
+
+
+def _line_item_excluded_from_export(document: Document, item: dict) -> bool:
+    flags = _line_warning_codes(item)
+    doc_type = _doc_type(document)
+    tags = {str(tag or "").casefold() for tag in (document.tags or [])}
+    if doc_type == "receipt" or "receipt" in tags:
+        dirty_receipt_flags = {
+            "receipt_row_review_required",
+            "receipt_fragmented_row_reconstructed",
+            "receipt_fragmented_row_preserved_for_review",
+        }
+        if flags & dirty_receipt_flags:
+            return True
+    return False
+
+
+def _line_item_with_safe_amounts(item: dict) -> dict:
+    safe_item = dict(item)
+    flags = _line_warning_codes(item)
+    invalid_amount_flags = {
+        "invalid_tax_greater_than_total",
+        "invalid_tax_greater_than_supply",
+        "invalid_supply_greater_than_total",
+        "invalid_line_total",
+        "untrusted_ocr_amount",
+        "hidden_amount_risk",
+        "hidden_amount_confirmed_blocked",
+    }
+    if flags & invalid_amount_flags:
+        for field in ("unit_price", "supply_amount", "tax_amount", "line_total"):
+            safe_item.pop(field, None)
+    return safe_item
+
+
+def _line_warning_codes(item: dict) -> set[str]:
+    codes: set[str] = set()
+    for field in ("validation_warnings", "review_flags", "issue_codes"):
+        values = item.get(field)
+        if isinstance(values, list):
+            codes.update(str(value) for value in values if value not in (None, ""))
+        elif values:
+            codes.add(str(values))
+    return codes
+
+
+def _line_item_export_key(item: dict) -> tuple:
+    return (
+        _norm_export_key(item.get("item_name")),
+        _norm_export_key(item.get("document_item_code") or item.get("item_code") or item.get("source_item_code")),
+        _norm_export_key(item.get("specification")),
+        _norm_export_key(item.get("quantity")),
+        _norm_export_key(item.get("unit_price")),
+        _norm_export_key(item.get("supply_amount")),
+        _norm_export_key(item.get("tax_amount")),
+        _norm_export_key(item.get("line_total")),
+    )
+
+
+def _norm_export_key(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def _workflow_list(document: Document, key: str) -> list:
+    workflow = document.workflow_metadata or {}
+    value = workflow.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _workflow_dict(document: Document, key: str) -> dict:
+    workflow = document.workflow_metadata or {}
+    value = workflow.get(key)
+    return value if isinstance(value, dict) else {}
 
 
 def _related_document_number(document: Document) -> str | None:

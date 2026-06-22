@@ -38,7 +38,7 @@ import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
-import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow, DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem } from "@/types/document";
+import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow, DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem, PosSettlementSummary, ReviewCandidate } from "@/types/document";
 
 const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
@@ -157,6 +157,51 @@ function aiParsedColumns(section: AiParsedSection, rows: AiParsedTableRow[]): st
   const columns = new Set<string>();
   rows.forEach((row) => Object.keys(readRecord(row.cells)).forEach((column) => columns.add(column)));
   return Array.from(columns);
+}
+
+function workflowCandidates(document: DocumentRecord, key: string): ReviewCandidate[] {
+  const metadata = readRecord(document.workflow_metadata);
+  const value = metadata[key];
+  return Array.isArray(value) ? value.map((candidate) => readRecord(candidate) as ReviewCandidate).filter((candidate) => Object.keys(candidate).length) : [];
+}
+
+function posSettlementSummary(document: DocumentRecord): PosSettlementSummary | null {
+  const summary = readRecord(readRecord(document.workflow_metadata).pos_settlement_summary);
+  return Object.keys(summary).length ? summary as PosSettlementSummary : null;
+}
+
+function CandidateList({ title, description, candidates }: { title: string; description: string; candidates: ReviewCandidate[] }) {
+  if (!candidates.length) return null;
+  return (
+    <details open className="rounded-lg border bg-white p-4">
+      <summary className="cursor-pointer text-sm font-semibold">
+        {title}
+        <span className="ml-2 text-xs font-normal text-muted-foreground">확정값 아님</span>
+      </summary>
+      <p className="mt-2 text-xs text-muted-foreground">{description}</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {candidates.map((candidate, index) => (
+          <div key={`${candidate.field}-${candidate.value}-${index}`} className="rounded-md border bg-slate-50 p-3 text-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-xs text-muted-foreground">{candidate.source_label || candidate.field || candidate.role || "후보"}</p>
+                <p className="mt-1 break-words font-medium">{displayValue(candidate.normalized_value ?? candidate.value)}</p>
+              </div>
+              <Badge variant="outline" className={aiStatusClass(candidate.status)}>{aiStatusLabel(candidate.status)}</Badge>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+              {candidate.field ? <span className="rounded bg-white px-1.5 py-0.5">field: {candidate.field}</span> : null}
+              {candidate.role ? <span className="rounded bg-white px-1.5 py-0.5">role: {candidate.role}</span> : null}
+              {candidate.source ? <span className="rounded bg-white px-1.5 py-0.5">{candidate.source}</span> : null}
+              {confidenceLabel(candidate.confidence) ? <span className="rounded bg-white px-1.5 py-0.5">{confidenceLabel(candidate.confidence)}</span> : null}
+            </div>
+            {candidate.evidence ? <p className="mt-2 break-words text-xs text-muted-foreground">근거: {candidate.evidence}</p> : null}
+            {candidate.reason ? <p className="mt-1 text-xs text-muted-foreground">사유: {candidate.reason}</p> : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
 }
 
 async function loadDocumentNeighbors(currentId: string): Promise<DocumentNeighbors> {
@@ -343,6 +388,11 @@ function AiParsedDocumentCard({ document }: { document: DocumentRecord }) {
   const blockedCandidates = aiParsedFields(aiDocument.blocked_candidates);
   const unmappedFields = aiParsedFields(aiDocument.unmapped_fields);
   const warnings = Array.isArray(aiDocument.warnings) ? aiDocument.warnings : [];
+  const receiptCandidates = workflowCandidates(document, "receipt_item_candidates");
+  const dateCandidates = workflowCandidates(document, "date_candidates");
+  const identifierCandidates = workflowCandidates(document, "document_number_candidates");
+  const partyCandidates = workflowCandidates(document, "party_review_candidates");
+  const posSummary = posSettlementSummary(document);
   return (
     <Card className="border-indigo-200 bg-indigo-50/30">
       <CardHeader>
@@ -361,6 +411,51 @@ function AiParsedDocumentCard({ document }: { document: DocumentRecord }) {
             {aiDocument.source ? <Badge variant="outline" className="bg-white">source: {aiDocument.source}</Badge> : null}
           </div>
         </div>
+
+        <CandidateList
+          title="거래처 후보"
+          description="거래처/공급자/매장처럼 보이는 값입니다. 문서 유형과 라벨이 확실하지 않으면 확정값으로 자동 반영하지 않습니다."
+          candidates={partyCandidates}
+        />
+
+        <CandidateList
+          title="문서번호 / 참조번호 후보"
+          description="문서번호, 원문서, 승인번호를 역할별로 분리해서 보여줍니다. 원문서나 승인번호는 현재 문서번호로 자동 사용하지 않습니다."
+          candidates={identifierCandidates}
+        />
+
+        <CandidateList
+          title="날짜 후보"
+          description="작성일, 납품일, 검사일, 정산일 등 역할별 날짜 후보입니다. 확정값과 다를 수 있어 검토용으로 표시합니다."
+          candidates={dateCandidates}
+        />
+
+        {posSummary ? (
+          <details open className="rounded-lg border bg-white p-4">
+            <summary className="cursor-pointer text-sm font-semibold">
+              POS 정산 요약 후보
+              <span className="ml-2 text-xs font-normal text-muted-foreground">제조 품목표 아님 · 검토 후보</span>
+            </summary>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {Object.entries(readRecord(posSummary.fields)).map(([field, value]) => {
+                const record = readRecord(value);
+                return (
+                  <div key={field} className="rounded-md border bg-slate-50 p-3 text-sm">
+                    <p className="text-xs text-muted-foreground">{record.source_label ? String(record.source_label) : field}</p>
+                    <p className="mt-1 font-medium">{displayValue(record.value ?? value)}</p>
+                    <Badge variant="outline" className="mt-2 border-blue-200 bg-blue-50 text-blue-800">{aiStatusLabel(record.status)}</Badge>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        ) : null}
+
+        <CandidateList
+          title="영수증 품목 후보"
+          description="영수증에서 읽은 품목 후보입니다. 행 경계나 금액 위치가 불안정할 수 있어 export 확정 행과 분리합니다."
+          candidates={receiptCandidates}
+        />
 
         {keyValueSections.length ? (
           <div className="space-y-3">

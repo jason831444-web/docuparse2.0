@@ -187,6 +187,27 @@ export interface AiParsedDocument {
   canonical_snapshot?: Record<string, unknown>;
 }
 
+export interface ReviewCandidate {
+  field?: string | null;
+  role?: string | null;
+  key?: string | null;
+  value?: unknown;
+  normalized_value?: unknown;
+  source?: string | null;
+  source_label?: string | null;
+  evidence?: string | null;
+  confidence?: number | string | null;
+  status?: string | null;
+  reason?: string | null;
+  blocked_reason?: string | null;
+}
+
+export interface PosSettlementSummary {
+  schema?: string | null;
+  mode?: string | null;
+  fields?: Record<string, unknown>;
+}
+
 export interface FolderSummary {
   label: string;
   value: string;

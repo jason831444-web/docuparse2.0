@@ -218,6 +218,8 @@ class DocumentParser:
                 line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
                 line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
             currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
+            if doc_type == DocumentType.receipt and currency == "USD" and not self._has_strong_usd_currency_signal(joined):
+                currency = "KRW" if re.search(r"₩|원|[가-힣].*(?:합계|금액|부가세|공급가액)", joined, flags=re.IGNORECASE) else None
         if not (return_or_credit_document and self._has_signed_return_line_items(line_items)):
             line_items = self._repair_ocr_table_postprocess(line_items, amount, currency, lines)
         if not no_amount_quantity_document:
@@ -525,20 +527,23 @@ class DocumentParser:
         return bool(re.search(r"(실제\s*품목\s*합계|품목\s*합계는|line\s*item\s*(?:sum|total)|computed)", lowered, flags=re.IGNORECASE))
 
     def _extract_currency(self, text: str) -> str | None:
-        if re.search(
+        if self._has_strong_usd_currency_signal(text):
+            return "USD"
+        if re.search(r"\bKRW\b|₩|원", text, flags=re.IGNORECASE):
+            return "KRW"
+        if re.search(r"[가-힣]", text) and re.search(r"(공급가액|세액|합계|단가|금액|부가세|청구금액)", text):
+            return "KRW"
+        if re.search(r"\bUSD\b|US\$|\$\s*\d|\d[\d,]*(?:\.\d+)?\s*(?:USD|US\$)", text, flags=re.IGNORECASE):
+            return "USD"
+        return None
+
+    def _has_strong_usd_currency_signal(self, text: str) -> bool:
+        return bool(re.search(
             r"(?im)^\s*(?:currency|통화)\s*[:：]?\s*USD\s*$|"
             r"\b(?:total|subtotal|amount\s+due|invoice\s+total|grand\s+total)\s+USD\b|"
             r"\bUSD\s+(?:total|subtotal|amount\s+due|invoice\s+total|grand\s+total)\b",
             text,
-        ):
-            return "USD"
-        if re.search(r"\bKRW\b|₩|원", text, flags=re.IGNORECASE):
-            return "KRW"
-        if re.search(r"\bUSD\b|US\$|\$\s*\d|\d[\d,]*(?:\.\d+)?\s*(?:USD|US\$)", text, flags=re.IGNORECASE):
-            return "USD"
-        if re.search(r"[가-힣]", text) and re.search(r"(공급가액|세액|합계|단가|금액|부가세|청구금액)", text):
-            return "KRW"
-        return None
+        ))
 
     def _document_scope_text(self, lines: list[str]) -> str:
         scoped: list[str] = []
@@ -751,12 +756,19 @@ class DocumentParser:
 
     def _strip_reference_number_lines(self, text: str) -> str:
         lines: list[str] = []
+        skip_next_identifier = False
         for line in str(text or "").splitlines():
+            if skip_next_identifier and self._normalize_document_number(line):
+                skip_next_identifier = False
+                continue
+            skip_next_identifier = False
             if re.search(
                 r"(원문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|승인번호|카드\s*승인번호|Approval\s*No)",
                 line,
                 flags=re.IGNORECASE,
             ):
+                if not re.search(r"\b(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX)[-_ ]?[A-Z0-9]", line, flags=re.IGNORECASE):
+                    skip_next_identifier = True
                 continue
             lines.append(line)
         return "\n".join(lines)
@@ -3972,10 +3984,13 @@ class DocumentParser:
             )
             key = (
                 self._normalized_item_key(item.get("item_name")),
+                self._normalized_item_key(item.get("document_item_code") or item.get("source_item_code")),
                 self._normalized_item_key(item.get("item_code")),
                 self._normalized_item_key(item.get("specification")),
                 item.get("quantity"),
+                item.get("unit_price"),
                 item.get("supply_amount"),
+                item.get("tax_amount"),
                 item.get("line_total"),
             )
             if key in seen and not preserve_duplicate:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -142,7 +143,8 @@ def documents_to_template_rows(documents: list[Document], template: ExportTempla
     columns = normalize_template_columns(template.template_columns)
     rows: list[dict] = []
     for document in documents:
-        line_items = document.line_items or [{}]
+        line_items = _exportable_template_line_items(document)
+        line_items = line_items or [{}]
         for item in line_items:
             row: dict[str, object] = {}
             for column in columns:
@@ -150,6 +152,73 @@ def documents_to_template_rows(documents: list[Document], template: ExportTempla
             row["_party_tab"] = document.customer_name or document.vendor_name or document.merchant_name or "미분류"
             rows.append(row)
     return rows
+
+
+def _exportable_template_line_items(document: Document) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[tuple] = set()
+    for item in document.line_items or []:
+        if not isinstance(item, dict):
+            continue
+        if _template_line_excluded_from_export(document, item):
+            continue
+        safe_item = _template_line_with_safe_amounts(item)
+        key = (
+            _norm_key(safe_item.get("item_name")),
+            _norm_key(safe_item.get("document_item_code") or safe_item.get("item_code") or safe_item.get("source_item_code")),
+            _norm_key(safe_item.get("specification")),
+            _norm_key(safe_item.get("quantity")),
+            _norm_key(safe_item.get("unit_price")),
+            _norm_key(safe_item.get("supply_amount")),
+            _norm_key(safe_item.get("tax_amount")),
+            _norm_key(safe_item.get("line_total")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(safe_item)
+    return rows
+
+
+def _template_line_excluded_from_export(document: Document, item: dict) -> bool:
+    flags = _template_line_warning_codes(item)
+    doc_type = getattr(document.document_type, "value", str(document.document_type))
+    tags = {str(tag or "").casefold() for tag in (document.tags or [])}
+    if doc_type == "receipt" or "receipt" in tags:
+        if flags & {"receipt_row_review_required", "receipt_fragmented_row_reconstructed", "receipt_fragmented_row_preserved_for_review"}:
+            return True
+    return False
+
+
+def _template_line_with_safe_amounts(item: dict) -> dict:
+    safe_item = dict(item)
+    if _template_line_warning_codes(item) & {
+        "invalid_tax_greater_than_total",
+        "invalid_tax_greater_than_supply",
+        "invalid_supply_greater_than_total",
+        "invalid_line_total",
+        "untrusted_ocr_amount",
+        "hidden_amount_risk",
+        "hidden_amount_confirmed_blocked",
+    }:
+        for field in ("unit_price", "supply_amount", "tax_amount", "line_total"):
+            safe_item.pop(field, None)
+    return safe_item
+
+
+def _template_line_warning_codes(item: dict) -> set[str]:
+    codes: set[str] = set()
+    for field in ("validation_warnings", "review_flags", "issue_codes"):
+        values = item.get(field)
+        if isinstance(values, list):
+            codes.update(str(value) for value in values if value not in (None, ""))
+        elif values:
+            codes.add(str(values))
+    return codes
+
+
+def _norm_key(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).casefold()
 
 
 def _column_value(document: Document, line_item: dict, column: dict) -> object:

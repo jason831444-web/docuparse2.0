@@ -2901,10 +2901,22 @@ class DocumentProcessor:
                 document.review_required = True
             document.category = self._return_or_credit_category(document, raw_text)
             document.tags = sorted(set([*(document.tags or []), document.category, "return_document"]))
+            if self._ensure_return_credit_primary_document_number(document, raw_text):
+                issues.append(self._business_safety_issue(
+                    "return_credit_reference_number_not_primary",
+                    "원문서/참조문서 번호가 현재 문서번호로 들어가지 않도록 분리했습니다.",
+                    "document_number",
+                ))
+                document.review_required = True
             document.line_items = sanitize_for_postgres(line_items)
             line_items = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
 
         if self._looks_like_pos_settlement_document(document, raw_text, line_items):
+            metadata = dict(document.workflow_metadata or {})
+            summary = self._extract_pos_settlement_summary(raw_text)
+            if summary:
+                metadata["pos_settlement_summary"] = summary
+                document.workflow_metadata = sanitize_for_postgres(metadata)
             if line_items:
                 document.line_items = []
                 issues.append(self._business_safety_issue(
@@ -2999,6 +3011,70 @@ class DocumentProcessor:
         if filtered_items != line_items:
             document.line_items = sanitize_for_postgres(filtered_items)
         return issues
+
+    def _ensure_return_credit_primary_document_number(self, document: Document, raw_text: str) -> bool:
+        current = self.parser._normalize_document_number(document.document_number)
+        preferred = self.parser._first_document_number_for_prefix(raw_text, "RTN") or self.parser._first_document_number_for_prefix(raw_text, "RCM")
+        if preferred and current != preferred:
+            document.document_number = sanitize_for_postgres(preferred)
+            self._record_party_mapping_source(document, "document_number", "return_credit_primary_number")
+            return True
+        if current and re.match(r"^(?:DN|TS|INV|PO|QT)-", current, flags=re.IGNORECASE):
+            related = self._related_or_reference_document_number(document)
+            if related and self.parser._normalize_document_number(related) == current:
+                document.document_number = None
+                return True
+        return False
+
+    def _related_or_reference_document_number(self, document: Document) -> str | None:
+        metadata = document.workflow_metadata or {}
+        business = metadata.get("business_fields") if isinstance(metadata.get("business_fields"), dict) else {}
+        for key in ("related_document_number", "related_doc", "original_document_number", "source_document_number"):
+            value = business.get(key) or metadata.get(key)
+            if value:
+                return str(value)
+        for candidate in metadata.get("document_number_candidates") or []:
+            if isinstance(candidate, dict) and str(candidate.get("field") or "") == "reference_document_number":
+                value = candidate.get("normalized_value") or candidate.get("value")
+                if value:
+                    return str(value)
+        return None
+
+    def _extract_pos_settlement_summary(self, raw_text: str) -> dict[str, Any]:
+        text = self._clean_vl_raw_text(raw_text)
+        field_labels = {
+            "settlement_date": [r"정산일", r"영업일", r"일자"],
+            "store_name": [r"매장명", r"매장", r"store", r"merchant"],
+            "gross_sales": [r"총\s*판매\s*금액", r"총매출"],
+            "net_sales": [r"순\s*판매\s*금액", r"실\s*판매\s*금액", r"실판매금액"],
+            "taxable_amount": [r"과세\s*합계", r"공급\s*가액\s*합계"],
+            "vat_amount": [r"부가세", r"v\.?a\.?t", r"vat"],
+            "cash_total": [r"현금\s*합계"],
+            "card_total": [r"카드\s*합계"],
+            "online_total": [r"온라인\s*결제"],
+            "order_count": [r"주문\s*횟수"],
+            "store_sales": [r"매장\s*판매"],
+            "delivery_sales": [r"배달\s*판매"],
+        }
+        summary: dict[str, Any] = {
+            "schema": "pos_settlement_summary",
+            "mode": "review_only",
+            "fields": {},
+        }
+        for field, labels in field_labels.items():
+            label_pattern = "|".join(labels)
+            match = re.search(rf"(?P<label>{label_pattern})\s*[:：]?\s*(?P<value>[^\n]{{1,60}})", text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            value = self._clean_text_fragment(match.group("value"))
+            if not value:
+                continue
+            summary["fields"][field] = {
+                "value": value,
+                "source_label": match.group("label"),
+                "status": "review_only",
+            }
+        return summary if summary["fields"] else {}
 
     def _normalize_party_fields(self, document: Document) -> None:
         document.vendor_name = self._normalize_party_name(document.vendor_name)
