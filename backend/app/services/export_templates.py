@@ -143,7 +143,8 @@ def documents_to_template_rows(documents: list[Document], template: ExportTempla
     columns = normalize_template_columns(template.template_columns)
     rows: list[dict] = []
     for document in documents:
-        line_items = _exportable_template_line_items(document)
+        export_conflict_blocked = _return_credit_purchase_order_template_conflict(document)
+        line_items = [] if export_conflict_blocked else _exportable_template_line_items(document)
         line_items = line_items or [{}]
         for item in line_items:
             row: dict[str, object] = {}
@@ -163,16 +164,7 @@ def _exportable_template_line_items(document: Document) -> list[dict]:
         if _template_line_excluded_from_export(document, item):
             continue
         safe_item = _template_line_with_safe_amounts(item)
-        key = (
-            _norm_key(safe_item.get("item_name")),
-            _norm_key(safe_item.get("document_item_code") or safe_item.get("item_code") or safe_item.get("source_item_code")),
-            _norm_key(safe_item.get("specification")),
-            _norm_key(safe_item.get("quantity")),
-            _norm_key(safe_item.get("unit_price")),
-            _norm_key(safe_item.get("supply_amount")),
-            _norm_key(safe_item.get("tax_amount")),
-            _norm_key(safe_item.get("line_total")),
-        )
+        key = _template_line_export_key(safe_item)
         if key in seen:
             continue
         seen.add(key)
@@ -181,11 +173,23 @@ def _exportable_template_line_items(document: Document) -> list[dict]:
 
 
 def _template_line_excluded_from_export(document: Document, item: dict) -> bool:
+    if _return_credit_purchase_order_template_conflict(document):
+        return True
     flags = _template_line_warning_codes(item)
+    if "invalid_line_amount" in flags:
+        return True
     doc_type = getattr(document.document_type, "value", str(document.document_type))
     tags = {str(tag or "").casefold() for tag in (document.tags or [])}
     if doc_type == "receipt" or "receipt" in tags:
-        if flags & {"receipt_row_review_required", "receipt_fragmented_row_reconstructed", "receipt_fragmented_row_preserved_for_review"}:
+        if flags & {
+            "handwritten_requires_review",
+            "receipt_row_review_required",
+            "receipt_fragmented_row_reconstructed",
+            "receipt_fragmented_row_preserved_for_review",
+            "trailing_number_requires_review",
+        }:
+            return True
+        if _looks_like_dirty_receipt_item_name(item.get("item_name")):
             return True
     return False
 
@@ -218,7 +222,31 @@ def _template_line_warning_codes(item: dict) -> set[str]:
 
 
 def _norm_key(value: object) -> str:
+    numeric = _to_decimal(value)
+    if numeric is not None:
+        normalized = numeric.normalize()
+        text = format(normalized, "f")
+        return text.rstrip("0").rstrip(".") if "." in text else text
     return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def _template_line_export_key(item: dict) -> tuple:
+    flags = _template_line_warning_codes(item)
+    amount_sensitive_fields = ()
+    if "ai_parsed_document_table_review_required" not in flags:
+        amount_sensitive_fields = (
+            _norm_key(item.get("unit_price")),
+            _norm_key(item.get("supply_amount")),
+            _norm_key(item.get("tax_amount")),
+            _norm_key(item.get("line_total")),
+        )
+    return (
+        _norm_key(item.get("item_name")),
+        _norm_key(item.get("document_item_code") or item.get("item_code") or item.get("source_item_code")),
+        _norm_key(item.get("specification")),
+        _norm_key(item.get("quantity")),
+        *amount_sensitive_fields,
+    )
 
 
 def _column_value(document: Document, line_item: dict, column: dict) -> object:
@@ -246,11 +274,18 @@ def _document_value(document: Document, source: str) -> object:
         return document.vendor_name or document.merchant_name
     if source == "customer_name":
         return document.customer_name
+    export_conflict_blocked = _return_credit_purchase_order_template_conflict(document)
     if source == "total_amount":
+        if export_conflict_blocked:
+            return None
         return document.extracted_amount
     if source == "tax_amount":
+        if export_conflict_blocked:
+            return None
         return document.tax
     if source == "currency":
+        if export_conflict_blocked:
+            return None
         return document.currency
     if source == "review_status":
         return "검토 필요" if document.review_required else "확정 가능"
@@ -275,3 +310,66 @@ def _blank_if_none(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _return_credit_purchase_order_template_conflict(document: Document) -> bool:
+    if not _return_credit_source_signal(document):
+        return False
+    workflow = document.workflow_metadata or {}
+    taxonomy = workflow.get("taxonomy") if isinstance(workflow.get("taxonomy"), dict) else {}
+    profiles = {str(value or "").casefold() for value in (taxonomy.get("document_profiles") or [])}
+    subtype = str(taxonomy.get("document_subtype") or "").casefold()
+    profile = str(taxonomy.get("document_profile") or "").casefold()
+    if "return_document" in profiles or subtype in {"return_note", "credit_note", "return_credit"} or profile == "return_document":
+        return False
+    doc_type = getattr(document.document_type, "value", str(document.document_type))
+    return doc_type in {"purchase_order", "quotation", "invoice", "transaction_statement"}
+
+
+def _return_credit_source_signal(document: Document) -> bool:
+    workflow = document.workflow_metadata or {}
+    ingestion = document.ingestion_metadata or {}
+    taxonomy = workflow.get("taxonomy") if isinstance(workflow.get("taxonomy"), dict) else {}
+    ai_parsed = workflow.get("ai_parsed_document") if isinstance(workflow.get("ai_parsed_document"), dict) else {}
+    values: list[object] = [
+        document.original_filename,
+        document.title,
+        document.category,
+        getattr(document.ai_document_type, "value", document.ai_document_type),
+        taxonomy.get("document_subtype"),
+        taxonomy.get("document_profile"),
+        ai_parsed.get("document_type_hint"),
+    ]
+    values.extend(document.tags or [])
+    values.extend(taxonomy.get("document_profiles") or [])
+    file_metadata = ingestion.get("file_metadata") if isinstance(ingestion.get("file_metadata"), dict) else {}
+    values.extend(file_metadata.get(key) for key in ("filename", "original_filename", "source_filename"))
+    source = " ".join(str(value or "") for value in values)
+    return bool(re.search(
+        r"(?:return[_\s-]*(?:credit|note)|credit[_\s-]*note|return[_\s-]*document|반품\s*/?\s*크레딧|크레딧\s*메모|반품\s*(?:전표|요청서|문서|메모))",
+        source,
+        flags=re.IGNORECASE,
+    ))
+
+
+def _looks_like_dirty_receipt_item_name(value: object) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return False
+    compact = re.sub(r"\s+", "", text).casefold()
+    if re.fullmatch(r"\d+(?:ea|kg|box|개|봉|팩|세트)?x?", compact):
+        return True
+    if re.fullmatch(r"[s5]ea[x×]?", compact):
+        return True
+    return bool(re.search(r"(공급기액|공급가액|부가세|세액|합계|총액|결제금액|tax|vat|total)", text, flags=re.IGNORECASE))
+
+
+def _to_decimal(value: object) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value).replace(",", "").strip())
+    except Exception:
+        return None

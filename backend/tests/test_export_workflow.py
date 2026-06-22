@@ -283,6 +283,40 @@ def test_export_dedupes_line_items_and_blocks_invalid_tax_amounts():
     assert rows[1]["세액"] == ""
 
 
+def test_export_dedupes_numeric_string_review_duplicate_rows():
+    document = _document("INV-1", "네오팩토리", Decimal("19250"))
+    document.line_items = [
+        {
+            "item_name": "평와셔 M5",
+            "document_item_code": "HB-WH-014",
+            "specification": "M5",
+            "quantity": 500,
+            "unit_price": 35,
+            "supply_amount": 17500,
+            "tax_amount": 1750,
+            "line_total": 19250,
+            "review_flags": ["ai_parsed_document_table_review_required"],
+        },
+        {
+            "item_name": "평와셔 M5",
+            "document_item_code": "HB-WH-014",
+            "specification": "M5",
+            "quantity": "500",
+            "unit_price": "35",
+            "supply_amount": "17,500",
+            "tax_amount": "1,750",
+            "line_total": "19,250",
+            "review_flags": ["ai_parsed_document_table_review_required"],
+        },
+    ]
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert len(payload["canonical_export"]["line_items"]) == 1
+    assert len(rows) == 1
+
+
 def test_receipt_dirty_line_items_are_review_candidates_not_export_rows():
     document = _document("RC-1", "가온마트", Decimal("9000"))
     document.document_type = DocumentType.receipt
@@ -303,6 +337,88 @@ def test_receipt_dirty_line_items_are_review_candidates_not_export_rows():
     assert payload["canonical_export"]["line_items"] == []
     assert payload["canonical_export"]["review_candidates"]["receipt_item_candidates"]
     assert rows[0]["품목명"] == ""
+
+
+def test_receipt_dirty_flags_and_item_name_blacklist_are_not_exported():
+    document = _document("RC-1", "가온마트", Decimal("9000"))
+    document.document_type = DocumentType.receipt
+    document.tags = ["receipt"]
+    document.line_items = [
+        {"item_name": "수기 후보", "line_total": 1000, "review_flags": ["handwritten_requires_review"]},
+        {"item_name": "끝 숫자 후보", "line_total": 2000, "review_flags": ["trailing_number_requires_review"]},
+        {"item_name": "3EA X", "line_total": 3000},
+        {"item_name": "공급기액", "line_total": 3000},
+    ]
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert payload["canonical_export"]["line_items"] == []
+    assert rows[0]["품목명"] == ""
+
+
+def test_invalid_line_amount_rows_are_excluded_from_export():
+    document = _document("INV-1", "네오팩토리", Decimal("110"))
+    document.line_items = [
+        {"item_name": "정상 행", "quantity": 1, "supply_amount": 100, "tax_amount": 10, "line_total": 110},
+        {
+            "item_name": "월일 밀린 행",
+            "quantity": 6,
+            "supply_amount": 8,
+            "tax_amount": 73600,
+            "line_total": 7360,
+            "validation_warnings": ["invalid_line_amount"],
+        },
+    ]
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+
+    assert [item["item_name"] for item in payload["canonical_export"]["line_items"]] == ["정상 행"]
+    assert [row["품목명"] for row in rows] == ["정상 행"]
+
+
+def test_return_credit_source_conflict_blocks_priced_export_values_and_template_rows():
+    document = _document("PO-2026-0001", "대성정공", Decimal("95150"))
+    document.original_filename = "DOC-009_return_credit_blurry_uncropped_photo.pdf"
+    document.document_type = DocumentType.purchase_order
+    document.title = "반품/크레딧 후보"
+    document.workflow_metadata = {
+        "taxonomy": {
+            "document_subtype": "purchase_order",
+            "document_profile": "priced_document",
+            "document_profiles": ["priced_document"],
+        },
+        "ai_parsed_document": {"document_type_hint": "return_credit"},
+    }
+    document.line_items = [{"item_name": "S45C PIN", "quantity": 120, "supply_amount": 42000, "tax_amount": 4200, "line_total": 46200}]
+    template = ExportTemplate(
+        name="금액 템플릿",
+        template_columns=[
+            {"header": "문서번호", "source_field": "document_number"},
+            {"header": "품목", "source_field": "line_items.item_name"},
+            {"header": "합계", "source_field": "line_items.line_total"},
+            {"header": "문서합계", "source_field": "total_amount"},
+            {"header": "통화", "source_field": "currency"},
+        ],
+    )
+
+    payload = json.loads(document_to_json(document))
+    rows = list(csv.DictReader(StringIO(documents_to_csv([document]))))
+    template_rows = list(csv.DictReader(StringIO(documents_to_csv([document], template=template))))
+
+    assert payload["canonical_export"]["line_items"] == []
+    assert payload["canonical_export"]["document"]["total"] is None
+    assert payload["canonical_export"]["document"]["currency"] is None
+    assert payload["canonical_export"]["policy"]["export_blocked"] is True
+    assert "return_credit_source_conflicts_with_priced_export_blocked" in payload["canonical_export"]["policy"]["export_warning"]
+    assert rows[0]["품목명"] == ""
+    assert rows[0]["합계금액"] == ""
+    assert rows[0]["document_total"] == ""
+    assert template_rows[0]["품목"] == ""
+    assert template_rows[0]["합계"] == ""
+    assert template_rows[0]["문서합계"] == ""
+    assert template_rows[0]["통화"] == ""
 
 
 def test_excel_export_contains_taxonomy_columns_in_combined_sheet():

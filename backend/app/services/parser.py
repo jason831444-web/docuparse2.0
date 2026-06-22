@@ -218,8 +218,8 @@ class DocumentParser:
                 line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
                 line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
             currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
-            if doc_type == DocumentType.receipt and currency == "USD" and not self._has_strong_usd_currency_signal(joined):
-                currency = "KRW" if re.search(r"₩|원|[가-힣].*(?:합계|금액|부가세|공급가액)", joined, flags=re.IGNORECASE) else None
+            if doc_type == DocumentType.receipt and self._receipt_or_retail_context(joined) and not self._has_strong_usd_currency_signal(joined):
+                currency = "KRW" if self._receipt_has_krw_context(joined) else None
         if not (return_or_credit_document and self._has_signed_return_line_items(line_items)):
             line_items = self._repair_ocr_table_postprocess(line_items, amount, currency, lines)
         if not no_amount_quantity_document:
@@ -545,6 +545,16 @@ class DocumentParser:
             text,
         ))
 
+    def _receipt_or_retail_context(self, text: str) -> bool:
+        return bool(re.search(
+            r"(영수증|매장|가맹점|승인번호|카드\s*승인|현금영수증|일마감|정산|POS|receipt|merchant|store|terminal)",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        ))
+
+    def _receipt_has_krw_context(self, text: str) -> bool:
+        return bool(re.search(r"₩|원|[가-힣].*(?:합계|금액|부가세|공급가액|결제|승인|매장|영수증)", str(text or ""), flags=re.IGNORECASE))
+
     def _document_scope_text(self, lines: list[str]) -> str:
         scoped: list[str] = []
         in_explicit_item_block = False
@@ -749,7 +759,7 @@ class DocumentParser:
             flags=re.IGNORECASE,
         ):
             return True
-        has_reference = bool(re.search(r"(원문서|참조문서|관련문서|original\s+invoice|ref(?:erence)?\s+invoice)", source, flags=re.IGNORECASE))
+        has_reference = bool(re.search(r"(원문서|윗문서|완문서|참조문서|관련문서|original\s+invoice|ref(?:erence)?\s+invoice)", source, flags=re.IGNORECASE))
         has_reason = bool(re.search(r"(사유|reason|규격\s*불일치|차감|크레딧)", source, flags=re.IGNORECASE))
         has_signed_amount = bool(re.search(r"(?m)(?:^|\s)-\d{1,3}(?:,\d{3})+(?:\s|$)|\(\s*\d{1,3}(?:,\d{3})+\s*\)", source))
         return has_reference and (has_reason or has_signed_amount)
@@ -763,7 +773,7 @@ class DocumentParser:
                 continue
             skip_next_identifier = False
             if re.search(
-                r"(원문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|승인번호|카드\s*승인번호|Approval\s*No)",
+                r"(원문서|윗문서|완문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|승인번호|카드\s*승인번호|Approval\s*No)",
                 line,
                 flags=re.IGNORECASE,
             ):
@@ -960,7 +970,7 @@ class DocumentParser:
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
-        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원문서", "원 문서", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원문서", "원 문서", "윗문서", "완문서", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
         if related_document_number:
             fields["related_document_number"] = self._normalize_document_number(related_document_number) or related_document_number
         if doc_type == DocumentType.quotation:
@@ -3987,11 +3997,11 @@ class DocumentParser:
                 self._normalized_item_key(item.get("document_item_code") or item.get("source_item_code")),
                 self._normalized_item_key(item.get("item_code")),
                 self._normalized_item_key(item.get("specification")),
-                item.get("quantity"),
-                item.get("unit_price"),
-                item.get("supply_amount"),
-                item.get("tax_amount"),
-                item.get("line_total"),
+                self._normalized_line_item_value_key(item.get("quantity")),
+                self._normalized_line_item_value_key(item.get("unit_price")),
+                self._normalized_line_item_value_key(item.get("supply_amount")),
+                self._normalized_line_item_value_key(item.get("tax_amount")),
+                self._normalized_line_item_value_key(item.get("line_total")),
             )
             if key in seen and not preserve_duplicate:
                 continue
@@ -4600,6 +4610,13 @@ class DocumentParser:
 
     def _normalized_item_key(self, value: object) -> str:
         return re.sub(r"[^0-9a-z가-힣]+", "", str(value or "").lower())
+
+    def _normalized_line_item_value_key(self, value: object) -> str:
+        number = self._to_decimal(str(value).replace(",", "")) if value not in (None, "") else None
+        if number is not None:
+            text = format(number.normalize(), "f")
+            return text.rstrip("0").rstrip(".") if "." in text else text
+        return self._normalized_item_key(value)
 
     def _looks_like_item_line(self, line: str) -> bool:
         lowered = line.lower()

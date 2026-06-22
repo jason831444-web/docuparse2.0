@@ -60,7 +60,7 @@ DOCUMENT_POLICIES: dict[str, DocumentPolicy] = {
 
 
 KEY_ALIASES: tuple[tuple[str, str, float], ...] = (
-    ("reference_document_number", r"(?:원문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|Related\s*Doc(?:ument)?\.?)", 0.82),
+    ("reference_document_number", r"(?:원문서|윗문서|완문서|참조문서|관련문서|Original\s*Invoice|Ref(?:erence)?\s*Invoice|Related\s*Doc(?:ument)?\.?)", 0.82),
     ("approval_number", r"(?:승인번호|카드\s*승인번호|Approval\s*No\.?|Receipt\s*Approval)", 0.78),
     ("document_number", r"(?:문서번호|발주번호|주문번호|견적번호|송장번호|Invoice\s*No\.?|PO\s*No\.?|Order\s*Ref|관리번호|전표번호|Ref\s*No\.?)", 0.9),
     ("inspection_date", r"(?:검사일|Inspection\s*Date)", 0.84),

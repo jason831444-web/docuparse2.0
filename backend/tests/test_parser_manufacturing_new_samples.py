@@ -370,3 +370,21 @@ PIN 8X60
     assert parsed.line_items[1]["item_name"] == "양파 15kg"
     assert parsed.line_items[1]["line_total"] == 66000
     assert "line_total" not in parsed.line_items[-1]
+
+
+def test_return_credit_top_document_number_stays_primary_and_reference_labels_are_separate():
+    text = """
+반품/크레딧 메모
+문서번호 RCM-2026-0009
+작성일 2026.06.17
+거래처 신우금속
+윗문서 TS-2026-0034
+완문서 INV-2026-0020
+사유 규격 불일치
+No 품목 수량 단가 공급가액 세액 합계
+1 AL6061 판재 -2 18000 -36000 -3600 -39600
+"""
+    parsed = DocumentParser().parse(text, "return_credit.pdf")
+
+    assert parsed.document_number == "RCM-2026-0009"
+    assert parsed.business_fields["related_document_number"] == "TS-2026-0034"
