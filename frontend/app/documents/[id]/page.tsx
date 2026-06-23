@@ -1251,7 +1251,7 @@ export default function DocumentDetailPage() {
   const [selectedExportTemplateId, setSelectedExportTemplateId] = useState("");
   const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const [approvalNote, setApprovalNote] = useState("");
-  const [activeLineItemIndex, setActiveLineItemIndex] = useState(0);
+  const [, setActiveLineItemIndex] = useState(0);
   const [lineItemFieldSelections, setLineItemFieldSelections] = useState<Record<number, string>>({});
   const [customLineItemFields, setCustomLineItemFields] = useState<Record<number, string>>({});
   const [documentNeighbors, setDocumentNeighbors] = useState<DocumentNeighbors>({ previous: null, next: null });
@@ -1565,16 +1565,10 @@ export default function DocumentDetailPage() {
   const isConfirmed = document.processing_status === "confirmed";
   const selectedCategory = form.watch("category") ?? "";
   const lineItems = watchedLineItems;
-  const activeLineItem = lineItems[activeLineItemIndex];
   const blockingIssues = blockingReviewIssues(document);
   const blockingIssueSummaryItems = reviewIssueSummaryItems(blockingIssues);
   const groupedBlockingIssueItems = groupedReviewIssues(blockingIssues);
   const infoIssues = informationalReviewIssues(document);
-  const activeLineItemReviewFields = [...blockingIssues, ...infoIssues]
-    .filter((issue) => issue.item_index === activeLineItemIndex && typeof issue.field === "string" && issue.field.startsWith("line_items."))
-    .map((issue) => String(issue.field).replace(/^line_items\./, ""));
-  const activeLineItemFields = activeLineItem ? lineItemDisplayFields(activeLineItem, activeLineItemReviewFields) : [];
-  const activeLineItemAddableFields = activeLineItem ? lineItemAddableFields(activeLineItem) : [];
   const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
   const displayTitle = documentDisplayTitle(document);
@@ -1996,57 +1990,41 @@ export default function DocumentDetailPage() {
                   <div className="grid gap-4">
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-slate-50 px-3 py-2">
                       <div>
-                        <p className="text-sm font-medium">현재 품목 {activeLineItemIndex + 1} / {lineItems.length}</p>
-                        <p className="text-xs text-muted-foreground">한 품목씩 확인하면 원본 문서를 보면서 수정하기 쉽습니다.</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={activeLineItemIndex <= 0}
-                          onClick={() => setActiveLineItemIndex((index) => Math.max(0, index - 1))}
-                        >
-                          <ChevronLeft className="size-4" />
-                          이전
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={activeLineItemIndex >= lineItems.length - 1}
-                          onClick={() => setActiveLineItemIndex((index) => Math.min(lineItems.length - 1, index + 1))}
-                        >
-                          다음
-                          <ChevronRight className="size-4" />
-                        </Button>
+                        <p className="text-sm font-medium">전체 품목 {lineItems.length}건</p>
+                        <p className="text-xs text-muted-foreground">임시로 모든 품목을 한 화면에 펼쳐 표시합니다.</p>
                       </div>
                     </div>
-                    {activeLineItem ? (
-                      <div className="rounded-xl border bg-slate-50/50 p-4">
+                    {lineItems.map((lineItem, lineItemIndex) => {
+                      const reviewFields = [...blockingIssues, ...infoIssues]
+                        .filter((issue) => issue.item_index === lineItemIndex && typeof issue.field === "string" && issue.field.startsWith("line_items."))
+                        .map((issue) => String(issue.field).replace(/^line_items\./, ""));
+                      const displayFields = lineItemDisplayFields(lineItem, reviewFields);
+                      const addableFields = lineItemAddableFields(lineItem);
+                      return (
+                      <div key={lineItemIndex} className="rounded-xl border bg-slate-50/50 p-4">
                         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-950">품목 {activeLineItemIndex + 1}</p>
-                            <p className="mt-1 break-words text-xs text-muted-foreground">{String(activeLineItem.item_name || activeLineItem.document_item_code || activeLineItem.item_code || "품목명 미확인")}</p>
+                            <p className="text-sm font-semibold text-slate-950">품목 {lineItemIndex + 1}</p>
+                            <p className="mt-1 break-words text-xs text-muted-foreground">{String(lineItem.item_name || lineItem.document_item_code || lineItem.item_code || "품목명 미확인")}</p>
                           </div>
-                          <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(activeLineItemIndex)}>
+                          <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(lineItemIndex)}>
                             <Trash2 className="size-4" />
                             품목 삭제
                           </Button>
                         </div>
 
                         <div className="grid gap-4">
-                          {activeLineItemFields.length ? (
+                          {displayFields.length ? (
                             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                              {activeLineItemFields.map((field) => {
-                                const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(activeLineItemIndex, field);
+                              {displayFields.map((field) => {
+                                const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(lineItemIndex, field);
                                 return (
                                   <LineItemField
                                     key={field}
-                                    index={activeLineItemIndex}
+                                    index={lineItemIndex}
                                     field={field}
                                     label={lineItemFieldLabel(field)}
-                                    item={activeLineItem}
+                                    item={lineItem}
                                     low={low}
                                     blockingIssues={fieldBlockingIssues}
                                     infoIssues={fieldInfoIssues}
@@ -2070,19 +2048,19 @@ export default function DocumentDetailPage() {
                             <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                               <select
                                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                                value={lineItemFieldSelections[activeLineItemIndex] ?? ""}
-                                onChange={(event) => setLineItemFieldSelections({ ...lineItemFieldSelections, [activeLineItemIndex]: event.target.value })}
+                                value={lineItemFieldSelections[lineItemIndex] ?? ""}
+                                onChange={(event) => setLineItemFieldSelections({ ...lineItemFieldSelections, [lineItemIndex]: event.target.value })}
                               >
                                 <option value="">추가할 표준 필드 선택</option>
-                                {activeLineItemAddableFields.map((field) => (
+                                {addableFields.map((field) => (
                                   <option key={field} value={field}>{lineItemFieldLabel(field)}</option>
                                 ))}
                               </select>
                               <Button
                                 type="button"
                                 variant="outline"
-                                onClick={() => addLineItemField(activeLineItemIndex, lineItemFieldSelections[activeLineItemIndex] || "")}
-                                disabled={!lineItemFieldSelections[activeLineItemIndex]}
+                                onClick={() => addLineItemField(lineItemIndex, lineItemFieldSelections[lineItemIndex] || "")}
+                                disabled={!lineItemFieldSelections[lineItemIndex]}
                               >
                                 <Plus className="size-4" />
                                 표준 필드 추가
@@ -2091,14 +2069,14 @@ export default function DocumentDetailPage() {
                             <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                               <Input
                                 placeholder="예: 검사자, 차대번호, 포장상태"
-                                value={customLineItemFields[activeLineItemIndex] ?? ""}
-                                onChange={(event) => setCustomLineItemFields({ ...customLineItemFields, [activeLineItemIndex]: event.target.value })}
+                                value={customLineItemFields[lineItemIndex] ?? ""}
+                                onChange={(event) => setCustomLineItemFields({ ...customLineItemFields, [lineItemIndex]: event.target.value })}
                               />
                               <Button
                                 type="button"
                                 variant="outline"
-                                onClick={() => addLineItemField(activeLineItemIndex, customLineItemFields[activeLineItemIndex] || "")}
-                                disabled={!customLineItemFields[activeLineItemIndex]?.trim()}
+                                onClick={() => addLineItemField(lineItemIndex, customLineItemFields[lineItemIndex] || "")}
+                                disabled={!customLineItemFields[lineItemIndex]?.trim()}
                               >
                                 <Plus className="size-4" />
                                 직접 필드 추가
@@ -2109,25 +2087,25 @@ export default function DocumentDetailPage() {
 
                         <div className="mt-4 rounded-lg border bg-white p-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline" className={itemMasterStatusClass(activeLineItem.item_master_match_status)}>
-                              {itemMasterStatusLabel(activeLineItem.item_master_match_status)}
+                            <Badge variant="outline" className={itemMasterStatusClass(lineItem.item_master_match_status)}>
+                              {itemMasterStatusLabel(lineItem.item_master_match_status)}
                             </Badge>
-                            {activeLineItem.item_master_match_confidence ? (
-                              <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(activeLineItem.item_master_match_confidence) * 100)}%</span>
+                            {lineItem.item_master_match_confidence ? (
+                              <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(lineItem.item_master_match_confidence) * 100)}%</span>
                             ) : null}
                           </div>
-                          {activeLineItem.item_master_candidates?.length ? (
+                          {lineItem.item_master_candidates?.length ? (
                             <div className="mt-3 grid gap-2">
                               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                                 <input
                                   type="checkbox"
-                                  checked={aliasSaveRows[activeLineItemIndex] ?? true}
-                                  onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [activeLineItemIndex]: event.target.checked })}
+                                  checked={aliasSaveRows[lineItemIndex] ?? true}
+                                  onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [lineItemIndex]: event.target.checked })}
                                 />
                                 이 선택을 별칭으로 저장
                               </label>
                               <div className="grid gap-2">
-                                {activeLineItem.item_master_candidates.slice(0, 3).map((candidate) => (
+                                {lineItem.item_master_candidates.slice(0, 3).map((candidate) => (
                                   <div key={candidate.internal_item_code} className="rounded-lg border bg-white p-3 text-xs">
                                     <div className="flex flex-wrap items-start justify-between gap-2">
                                       <div className="min-w-0">
@@ -2135,7 +2113,7 @@ export default function DocumentDetailPage() {
                                         <p className="mt-1 break-words text-muted-foreground">{candidate.item_name} · {candidate.spec || "규격 없음"} · {candidate.unit || "단위 없음"}</p>
                                         <p className="mt-1 text-muted-foreground">후보 신뢰도 {Math.round(Number(candidate.score) * 100)}%</p>
                                       </div>
-                                      <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(activeLineItemIndex, candidate)}>
+                                      <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(lineItemIndex, candidate)}>
                                         선택
                                       </Button>
                                     </div>
@@ -2146,7 +2124,8 @@ export default function DocumentDetailPage() {
                           ) : null}
                         </div>
                       </div>
-                    ) : null}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
