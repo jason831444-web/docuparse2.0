@@ -36,11 +36,7 @@ class RawExtractionSnapshotService:
         else:
             self._add_vl_direct_key_values(metadata, key_values)
             self._add_ocr_line_key_values(line_candidates or [], key_values)
-            self._add_current_document_fields(document, key_values)
-            self._add_pos_summary(metadata, key_values)
-            self._add_ai_parsed_key_values(metadata, key_values)
-            self._add_vl_document_key_values(metadata, key_values)
-            self._add_candidate_values(metadata, key_values)
+            self._add_raw_text_key_values(document.raw_text, key_values)
 
         return {
             "version": "raw_extraction_v1",
@@ -50,72 +46,123 @@ class RawExtractionSnapshotService:
             "tables": tables,
         }
 
-    def _add_current_document_fields(self, document: Document, key_values: list[dict[str, Any]]) -> None:
-        fields = {
-            "문서유형": getattr(document.document_type, "value", str(document.document_type or "")),
-            "문서번호": document.document_number,
-            "제목": document.title,
-            "공급업체": document.vendor_name or document.merchant_name,
-            "고객사": document.customer_name,
-            "발행일": document.issue_date or document.extracted_date,
-            "납기일": document.due_date,
-            "공급가액": document.subtotal,
-            "세액": document.tax,
-            "합계금액": document.extracted_amount,
-            "통화": document.currency,
-        }
-        for key, value in fields.items():
-            self._append_key_value(key_values, key, value, "confirmed_document_field")
-
     def _add_ocr_line_key_values(self, line_candidates: list[dict[str, Any]], key_values: list[dict[str, Any]]) -> None:
         if not line_candidates:
             return
         scale_x = max([self._candidate_coord(candidate, "x_max") or 0 for candidate in line_candidates] + [1.0])
         scale_y = max([self._candidate_coord(candidate, "y_max") or 0 for candidate in line_candidates] + [1.0])
+        section: str | None = None
         for candidate in line_candidates:
             if not isinstance(candidate, dict):
                 continue
             text = str(candidate.get("text") or "").strip()
-            parsed = self._parse_key_value_line(text)
-            if not parsed:
+            section = self._key_value_section_from_line(text) or section
+            parsed_items = self._parse_key_value_line(text)
+            if not parsed_items:
                 continue
-            key, value = parsed
             bbox = self._line_candidate_bbox(candidate, scale_x=scale_x, scale_y=scale_y)
-            key_bbox, value_bbox = self._split_key_value_bbox(text, key, bbox)
-            self._append_key_value(
-                key_values,
-                key,
-                value,
-                "ocr_line_bbox",
-                confidence=candidate.get("confidence"),
-                bbox=bbox,
-                page_index=candidate.get("page_index") or candidate.get("page"),
-                key_bbox=key_bbox,
-                value_bbox=value_bbox,
-            )
+            for key, value, start, end in parsed_items:
+                full_key = self._sectioned_key(section, key)
+                item_bbox = self._slice_bbox_by_text_span(text, bbox, start, end)
+                key_bbox, value_bbox = self._split_key_value_bbox(text[start:end], key, item_bbox)
+                self._append_key_value(
+                    key_values,
+                    full_key,
+                    value,
+                    "ocr_line_bbox",
+                    confidence=candidate.get("confidence"),
+                    bbox=item_bbox,
+                    page_index=candidate.get("page_index") or candidate.get("page"),
+                    key_bbox=key_bbox,
+                    value_bbox=value_bbox,
+                    bbox_source="ocr_line_candidate",
+                )
 
-    def _parse_key_value_line(self, text: str) -> tuple[str, str] | None:
+    def _parse_key_value_line(self, text: str) -> list[tuple[str, str, int, int]]:
         if not text or len(text) > 160:
-            return None
-        match = re.match(r"^\s*([^:：]{1,40})\s*[:：]\s*(.{1,80})\s*$", text)
+            return []
+        known_label_pattern = self._known_key_label_pattern()
+        colon_matches = list(re.finditer(rf"(?:(?<=^)|(?<=\s))({known_label_pattern})\s*[:：]\s*", text, flags=re.IGNORECASE))
+        if not colon_matches:
+            colon_matches = list(re.finditer(r"^\s*([^:：\n]{1,40})\s*[:：]\s*", text))
+        if colon_matches:
+            items: list[tuple[str, str, int, int]] = []
+            for index, match in enumerate(colon_matches):
+                value_start = match.end()
+                value_end = colon_matches[index + 1].start() if index + 1 < len(colon_matches) else len(text)
+                key = self._clean_raw_key(match.group(1))
+                value = self._clean_raw_value(text[value_start:value_end])
+                if self._is_valid_raw_key_value(key, value):
+                    items.append((key, value, match.start(), value_end))
+            return items
+        match = re.match(rf"^\s*({known_label_pattern})\s+(.{{1,80}})\s*$", text, flags=re.IGNORECASE)
         if not match:
             match = re.match(r"^\s*([가-힣A-Za-z0-9/().\s]{1,30})\s{2,}(.{1,80})\s*$", text)
         if not match:
-            return None
-        key = re.sub(r"\s+", " ", match.group(1)).strip()
-        value = match.group(2).strip()
-        if not key or not value:
-            return None
-        if len(key) > 40 or len(value) > 100:
-            return None
-        if re.fullmatch(r"[-_./\\|]+", key) or re.fullmatch(r"[-_./\\|]+", value):
-            return None
-        return key, value
+            match = re.match(r"^\s*(예상\s*합계|합계\s*금액|총\s*합계|TOTAL(?:\s+[A-Z]+)?)\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", text, flags=re.IGNORECASE)
+        if not match:
+            return []
+        key = self._clean_raw_key(match.group(1))
+        value = self._clean_raw_value(match.group(2))
+        return [(key, value, match.start(1), match.end(2))] if self._is_valid_raw_key_value(key, value) else []
 
-    def _add_pos_summary(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
-        summary = metadata.get("pos_settlement_summary") if isinstance(metadata.get("pos_settlement_summary"), dict) else {}
-        for key, value in summary.items():
-            self._append_key_value(key_values, str(key), value, "pos_settlement_summary")
+    def _known_key_label_pattern(self) -> str:
+        return (
+            r"문서\s*번호|샘플\s*번호|사업자\s*번호|작성일|발행일|견적일|유효\s*기간|"
+            r"납기일|요청일|담당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|예상\s*합계"
+        )
+
+    def _clean_raw_key(self, value: str) -> str:
+        value = re.sub(r"\s+", " ", str(value or "")).strip()
+        value = re.sub(r"^(?:[-*•·]+\s*)+", "", value).strip()
+        return value
+
+    def _clean_raw_value(self, value: str) -> str:
+        value = re.sub(r"\s+", " ", str(value or "")).strip()
+        return value.strip(" |")
+
+    def _is_valid_raw_key_value(self, key: str, value: str) -> bool:
+        if not key or not value:
+            return False
+        if len(key) > 40 or len(value) > 100:
+            return False
+        if re.fullmatch(r"[-_./\\|]+", key) or re.fullmatch(r"[-_./\\|]+", value):
+            return False
+        if key.casefold() in {"document_type", "document_number", "currency", "title"}:
+            return False
+        if key in {"문서유형", "제목", "통화"}:
+            return False
+        return True
+
+    def _key_value_section_from_line(self, text: str) -> str | None:
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if normalized in {"공급자", "공급처"}:
+            return "공급자"
+        if normalized in {"공급받는자", "공급받는자정보", "고객사"}:
+            return "공급받는자"
+        return None
+
+    def _sectioned_key(self, section: str | None, key: str) -> str:
+        key = str(key or "").strip()
+        if section and key in {"상호", "사업자번호", "담당", "대표자", "주소"}:
+            return f"{section} {key}"
+        return key
+
+    def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]]) -> None:
+        section: str | None = None
+        for raw_line in str(raw_text or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            section = self._key_value_section_from_line(line) or section
+            for key, value, _start, _end in self._parse_key_value_line(line):
+                self._append_key_value(
+                    key_values,
+                    self._sectioned_key(section, key),
+                    value,
+                    "raw_text_key_value",
+                    section=section,
+                )
 
     def _add_vl_direct_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
         for candidate in self._vl_candidates(metadata):
@@ -135,63 +182,7 @@ class RawExtractionSnapshotService:
                     page_index=self._page_index_from_item(item),
                     key_bbox=item.get("key_bbox"),
                     value_bbox=item.get("value_bbox"),
-                )
-
-    def _add_ai_parsed_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
-        ai = metadata.get("ai_parsed_document") if isinstance(metadata.get("ai_parsed_document"), dict) else {}
-        for section in ai.get("sections") or []:
-            if not isinstance(section, dict):
-                continue
-            section_title = section.get("title") or section.get("section_title")
-            for item in section.get("items") or section.get("key_values") or []:
-                if not isinstance(item, dict):
-                    continue
-                key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
-                value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
-                self._append_key_value(
-                    key_values,
-                    key,
-                    value,
-                    "ai_parsed_document",
-                    section=str(section_title or "") or None,
-                    bbox=self._bbox_from_item(item),
-                    page_index=self._page_index_from_item(item),
-                )
-
-    def _add_vl_document_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
-        for candidate in self._vl_candidates(metadata):
-            structured = candidate.get("structured_candidate") if isinstance(candidate.get("structured_candidate"), dict) else {}
-            document = structured.get("document") if isinstance(structured.get("document"), dict) else {}
-            for key, value in document.items():
-                if isinstance(value, (dict, list)):
-                    continue
-                self._append_key_value(key_values, str(key), value, "vl_structured_document")
-
-    def _add_candidate_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
-        for bucket in (
-            "party_review_candidates",
-            "document_number_candidates",
-            "date_candidates",
-            "amount_candidates",
-            "tax_amount_candidates",
-        ):
-            values = metadata.get(bucket)
-            if not isinstance(values, list):
-                continue
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                key = item.get("source_label") or item.get("label") or item.get("field") or item.get("role") or bucket
-                value = item.get("normalized_value") if item.get("normalized_value") is not None else item.get("value")
-                self._append_key_value(
-                    key_values,
-                    key,
-                    value,
-                    bucket,
-                    role=str(item.get("role") or item.get("field") or "") or None,
-                    confidence=item.get("confidence"),
-                    bbox=self._bbox_from_item(item),
-                    page_index=self._page_index_from_item(item),
+                    bbox_source="vl_direct_key_value_bbox",
                 )
 
     def _raw_tables(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -362,6 +353,7 @@ class RawExtractionSnapshotService:
         page_index: object = None,
         key_bbox: object = None,
         value_bbox: object = None,
+        bbox_source: str | None = None,
     ) -> None:
         if key is None or value in (None, ""):
             return
@@ -381,6 +373,8 @@ class RawExtractionSnapshotService:
         normalized_value_bbox = self._normalize_bbox(value_bbox)
         if normalized_value_bbox:
             item["value_bbox"] = normalized_value_bbox
+        if bbox_source and (normalized_bbox or normalized_key_bbox or normalized_value_bbox):
+            item["bbox_source"] = bbox_source
         if page_index not in (None, ""):
             item["page_index"] = self._json_value(page_index)
         key_values.append(item)
@@ -428,6 +422,20 @@ class RawExtractionSnapshotService:
         key_bbox = [bbox[0], bbox[1], split, bbox[3]]
         value_bbox = [split, bbox[1], bbox[2], bbox[3]]
         return key_bbox, value_bbox
+
+    def _slice_bbox_by_text_span(self, text: str, bbox: list[float] | None, start: int, end: int) -> list[float] | None:
+        if not bbox:
+            return None
+        length = max(len(text), 1)
+        span_start = max(0.0, min(1.0, start / length))
+        span_end = max(span_start, min(1.0, end / length))
+        width = bbox[2] - bbox[0]
+        return [
+            bbox[0] + width * span_start,
+            bbox[1],
+            bbox[0] + width * span_end,
+            bbox[3],
+        ]
 
     def _bbox_from_item(self, item: dict[str, Any]) -> object | None:
         for key in ("normalized_bbox", "bbox", "box", "bounding_box", "bbox_span"):

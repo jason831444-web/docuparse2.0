@@ -262,6 +262,7 @@ def test_raw_extraction_prefers_direct_vl_key_value_bbox_over_ocr_line_bbox():
     assert matches[0]["normalized_bbox"] == [0.1, 0.1, 0.3, 0.13]
     assert matches[0]["key_bbox"] == [0.1, 0.1, 0.18, 0.13]
     assert matches[0]["value_bbox"] == [0.19, 0.1, 0.3, 0.13]
+    assert matches[0]["bbox_source"] == "vl_direct_key_value_bbox"
 
 
 def test_raw_extraction_table_preserves_raw_columns_for_raw_rows():
@@ -299,3 +300,95 @@ def test_raw_extraction_table_preserves_raw_columns_for_raw_rows():
     assert snapshot["tables"][0]["columns"] == ["No", "품목명", "규격/코드", "수량"]
     assert snapshot["tables"][0]["rows"] == [{"No": "1", "품목명": "HDPE 포장필름", "규격/코드": "FILM-HDPE", "수량": "20"}]
     assert snapshot["tables"][0]["raw_rows"] == [["1", "HDPE 포장필름", "FILM-HDPE", "20"]]
+
+
+def test_raw_extraction_key_values_are_raw_source_values_only():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        document_type=DocumentType.quotation,
+        document_number="DOC-003",
+        currency="KRW",
+        raw_text="\n".join(
+            [
+                "견 적 서",
+                "문서번호: DOC-003                         샘플번호: 003",
+                "공급자",
+                "상호: (주)미래테크",
+                "사업자번호: 123-45-67890",
+                "담당: 김선영 / 회계팀",
+                "공급받는자",
+                "상호: (주)시흥대야점",
+                "작성일: 2026.06.07",
+                "유효기간: 견적일로부터 14일",
+                "예상 합계 1,639,000",
+            ]
+        ),
+    )
+
+    snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {(item["key"], item["value"], item["source"]) for item in snapshot["key_values"]}
+
+    assert ("문서번호", "DOC-003", "raw_text_key_value") in values
+    assert ("샘플번호", "003", "raw_text_key_value") in values
+    assert ("공급자 상호", "(주)미래테크", "raw_text_key_value") in values
+    assert ("공급자 사업자번호", "123-45-67890", "raw_text_key_value") in values
+    assert ("공급자 담당", "김선영 / 회계팀", "raw_text_key_value") in values
+    assert ("공급받는자 상호", "(주)시흥대야점", "raw_text_key_value") in values
+    assert ("작성일", "2026.06.07", "raw_text_key_value") in values
+    assert ("유효기간", "견적일로부터 14일", "raw_text_key_value") in values
+    assert ("예상 합계", "1,639,000", "raw_text_key_value") in values
+    assert all(item["source"] not in {"confirmed_document_field", "vl_structured_document"} for item in snapshot["key_values"])
+
+
+def test_raw_extraction_ocr_key_values_keep_line_bboxes():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        raw_text="",
+    )
+
+    snapshot = RawExtractionSnapshotService().build(
+        document,
+        source="processing_pipeline",
+        line_candidates=[
+            {
+                "text": "문서번호: DOC-003 샘플번호: 003",
+                "x_min": 100,
+                "y_min": 100,
+                "x_max": 500,
+                "y_max": 130,
+                "confidence": 0.9,
+                "page": 1,
+            },
+            {
+                "text": "공급자",
+                "x_min": 100,
+                "y_min": 170,
+                "x_max": 160,
+                "y_max": 190,
+                "confidence": 0.9,
+                "page": 1,
+            },
+            {
+                "text": "상호: (주)미래테크",
+                "x_min": 110,
+                "y_min": 200,
+                "x_max": 310,
+                "y_max": 225,
+                "confidence": 0.9,
+                "page": 1,
+            },
+        ],
+    )
+
+    values = {item["key"]: item for item in snapshot["key_values"]}
+    assert values["문서번호"]["value"] == "DOC-003"
+    assert values["문서번호"]["bbox_source"] == "ocr_line_candidate"
+    assert "normalized_bbox" in values["문서번호"]
+    assert "key_bbox" in values["문서번호"]
+    assert "value_bbox" in values["문서번호"]
+    assert values["샘플번호"]["value"] == "003"
+    assert values["공급자 상호"]["value"] == "(주)미래테크"
