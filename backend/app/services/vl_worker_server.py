@@ -321,14 +321,9 @@ def _analyze_path(
         output: Any
         with _inference_lock:
             output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
-            crop_outputs = _predict_key_value_crop_outputs(image_path, settings)
         text = extract_text(output)
         tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename or path.name)
         key_values = _key_values_from_official_paddle_output(output, image_path=image_path)
-        key_values = _dedupe_key_values([
-            *key_values,
-            *_key_values_from_crop_outputs(crop_outputs),
-        ])
         schema_metadata["official_table_count"] = len(tables)
         if schema_metadata["enabled"]:
             prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
@@ -639,35 +634,6 @@ def _predict_with_optional_paddle_schema_prompt(image_path: Path, settings: Any)
     return _materialize_predict_output(pipeline.predict(str(image_path), **kwargs))
 
 
-def _predict_key_value_crop_outputs(image_path: Path, settings: Any) -> list[dict[str, Any]]:
-    """Run a VL-focused crop pass over the document header/key-value region."""
-
-    try:
-        with Image.open(image_path) as image:
-            width, height = int(image.width), int(image.height)
-            if width <= 1 or height <= 1:
-                return []
-            crop_box = (0, 0, width, max(1, int(height * 0.55)))
-            with tempfile.TemporaryDirectory(prefix="docparse_vl_kv_crop_") as tmp:
-                crop_path = Path(tmp) / f"{image_path.stem}-key-values-top.png"
-                image.crop(crop_box).save(crop_path)
-                output = _predict_with_optional_paddle_schema_prompt(crop_path, settings)
-                return [
-                    {
-                        "output": output,
-                        "crop_width": crop_box[2] - crop_box[0],
-                        "crop_height": crop_box[3] - crop_box[1],
-                        "origin_x": crop_box[0],
-                        "origin_y": crop_box[1],
-                        "full_width": width,
-                        "full_height": height,
-                    }
-                ]
-    except Exception as exc:
-        logger.info("vl_key_value_crop_pass_failed: %s", exc)
-        return []
-
-
 def _materialize_predict_output(output: Any) -> Any:
     """Preserve PaddleOCRVL generator results for multiple downstream readers.
 
@@ -831,23 +797,6 @@ def _tables_from_official_paddle_output(output: Any, text: str, *, original_file
         if isinstance(quality, dict):
             quality["table_count"] = table_count
     return tables
-
-
-def _key_values_from_crop_outputs(crop_outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    key_values: list[dict[str, Any]] = []
-    for crop in crop_outputs:
-        key_values.extend(
-            _key_values_from_official_paddle_output(
-                crop.get("output"),
-                width=int(crop.get("crop_width") or 1),
-                height=int(crop.get("crop_height") or 1),
-                origin_x=float(crop.get("origin_x") or 0),
-                origin_y=float(crop.get("origin_y") or 0),
-                full_width=int(crop.get("full_width") or crop.get("crop_width") or 1),
-                full_height=int(crop.get("full_height") or crop.get("crop_height") or 1),
-            )
-        )
-    return _dedupe_key_values(key_values)
 
 
 def _key_values_from_official_paddle_output(
