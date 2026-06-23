@@ -32,6 +32,7 @@ class RawExtractionSnapshotService:
         elif existing_key_values and source in {"manual_update", "confirmed_review"}:
             key_values = existing_key_values
         else:
+            self._add_vl_direct_key_values(metadata, key_values)
             self._add_ocr_line_key_values(line_candidates or [], key_values)
             self._add_current_document_fields(document, key_values)
             self._add_pos_summary(metadata, key_values)
@@ -113,6 +114,26 @@ class RawExtractionSnapshotService:
         summary = metadata.get("pos_settlement_summary") if isinstance(metadata.get("pos_settlement_summary"), dict) else {}
         for key, value in summary.items():
             self._append_key_value(key_values, str(key), value, "pos_settlement_summary")
+
+    def _add_vl_direct_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
+        for candidate in self._vl_candidates(metadata):
+            structured = candidate.get("structured_candidate") if isinstance(candidate.get("structured_candidate"), dict) else {}
+            for item in self._direct_key_value_items(candidate, structured):
+                key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
+                value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
+                self._append_key_value(
+                    key_values,
+                    key,
+                    value,
+                    "vl_direct_key_value_bbox",
+                    role=str(item.get("role") or item.get("field") or "") or None,
+                    confidence=item.get("confidence"),
+                    section=str(item.get("section") or item.get("group") or "") or None,
+                    bbox=self._bbox_from_item(item),
+                    page_index=self._page_index_from_item(item),
+                    key_bbox=item.get("key_bbox"),
+                    value_bbox=item.get("value_bbox"),
+                )
 
     def _add_ai_parsed_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
         ai = metadata.get("ai_parsed_document") if isinstance(metadata.get("ai_parsed_document"), dict) else {}
@@ -278,6 +299,15 @@ class RawExtractionSnapshotService:
         candidates = metadata.get("vl_candidates")
         return [item for item in candidates if isinstance(item, dict)] if isinstance(candidates, list) else []
 
+    def _direct_key_value_items(self, *containers: dict[str, Any]) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for container in containers:
+            for key in ("key_values", "raw_key_values", "document_key_values"):
+                values = container.get(key)
+                if isinstance(values, list):
+                    items.extend(item for item in values if isinstance(item, dict))
+        return items
+
     def _existing_key_values(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
         raw = metadata.get("raw_extraction") if isinstance(metadata.get("raw_extraction"), dict) else {}
         values = raw.get("key_values") if isinstance(raw.get("key_values"), list) else []
@@ -419,10 +449,13 @@ class RawExtractionSnapshotService:
         return [max(0.0, min(1.0, value)) for value in numbers]
 
     def _dedupe_key_values(self, key_values: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        seen: set[tuple[str, str, str]] = set()
+        seen: set[tuple[str, str]] = set()
         result: list[dict[str, Any]] = []
         for item in key_values:
-            identity = (str(item.get("key")), str(item.get("value")), str(item.get("source")))
+            identity = (
+                re.sub(r"\s+", " ", str(item.get("key") or "")).strip().casefold(),
+                re.sub(r"\s+", " ", str(item.get("value") or "")).strip(),
+            )
             if identity in seen:
                 continue
             seen.add(identity)

@@ -29,6 +29,7 @@ class VLCandidateParser:
         *,
         filename: str = "",
         tables: list[dict[str, Any]] | None = None,
+        key_values: list[dict[str, Any]] | None = None,
         manual_visual_check: dict[str, Any] | None = None,
         validation: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
@@ -36,7 +37,8 @@ class VLCandidateParser:
         doc_type = table_doc_type or self.parser._guess_document_type(str(text or ""), filename)
         cleaned = self._clean_text(text, doc_type=doc_type)
         table_items = self._line_items_from_vlm_tables(tables, doc_type)
-        if not cleaned and not table_items:
+        direct_key_values = self._compact_vlm_key_values(key_values)
+        if not cleaned and not table_items and not direct_key_values:
             return None
         parsed = self.parser.parse(cleaned, filename) if cleaned else ParsedDocument(document_type=DocumentType.inspection_report)
         if table_items and self._should_prefer_vlm_table_items(table_items, parsed.line_items, parsed.document_type):
@@ -73,6 +75,7 @@ class VLCandidateParser:
             "parser_evaluated": True,
             "confirmed_promotion": False,
             "document": self._compact_document(parsed),
+            "key_values": direct_key_values,
             "line_items": [self._compact_line_item(item) for item in parsed.line_items[:25]],
             "line_item_count": len(parsed.line_items),
             "tables": self._compact_vlm_tables(tables),
@@ -426,6 +429,27 @@ class VLCandidateParser:
                 }
             )
         return compacted
+
+    def _compact_vlm_key_values(self, key_values: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        compacted: list[dict[str, Any]] = []
+        for item in key_values or []:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
+            value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
+            if key in (None, "") or value in (None, ""):
+                continue
+            next_item: dict[str, Any] = {
+                "key": str(key),
+                "value": value,
+                "source": item.get("source") or "vl_direct_key_value_bbox",
+            }
+            for field in ("bbox", "normalized_bbox", "key_bbox", "value_bbox", "page_index", "page", "confidence", "vl_source"):
+                field_value = item.get(field)
+                if field_value not in (None, "", []):
+                    next_item[field] = field_value
+            compacted.append(next_item)
+        return compacted[:80]
 
     def _clean_text(self, text: str, doc_type: Any | None = None) -> str:
         text = self._normalize_vl_text(text)

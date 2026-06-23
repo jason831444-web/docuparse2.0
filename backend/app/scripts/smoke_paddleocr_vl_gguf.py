@@ -730,8 +730,9 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
     }
     if structured_candidate:
         candidate["structured_candidate"] = structured_candidate
+    candidate_count = 1 if report.get("text_preview") or report.get("key_values") or report.get("tables") else 0
     summary = {
-        "candidate_count": 1 if report.get("text_preview") else 0,
+        "candidate_count": candidate_count,
         "warning_count": 1 if severity == "warn" else 0,
         "failure_count": 1 if severity == "fail" else 0,
         "issue_codes": issue_codes,
@@ -750,7 +751,9 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
 
 def _parse_structured_vl_candidate(report: dict[str, Any]) -> dict[str, Any] | None:
     text = report.get("text_preview")
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str):
+        return None
+    if not text.strip() and not report.get("key_values") and not report.get("tables"):
         return None
     try:
         from app.services.vl_candidate_parser import VLCandidateParser
@@ -758,6 +761,8 @@ def _parse_structured_vl_candidate(report: dict[str, Any]) -> dict[str, Any] | N
         return VLCandidateParser().parse_text(
             text,
             filename=Path(str(report.get("sample") or "")).name,
+            tables=report.get("tables") if isinstance(report.get("tables"), list) else None,
+            key_values=report.get("key_values") if isinstance(report.get("key_values"), list) else None,
             manual_visual_check=report.get("manual_visual_check")
             if isinstance(report.get("manual_visual_check"), dict)
             else None,

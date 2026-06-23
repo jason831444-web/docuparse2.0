@@ -1444,8 +1444,9 @@ class DocumentProcessor:
         if not isinstance(text, str):
             text = ""
         tables = result.get("tables") if isinstance(result.get("tables"), list) else None
-        provider_available_candidate = bool(result.get("ok") or tables)
-        if not text.strip() and not tables:
+        key_values = result.get("key_values") if isinstance(result.get("key_values"), list) else None
+        provider_available_candidate = bool(result.get("ok") or tables or key_values)
+        if not text.strip() and not tables and not key_values:
             fallback_reason = provider_metadata.get("fallback_reason") or "vl_worker_empty_or_unreadable_output"
             return {
                 "vl_provider_metadata": provider_metadata,
@@ -1473,6 +1474,7 @@ class DocumentProcessor:
             text,
             filename=document.original_filename,
             tables=tables,
+            key_values=key_values,
             validation=result.get("validation") if isinstance(result.get("validation"), dict) else None,
         )
         candidate = {
@@ -1491,6 +1493,8 @@ class DocumentProcessor:
         }
         if isinstance(result.get("tables"), list):
             candidate["tables"] = result.get("tables")
+        if isinstance(result.get("key_values"), list):
+            candidate["key_values"] = result.get("key_values")
         original_workflow_metadata = document.workflow_metadata
         document.workflow_metadata = workflow_metadata
         try:

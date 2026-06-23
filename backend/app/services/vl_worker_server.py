@@ -42,7 +42,13 @@ _last_success_at: str | None = None
 
 VLM_STRUCTURED_OUTPUT_SCHEMA: dict[str, Any] = {
     "version": "docparse_vl_table_schema_v1",
-    "response_fields": ["raw_text", "tables"],
+    "response_fields": ["raw_text", "key_values", "tables"],
+    "key_value_fields": {
+        "required": ["key", "value"],
+        "optional": ["bbox", "key_bbox", "value_bbox", "page_index", "confidence"],
+        "bbox_format": "normalized [x1, y1, x2, y2] floats from 0 to 1, relative to the rendered page",
+        "scope": "visible non-table key-value labels and values only",
+    },
     "table_types": {
         "incoming_inspection": {
             "columns": [
@@ -80,6 +86,17 @@ Required JSON shape:
 {
   "raw_text": "verbatim readable text you can see",
   "document_type": "inspection_report | delivery_note | purchase_order | quotation | invoice | transaction_statement | internal_transfer | return_credit | unknown",
+  "key_values": [
+    {
+      "key": "visible label exactly as printed, e.g. 문서번호",
+      "value": "visible value exactly as printed, e.g. DOC-007",
+      "bbox": [0.00, 0.00, 0.00, 0.00],
+      "key_bbox": [0.00, 0.00, 0.00, 0.00],
+      "value_bbox": [0.00, 0.00, 0.00, 0.00],
+      "page_index": 0,
+      "confidence": 0.0
+    }
+  ],
   "tables": [
     {
       "table_type": "incoming_inspection | line_items | unknown",
@@ -108,6 +125,10 @@ Required JSON shape:
 
 Rules:
 - The primary output is the "tables" array. Put every visible table row there.
+- Also output "key_values" for visible non-table labels and values such as 문서번호, 샘플번호, 발행일, 요청부서, 출고창고, 입고창고, 담당, 업체명, 합계.
+- For every key-value, include bbox as normalized [x1,y1,x2,y2] coordinates for the full key-value visual span when you can see its location.
+- If possible, also include key_bbox for the label span and value_bbox for the value span. Omit a bbox field only when you cannot locate it visually.
+- Do not include table cells as key_values unless the document visually presents them as summary fields outside the item table.
 - If the document is an incoming inspection / inspection report, extract the visible table as table_type "incoming_inspection".
 - Keep unseen values null. Do not infer hidden, cropped, or unreadable cells.
 - For inspection reports, do not create amount, unit_price, supply_amount, tax_amount, line_total, subtotal, total, or currency.
@@ -122,6 +143,17 @@ Return the same JSON shape used by the table extractor:
 {
   "raw_text": "...",
   "document_type": "inspection_report | delivery_note | purchase_order | quotation | invoice | transaction_statement | internal_transfer | return_credit | unknown",
+  "key_values": [
+    {
+      "key": "...",
+      "value": "...",
+      "bbox": [0.0, 0.0, 0.0, 0.0],
+      "key_bbox": [0.0, 0.0, 0.0, 0.0],
+      "value_bbox": [0.0, 0.0, 0.0, 0.0],
+      "page_index": 0,
+      "confidence": 0.0
+    }
+  ],
   "tables": [
     {
       "table_type": "incoming_inspection | line_items | unknown",
@@ -135,6 +167,7 @@ Return the same JSON shape used by the table extractor:
 
 Rules:
 - Use only values present in the VLM output below.
+- Preserve key_values and their bbox/key_bbox/value_bbox if they are present.
 - Preserve table rows as JSON rows.
 - For inspection reports, do not add amount, unit_price, supply_amount, tax_amount, line_total, subtotal, total, or currency.
 - If a cell is not visible or not present, keep it null or omit it.
@@ -283,26 +316,35 @@ def _analyze_path(
         }
         schema_payload: dict[str, Any] | None = None
         tables: list[dict[str, Any]] = []
+        key_values: list[dict[str, Any]] = []
         output: Any
         with _inference_lock:
             output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
         text = extract_text(output)
         tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename or path.name)
         schema_metadata["official_table_count"] = len(tables)
+        if schema_metadata["enabled"]:
+            prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
+            schema_payload = prompt_payload
+            schema_metadata.update(prompt_metadata)
+            if schema_payload:
+                key_values = _key_values_from_schema_payload(
+                    schema_payload,
+                    source=schema_metadata.get("key_value_source") or schema_metadata.get("table_source") or "vl_schema_prompt",
+                )
         if tables:
+            if schema_payload and key_values:
+                text = str(schema_payload.get("raw_text") or text or "")
+                output = [{"text": text, "structured_json": schema_payload, "source_output": output}]
             schema_metadata.update(
                 {
                     "used": True,
                     "transport": "paddleocrvl_predict_official_result",
                     "table_source": "paddleocrvl_official_table_html",
-                    "prompt_bypassed": True,
+                    "prompt_bypassed": not bool(schema_payload),
                 }
             )
         else:
-            if schema_metadata["enabled"]:
-                prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
-                schema_payload = prompt_payload
-                schema_metadata.update(prompt_metadata)
             if schema_payload:
                 text = str(schema_payload.get("raw_text") or text or "")
                 tables = _tables_from_schema_payload(schema_payload, source=schema_metadata.get("table_source") or "vl_schema_prompt")
@@ -313,26 +355,37 @@ def _analyze_path(
                     schema_metadata.update({"used": True, "transport": "paddleocr_predict_prompt"})
                     text = str(schema_json.get("raw_text") or text)
                     tables = _tables_from_schema_payload(schema_json, source="vl_schema_prompt")
+                    key_values = _key_values_from_schema_payload(schema_json, source="vl_schema_prompt")
                 elif schema_metadata.get("attempted") and text.strip():
                     schema_metadata["repair_attempted"] = True
                     repaired, repair_error = _run_llama_schema_json_repair(text, settings)
-                    if repaired and _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair"):
+                    repaired_tables = _tables_from_schema_payload(repaired or {}, source="vl_schema_prompt_repair") if repaired else []
+                    repaired_key_values = _key_values_from_schema_payload(repaired or {}, source="vl_schema_prompt_repair") if repaired else []
+                    if repaired and (repaired_tables or repaired_key_values):
                         schema_metadata.update(
                             {
                                 "used": True,
                                 "transport": "paddleocr_predict_text_schema_repair",
                                 "repair_used": True,
                                 "table_source": "vl_schema_prompt_repair",
+                                "key_value_source": "vl_schema_prompt_repair",
                             }
                         )
                         text = str(repaired.get("raw_text") or text)
-                        tables = _tables_from_schema_payload(repaired, source="vl_schema_prompt_repair")
+                        tables = repaired_tables
+                        key_values = repaired_key_values
                         output = [{"text": text, "structured_json": repaired, "source_output": output}]
                     else:
                         schema_metadata["repair_error"] = repair_error
+        if schema_payload and not key_values:
+            key_values = _key_values_from_schema_payload(
+                schema_payload,
+                source=schema_metadata.get("key_value_source") or schema_metadata.get("table_source") or "vl_schema_prompt",
+            )
         validation = validate_output_text(text, [])
         official_table_available = bool(tables)
-        readable_output = bool(validation.get("ok") or official_table_available)
+        key_value_available = bool(key_values)
+        readable_output = bool(validation.get("ok") or official_table_available or key_value_available)
         if not tables:
             tables = _extract_structured_tables(text, output, original_filename=original_filename or path.name)
         if readable_output:
@@ -347,11 +400,14 @@ def _analyze_path(
                 "text_preview": text[:5000],
                 "structured_schema": VLM_STRUCTURED_OUTPUT_SCHEMA,
                 "schema_prompt": schema_metadata,
+                "key_values": key_values,
                 "tables": tables,
                 "provider_available_candidate": readable_output,
                 "provider_available_decision_reason": (
                     "paddleocrvl_official_table_available"
                     if official_table_available and not validation.get("ok")
+                    else "vl_schema_prompt_key_values_available"
+                    if key_value_available and not validation.get("ok")
                     else "vl_worker_output_readable"
                     if validation.get("ok")
                     else "vl_worker_output_invalid"
@@ -609,7 +665,7 @@ def _schema_json_from_output(output: Any) -> dict[str, Any] | None:
     walk(output)
     for candidate in candidates:
         parsed = _parse_json_object(candidate)
-        if parsed and isinstance(parsed.get("tables"), list):
+        if parsed and (isinstance(parsed.get("tables"), list) or isinstance(parsed.get("key_values"), list)):
             return parsed
     return None
 
@@ -1056,6 +1112,30 @@ def _tables_from_schema_payload(payload: dict[str, Any], *, source: str = "vl_sc
             }
         )
     return tables
+
+
+def _key_values_from_schema_payload(payload: dict[str, Any], *, source: str = "vl_schema_prompt") -> list[dict[str, Any]]:
+    key_values: list[dict[str, Any]] = []
+    values = payload.get("key_values") if isinstance(payload.get("key_values"), list) else []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
+        value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
+        if key in (None, "") or value in (None, ""):
+            continue
+        next_item: dict[str, Any] = {
+            "key": str(key),
+            "value": value,
+            "source": "vl_direct_key_value_bbox",
+            "vl_source": source,
+        }
+        for field in ("bbox", "normalized_bbox", "key_bbox", "value_bbox", "page_index", "page", "confidence"):
+            field_value = item.get(field)
+            if field_value not in (None, "", []):
+                next_item[field] = field_value
+        key_values.append(next_item)
+    return key_values
 
 
 def _normalize_schema_inspection_row(row: dict[str, Any]) -> dict[str, Any]:

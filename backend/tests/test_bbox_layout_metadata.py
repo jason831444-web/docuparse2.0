@@ -14,6 +14,7 @@ sys.modules.setdefault(
 from app.models.document import Document, DocumentType
 from app.services.document_processor import DocumentProcessor
 from app.services.file_ingestion import NormalizedDocument
+from app.services.raw_extraction_snapshot import RawExtractionSnapshotService
 
 
 def _candidate(text: str, x_min: float, y_min: float, x_max: float, y_max: float, confidence: float = 0.95):
@@ -209,3 +210,55 @@ def test_bbox_layout_metadata_filters_ocr_variant_duplicate_confirmed_items():
     assert metadata["reconstructed_candidate_count"] >= 2
     assert metadata["candidate_count"] == 0
     assert metadata["bbox_table_candidates"] == []
+
+
+def test_raw_extraction_prefers_direct_vl_key_value_bbox_over_ocr_line_bbox():
+    document = Document(
+        original_filename="transfer.pdf",
+        stored_file_path="/tmp/transfer.pdf",
+        mime_type="application/pdf",
+        workflow_metadata={
+            "vl_candidates": [
+                {
+                    "key_values": [
+                        {
+                            "key": "문서번호",
+                            "value": "DOC-007",
+                            "bbox": [0.10, 0.10, 0.30, 0.13],
+                            "key_bbox": [0.10, 0.10, 0.18, 0.13],
+                            "value_bbox": [0.19, 0.10, 0.30, 0.13],
+                            "page_index": 0,
+                            "confidence": 0.88,
+                        }
+                    ],
+                    "structured_candidate": {"key_values": []},
+                }
+            ]
+        },
+    )
+
+    snapshot = RawExtractionSnapshotService().build(
+        document,
+        source="processing_pipeline",
+        line_candidates=[
+            {
+                "text": "문서번호: DOC-007",
+                "x_min": 10,
+                "y_min": 10,
+                "x_max": 30,
+                "y_max": 13,
+                "confidence": 0.95,
+            }
+        ],
+    )
+
+    matches = [
+        item
+        for item in snapshot["key_values"]
+        if item.get("key") == "문서번호" and item.get("value") == "DOC-007"
+    ]
+    assert len(matches) == 1
+    assert matches[0]["source"] == "vl_direct_key_value_bbox"
+    assert matches[0]["normalized_bbox"] == [0.1, 0.1, 0.3, 0.13]
+    assert matches[0]["key_bbox"] == [0.1, 0.1, 0.18, 0.13]
+    assert matches[0]["value_bbox"] == [0.19, 0.1, 0.3, 0.13]
