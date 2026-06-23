@@ -65,7 +65,7 @@ function toForm(document: DocumentRecord): DocumentReviewForm {
     document_number: document.document_number ?? "",
     issue_date: issueDate ?? "",
     due_date: roleDate ?? "",
-    line_items: cleanLineItems(document.line_items ?? []),
+    line_items: rawLineItemsFromOfficialTables(document).length ? rawLineItemsFromOfficialTables(document) : cleanLineItems(document.line_items ?? []),
     reviewed_key_values: rawKeyValueEntries(document),
     low_confidence_fields: document.low_confidence_fields ?? [],
     category: document.category ?? "",
@@ -421,8 +421,7 @@ function rawLineItemsFromOfficialTables(document: DocumentRecord): Manufacturing
     for (const column of columns) {
       const field = rawTableFieldForColumn(column);
       const value = rawOfficialTableCell(row, column);
-      const cleaned = cleanLineItemValue(field, value === "-" ? "" : value);
-      if (cleaned !== "") (item as Record<string, unknown>)[field] = cleaned;
+      if (value !== "-") (item as Record<string, unknown>)[field] = value;
     }
     return item;
   }).filter((item) => Object.keys(item).length);
@@ -457,69 +456,7 @@ function keyValueIdentity(entry: Record<string, unknown>, index: number): string
   return [entry.key, entry.source, entry.role, entry.section, index].map((value) => String(value ?? "")).join("|");
 }
 
-function keyValueBBox(entry: Record<string, unknown>): [number, number, number, number] | null {
-  const value = Array.isArray(entry.normalized_bbox) ? entry.normalized_bbox : Array.isArray(entry.bbox) ? entry.bbox : null;
-  if (!value || value.length < 4) return null;
-  const numbers = value.slice(0, 4).map(Number);
-  if (numbers.some((number) => !Number.isFinite(number))) return null;
-  return numbers.map((number) => Math.max(0, Math.min(1, number))) as [number, number, number, number];
-}
-
-function keyValueSourceLabel(entry: Record<string, unknown>): string | null {
-  const source = String(entry.source ?? "");
-  if (["vl_direct_key_value_bbox", "vl_text_block_key_value_bbox", "vl_block_postprocess_bbox"].includes(source)) return "VL 위치 기반";
-  if (source === "ocr_line_bbox_fallback") return "OCR 보완";
-  if (source === "raw_text_fallback") return "위치 없음";
-  return null;
-}
-
-function fallbackKeyValueRows(entries: Array<Record<string, unknown>>): Array<Array<Record<string, unknown>>> {
-  const rowHints: Array<RegExp[]> = [
-    [/문서\s*번호|document.*no|doc.*no/i, /샘플\s*번호|sample/i],
-    [/요청\s*부서|request.*department/i, /입고\s*창고|to.*location|receiv/i],
-    [/출고\s*창고|from.*location|ship/i, /요청\s*일|request.*date/i],
-    [/공급|seller|vendor/i, /공급받|고객|buyer|customer/i],
-    [/발행일|작성일|issue/i, /납기일|due/i],
-    [/공급가액|subtotal/i, /세액|tax|vat/i, /합계|total|amount/i],
-  ];
-  const remaining = entries.map((entry, index) => ({ entry, index }));
-  const rows: Array<Array<Record<string, unknown>>> = [];
-  for (const hints of rowHints) {
-    const row: Array<Record<string, unknown>> = [];
-    for (const pattern of hints) {
-      const matchIndex = remaining.findIndex(({ entry }) => pattern.test(String(entry.key ?? "")));
-      if (matchIndex >= 0) {
-        row.push(remaining[matchIndex].entry);
-        remaining.splice(matchIndex, 1);
-      }
-    }
-    if (row.length) rows.push(row);
-  }
-  for (let index = 0; index < remaining.length; index += 2) {
-    rows.push(remaining.slice(index, index + 2).map((item) => item.entry));
-  }
-  return rows;
-}
-
-function bboxKeyValueRows(entries: Array<Record<string, unknown>>): Array<Array<{ entry: Record<string, unknown>; bbox: [number, number, number, number] }>> {
-  const positioned = entries
-    .map((entry) => ({ entry, bbox: keyValueBBox(entry) }))
-    .filter((item): item is { entry: Record<string, unknown>; bbox: [number, number, number, number] } => Boolean(item.bbox))
-    .sort((a, b) => ((a.entry.page_index as number | undefined) ?? 0) - ((b.entry.page_index as number | undefined) ?? 0) || a.bbox[1] - b.bbox[1] || a.bbox[0] - b.bbox[0]);
-  const rows: Array<Array<{ entry: Record<string, unknown>; bbox: [number, number, number, number] }>> = [];
-  for (const item of positioned) {
-    const centerY = (item.bbox[1] + item.bbox[3]) / 2;
-    const row = rows.find((candidate) => {
-      const candidateCenter = (candidate[0].bbox[1] + candidate[0].bbox[3]) / 2;
-      return Math.abs(candidateCenter - centerY) < 0.035;
-    });
-    if (row) row.push(item);
-    else rows.push([item]);
-  }
-  return rows.map((row) => row.sort((a, b) => a.bbox[0] - b.bbox[0]));
-}
-
-function RawKeyValueLayoutEditor({
+function RawKeyValueEditor({
   entries,
   saving,
   onChange,
@@ -529,69 +466,25 @@ function RawKeyValueLayoutEditor({
   onChange: (index: number, value: string) => void;
 }) {
   if (!entries.length) return null;
-  const positionedRows = bboxKeyValueRows(entries);
-  const positionedEntries = new Set(positionedRows.flat().map(({ entry }) => entry));
-  const fallbackEntries = entries.filter((entry) => !positionedEntries.has(entry));
-  const fallbackRows = fallbackKeyValueRows(fallbackEntries);
-  const entryIndex = new Map(entries.map((entry, index) => [entry, index]));
   return (
     <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-blue-950">추출 원형 정보</p>
-          <p className="mt-1 text-xs text-blue-800">원본 문서의 줄/좌우 배치를 최대한 유지해서 검토합니다.</p>
+          <p className="mt-1 text-xs text-blue-800">추출된 key-value를 그대로 확인하고 필요한 값만 수정하세요.</p>
         </div>
         <Badge variant="outline" className="bg-white text-blue-900">
           {entries.length}개
         </Badge>
       </div>
-      {positionedRows.length ? (
-        <div className="grid gap-2 rounded-md border bg-white p-3">
-          {positionedRows.map((row, rowIndex) => (
-            <div key={rowIndex} className="relative min-h-12">
-              {row.map(({ entry, bbox }) => {
-                const index = entryIndex.get(entry) ?? 0;
-                return (
-                  <label
-                    key={keyValueIdentity(entry, index)}
-                    className="absolute grid min-w-32 gap-1 text-xs font-medium text-slate-600"
-                    style={{
-                      left: `${Math.min(78, Math.max(0, bbox[0] * 100))}%`,
-                      width: `${Math.max(20, Math.min(42, (bbox[2] - bbox[0]) * 100 + 18))}%`,
-                    }}
-                  >
-                    <span className="flex min-w-0 items-center gap-1">
-                      <span className="truncate">{displayValue(entry.key)}</span>
-                      {keyValueSourceLabel(entry) ? <span className="shrink-0 rounded border bg-slate-50 px-1 py-0.5 text-[10px] font-normal text-slate-500">{keyValueSourceLabel(entry)}</span> : null}
-                    </span>
-                    <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
-                  </label>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {fallbackRows.length ? (
-        <div className="grid gap-2 rounded-md border bg-white p-3">
-          {fallbackRows.map((row, rowIndex) => (
-            <div key={rowIndex} className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {row.map((entry) => {
-                const index = entryIndex.get(entry) ?? 0;
-                return (
-                  <label key={keyValueIdentity(entry, index)} className="grid gap-1 text-xs font-medium text-slate-600">
-                    <span className="flex min-w-0 items-center gap-1">
-                      <span className="truncate">{displayValue(entry.key)}</span>
-                      {keyValueSourceLabel(entry) ? <span className="shrink-0 rounded border bg-slate-50 px-1 py-0.5 text-[10px] font-normal text-slate-500">{keyValueSourceLabel(entry)}</span> : null}
-                    </span>
-                    <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
-                  </label>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <div className="grid gap-3 rounded-md border bg-white p-3 md:grid-cols-2 xl:grid-cols-3">
+        {entries.map((entry, index) => (
+          <label key={keyValueIdentity(entry, index)} className="grid gap-1 text-xs font-medium text-slate-600">
+            <span className="truncate">{displayValue(entry.key)}</span>
+            <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2226,7 +2119,7 @@ export default function DocumentDetailPage() {
                     <p className="mt-1 text-xs text-muted-foreground">추출된 표를 그대로 확인하고 필요한 셀만 수정하세요.</p>
                   </div>
                 </div>
-                <RawKeyValueLayoutEditor entries={reviewedKeyValues} saving={saving} onChange={updateReviewedKeyValue} />
+                <RawKeyValueEditor entries={reviewedKeyValues} saving={saving} onChange={updateReviewedKeyValue} />
                 <EditableRawExtractedTable
                   document={document}
                   items={lineItems}

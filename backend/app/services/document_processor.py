@@ -1412,19 +1412,6 @@ class DocumentProcessor:
             provider_metadata["structured_schema"] = result.get("structured_schema")
         if isinstance(result.get("schema_prompt"), dict):
             provider_metadata["schema_prompt"] = result.get("schema_prompt")
-        render_metadata = result.get("render") if isinstance(result.get("render"), dict) else None
-        if render_metadata:
-            provider_metadata["render"] = {
-                key: render_metadata.get(key)
-                for key in (
-                    "image_path",
-                    "original_image_path",
-                    "vl_full_page_variant",
-                    "vl_full_page_variant_comparison",
-                    "vl_full_page_preprocess",
-                )
-                if render_metadata.get(key) not in (None, "", [])
-            }
         if isinstance(result.get("tables"), list):
             provider_metadata["table_count"] = len(result.get("tables") or [])
         input_variant = result.get("input_variant") if isinstance(result.get("input_variant"), dict) else None
@@ -1486,8 +1473,6 @@ class DocumentProcessor:
             "inference_time_ms": result.get("elapsed_ms"),
             "structured_candidate": structured,
         }
-        if render_metadata:
-            candidate["render"] = provider_metadata.get("render")
         if isinstance(result.get("tables"), list):
             candidate["tables"] = result.get("tables")
         if isinstance(result.get("key_values"), list):

@@ -442,9 +442,9 @@ class VLCandidateParser:
             next_item: dict[str, Any] = {
                 "key": str(key),
                 "value": value,
-                "source": item.get("source") or "vl_direct_key_value_bbox",
+                "source": item.get("source") or "vl_key_value",
             }
-            for field in ("bbox", "normalized_bbox", "key_bbox", "value_bbox", "page_index", "page", "confidence", "vl_source"):
+            for field in ("confidence", "vl_source"):
                 field_value = item.get(field)
                 if field_value not in (None, "", []):
                     next_item[field] = field_value

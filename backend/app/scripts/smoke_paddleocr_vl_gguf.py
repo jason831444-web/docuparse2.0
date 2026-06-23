@@ -728,19 +728,6 @@ def build_docuparse_vl_candidate_metadata(report: dict[str, Any]) -> dict[str, A
         "text_preview": _sanitize_preview_text(report.get("text_preview"))[:1200],
         "inference_time_ms": report.get("elapsed_ms"),
     }
-    render = report.get("render") if isinstance(report.get("render"), dict) else {}
-    if render:
-        candidate["render"] = {
-            key: render.get(key)
-            for key in (
-                "image_path",
-                "original_image_path",
-                "vl_full_page_variant",
-                "vl_full_page_variant_comparison",
-                "vl_full_page_preprocess",
-            )
-            if render.get(key) not in (None, "", [])
-        }
     if structured_candidate:
         candidate["structured_candidate"] = structured_candidate
     candidate_count = 1 if report.get("text_preview") or report.get("key_values") or report.get("tables") else 0

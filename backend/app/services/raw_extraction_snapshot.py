@@ -8,13 +8,9 @@ from typing import Any
 from app.models.document import Document
 
 
-VL_KEY_VALUE_SOURCES = {
-    "vl_direct_key_value_bbox",
-    "vl_text_block_key_value_bbox",
-    "vl_block_postprocess_bbox",
-}
-OCR_FALLBACK_SOURCE = "ocr_line_bbox_fallback"
-RAW_TEXT_FALLBACK_SOURCE = "raw_text_fallback"
+VL_KEY_VALUE_SOURCE = "vl_key_value"
+OCR_KEY_VALUE_SOURCE = "ocr_key_value"
+RAW_TEXT_KEY_VALUE_SOURCE = "raw_text_key_value"
 
 
 class RawExtractionSnapshotService:
@@ -45,22 +41,15 @@ class RawExtractionSnapshotService:
         else:
             self._add_vl_direct_key_values(metadata, key_values)
             key_values = self._dedupe_key_values(key_values)
-            ocr_fallback = self._ocr_fallback_decision(key_values, line_candidates or [])
-            if ocr_fallback["ocr_fallback_used"]:
-                self._add_ocr_line_key_values(line_candidates or [], key_values)
+            self._add_ocr_line_key_values(line_candidates or [], key_values)
             self._add_raw_text_key_values(document.raw_text, key_values)
-        key_values = self._dedupe_key_values(key_values)
-        coverage_summary = self._coverage_summary(
-            key_values,
-            ocr_fallback if "ocr_fallback" in locals() else None,
-        )
+        key_values = self._plain_key_values(self._dedupe_key_values(key_values))
 
         return {
             "version": "raw_extraction_v1",
             "source": source,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "key_values": key_values,
-            "coverage_summary": coverage_summary,
             "tables": tables,
         }
 
@@ -90,13 +79,8 @@ class RawExtractionSnapshotService:
                     key_values,
                     full_key,
                     value,
-                    OCR_FALLBACK_SOURCE,
+                    OCR_KEY_VALUE_SOURCE,
                     confidence=candidate.get("confidence"),
-                    bbox=item_bbox,
-                    page_index=candidate.get("page_index") or candidate.get("page"),
-                    key_bbox=key_bbox,
-                    value_bbox=value_bbox,
-                    bbox_source=OCR_FALLBACK_SOURCE,
                 )
 
     def _add_ocr_row_key_values(
@@ -119,13 +103,8 @@ class RawExtractionSnapshotService:
                     key_values,
                     full_key,
                     value,
-                    OCR_FALLBACK_SOURCE,
+                    OCR_KEY_VALUE_SOURCE,
                     confidence=confidence,
-                    bbox=item_bbox,
-                    page_index=page_index,
-                    key_bbox=key_bbox,
-                    value_bbox=value_bbox,
-                    bbox_source=OCR_FALLBACK_SOURCE,
                 )
 
     def _parse_ocr_candidate_row(
@@ -344,7 +323,7 @@ class RawExtractionSnapshotService:
                     key_values,
                     full_key,
                     value,
-                    RAW_TEXT_FALLBACK_SOURCE,
+                    RAW_TEXT_KEY_VALUE_SOURCE,
                     section=section,
                 )
 
@@ -354,92 +333,15 @@ class RawExtractionSnapshotService:
             for item in self._direct_key_value_items(candidate, structured):
                 key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
                 value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
-                item_source = str(item.get("source") or "vl_direct_key_value_bbox")
-                if item_source not in VL_KEY_VALUE_SOURCES:
-                    item_source = "vl_direct_key_value_bbox"
                 self._append_key_value(
                     key_values,
                     key,
                     value,
-                    item_source,
+                    VL_KEY_VALUE_SOURCE,
                     role=str(item.get("role") or item.get("field") or "") or None,
                     confidence=item.get("confidence"),
                     section=str(item.get("section") or item.get("group") or "") or None,
-                    bbox=self._bbox_from_item(item),
-                    page_index=self._page_index_from_item(item),
-                    key_bbox=item.get("key_bbox"),
-                    value_bbox=item.get("value_bbox"),
-                    bbox_source=str(item.get("bbox_source") or item_source),
                 )
-
-    def _ocr_fallback_decision(
-        self,
-        key_values: list[dict[str, Any]],
-        line_candidates: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        vl_values = [item for item in key_values if item.get("source") in VL_KEY_VALUE_SOURCES]
-        vl_bbox_values = [item for item in vl_values if self._has_any_bbox(item)]
-        missing_core_fields = self._missing_core_fields(vl_bbox_values or vl_values)
-        reasons: list[str] = []
-        if not vl_values:
-            reasons.append("no_vl_key_values")
-        if not vl_bbox_values:
-            reasons.append("no_vl_bbox_key_values")
-        elif len(vl_bbox_values) < 4:
-            reasons.append("vl_coverage_below_threshold")
-        if missing_core_fields:
-            reasons.append(f"missing_core_fields:{','.join(missing_core_fields)}")
-        if self._has_abnormal_bbox(vl_values):
-            reasons.append("abnormal_vl_bbox")
-        if not reasons:
-            return {
-                "ocr_fallback_used": False,
-                "ocr_fallback_reason": "vl_coverage_sufficient",
-            }
-        if not line_candidates:
-            return {
-                "ocr_fallback_used": False,
-                "ocr_fallback_reason": f"fallback_needed_but_no_ocr_line_candidates:{';'.join(reasons)}",
-            }
-        return {
-            "ocr_fallback_used": True,
-            "ocr_fallback_reason": ";".join(reasons),
-        }
-
-    def _coverage_summary(self, key_values: list[dict[str, Any]], ocr_fallback: dict[str, Any] | None) -> dict[str, Any]:
-        return {
-            "total_key_values": len(key_values),
-            "vl_key_values": sum(1 for item in key_values if item.get("source") in VL_KEY_VALUE_SOURCES),
-            "vl_bbox_key_values": sum(1 for item in key_values if item.get("source") in VL_KEY_VALUE_SOURCES and self._has_any_bbox(item)),
-            "ocr_fallback_key_values": sum(1 for item in key_values if item.get("source") == OCR_FALLBACK_SOURCE),
-            "raw_text_fallback_key_values": sum(1 for item in key_values if item.get("source") == RAW_TEXT_FALLBACK_SOURCE),
-            "ocr_fallback_used": bool(ocr_fallback and ocr_fallback.get("ocr_fallback_used")),
-            "ocr_fallback_reason": (ocr_fallback or {}).get("ocr_fallback_reason") or "not_applicable",
-        }
-
-    def _missing_core_fields(self, key_values: list[dict[str, Any]]) -> list[str]:
-        keys = [re.sub(r"\s+", "", str(item.get("key") or "")).casefold() for item in key_values]
-        missing: list[str] = []
-        if not any(re.search(r"문서번호|document(?:number|no)|doc(?:number|no)", key) for key in keys):
-            missing.append("document_number")
-        if not any(re.search(r"작성일|발행일|견적일|거래일자|요청일|invoice(?:date)?|date", key) for key in keys):
-            missing.append("date")
-        if not any(re.search(r"공급자|공급받는자|고객|상호|buyer|seller|vendor|customer", key) for key in keys):
-            missing.append("party")
-        return missing
-
-    def _has_any_bbox(self, item: dict[str, Any]) -> bool:
-        return bool(item.get("normalized_bbox") or item.get("bbox") or item.get("key_bbox") or item.get("value_bbox"))
-
-    def _has_abnormal_bbox(self, key_values: list[dict[str, Any]]) -> bool:
-        for item in key_values:
-            for field in ("normalized_bbox", "key_bbox", "value_bbox"):
-                bbox = self._normalize_bbox(item.get(field))
-                if item.get(field) not in (None, "", []) and not bbox:
-                    return True
-                if bbox and (bbox[2] <= bbox[0] or bbox[3] <= bbox[1]):
-                    return True
-        return False
 
     def _raw_tables(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
         tables: list[dict[str, Any]] = []
@@ -631,18 +533,8 @@ class RawExtractionSnapshotService:
         if confidence not in (None, ""):
             item["confidence"] = self._json_value(confidence)
         normalized_bbox = self._normalize_bbox(bbox)
-        if normalized_bbox:
-            item["normalized_bbox"] = normalized_bbox
         normalized_key_bbox = self._normalize_bbox(key_bbox)
-        if normalized_key_bbox:
-            item["key_bbox"] = normalized_key_bbox
         normalized_value_bbox = self._normalize_bbox(value_bbox)
-        if normalized_value_bbox:
-            item["value_bbox"] = normalized_value_bbox
-        if bbox_source and (normalized_bbox or normalized_key_bbox or normalized_value_bbox):
-            item["bbox_source"] = bbox_source
-        if page_index not in (None, ""):
-            item["page_index"] = self._json_value(page_index)
         key_values.append(item)
 
     def _candidate_coord(self, candidate: dict[str, Any], key: str) -> float | None:
@@ -812,6 +704,13 @@ class RawExtractionSnapshotService:
             seen.add(identity)
             result.append(item)
         return result
+
+    def _plain_key_values(self, key_values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        bbox_fields = {"bbox", "box", "bounding_box", "bbox_span", "normalized_bbox", "key_bbox", "value_bbox", "bbox_source", "page", "page_index", "page_no"}
+        return [
+            {key: value for key, value in item.items() if key not in bbox_fields}
+            for item in key_values
+        ]
 
     def _json_value(self, value: object) -> object:
         if isinstance(value, (datetime, date)):
