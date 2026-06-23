@@ -1,7 +1,7 @@
 import type { DocumentRecord } from "@/types/document";
 
 export const DEFAULT_UPLOAD_CONCURRENCY = 3;
-export const RECOMMENDED_MAX_UPLOAD_FILES = 20;
+export const RECOMMENDED_MAX_UPLOAD_FILES = 200;
 export const UPLOAD_QUEUE_STORAGE_KEY = "docuparse.uploadQueue.v1";
 export const UPLOAD_QUEUE_SCHEMA_VERSION = 1;
 export const UPLOAD_QUEUE_TTL_MS = 1000 * 60 * 60 * 24 * 3;
@@ -61,7 +61,7 @@ export function createUploadQueueItems<TFile extends UploadQueueFileLike>(
   now = Date.now(),
   randomToken = () => Math.random().toString(36).slice(2, 8)
 ): UploadQueueItem<TFile>[] {
-  return Array.from(files).slice(0, RECOMMENDED_MAX_UPLOAD_FILES).map((file, index) => ({
+  return Array.from(files).map((file, index) => ({
     id: `${now}-${index}-${file.name}-${file.size}-${randomToken()}`,
     file,
     status: "selected",

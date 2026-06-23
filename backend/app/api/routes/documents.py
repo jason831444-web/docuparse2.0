@@ -48,6 +48,52 @@ def _to_read(document: Document) -> DocumentRead:
     )
 
 
+def _to_list_read(document: Document) -> DocumentRead:
+    storage = get_storage_service()
+    return DocumentRead.model_validate(
+        {
+            **document.__dict__,
+            **document_read_safety_overrides(document),
+            "file_url": storage.public_url(document.stored_file_path),
+            "raw_text": None,
+            "workflow_metadata": _compact_workflow_metadata(document.workflow_metadata),
+            "ingestion_metadata": _compact_ingestion_metadata(document.ingestion_metadata),
+            "ai_extraction_notes": None,
+            "field_sources": None,
+        }
+    )
+
+
+def _compact_workflow_metadata(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    keep_keys = {
+        "taxonomy",
+        "category_interpretation",
+        "review",
+        "review_metadata",
+        "normalized_review_issues",
+        "layout_profile",
+        "document_profile",
+        "business_fields",
+        "pos_settlement_summary",
+    }
+    return {key: value[key] for key in keep_keys if key in value}
+
+
+def _compact_ingestion_metadata(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    keep_keys = {
+        "extraction_method",
+        "provider",
+        "source_file_type",
+        "raw_text_length",
+        "ocr_confidence",
+    }
+    return {key: value[key] for key in keep_keys if key in value}
+
+
 def _search_filter(search: str):
     terms = [term for term in search.strip().split() if term]
     if not terms:
@@ -163,7 +209,7 @@ def list_documents(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     documents = list(db.scalars(stmt).all())
     total = db.scalar(count_stmt) or 0
-    items = [_to_read(document) for document in documents]
+    items = [_to_list_read(document) for document in documents]
     return DocumentListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -187,10 +233,10 @@ def get_stats(db: Session = Depends(get_db)) -> DocumentStats:
         failed=db.scalar(select(func.count()).select_from(Document).where(Document.processing_status == ProcessingStatus.failed)) or 0,
         needs_review=db.scalar(select(func.count()).select_from(Document).where(Document.processing_status == ProcessingStatus.needs_review)) or 0,
         queued=db.scalar(select(func.count()).select_from(Document).where(Document.processing_status == ProcessingStatus.queued)) or 0,
-        recent=[_to_read(document) for document in recent_uploads],
-        recent_updated=[_to_read(document) for document in recent_updated],
-        recent_review=[_to_read(document) for document in recent_review],
-        pinned=[_to_read(document) for document in pinned],
+        recent=[_to_list_read(document) for document in recent_uploads],
+        recent_updated=[_to_list_read(document) for document in recent_updated],
+        recent_review=[_to_list_read(document) for document in recent_review],
+        pinned=[_to_list_read(document) for document in pinned],
         category_overview=[row.model_dump() for row in category_overview],
         file_type_overview=[row.model_dump() for row in file_type_overview],
         ocr_metrics=_ocr_metrics(db),
@@ -200,12 +246,12 @@ def get_stats(db: Session = Depends(get_db)) -> DocumentStats:
 @router.get("/activity", response_model=ActivitySummary)
 def get_activity(db: Session = Depends(get_db)) -> ActivitySummary:
     return ActivitySummary(
-        recent_uploads=[_to_read(document) for document in db.scalars(select(Document).order_by(desc(Document.created_at)).limit(8)).all()],
-        recent_edits=[_to_read(document) for document in db.scalars(select(Document).order_by(desc(Document.updated_at)).limit(8)).all()],
-        recent_needs_review=[_to_read(document) for document in db.scalars(
+        recent_uploads=[_to_list_read(document) for document in db.scalars(select(Document).order_by(desc(Document.created_at)).limit(8)).all()],
+        recent_edits=[_to_list_read(document) for document in db.scalars(select(Document).order_by(desc(Document.updated_at)).limit(8)).all()],
+        recent_needs_review=[_to_list_read(document) for document in db.scalars(
             select(Document).where(Document.processing_status == ProcessingStatus.needs_review).order_by(desc(Document.updated_at)).limit(8)
         ).all()],
-        favorites=[_to_read(document) for document in db.scalars(
+        favorites=[_to_list_read(document) for document in db.scalars(
             select(Document).where(Document.is_favorite.is_(True)).order_by(desc(Document.updated_at)).limit(8)
         ).all()],
     )

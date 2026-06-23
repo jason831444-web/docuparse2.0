@@ -86,7 +86,7 @@ const many = createUploadQueueItems(
   999,
   () => "many"
 );
-assert.equal(many.length, RECOMMENDED_MAX_UPLOAD_FILES);
+assert.equal(many.length, RECOMMENDED_MAX_UPLOAD_FILES + 5, "large batches should not be truncated at queue creation");
 
 const persisted = serializeUploadQueue([
   { ...queue[0], status: "selected", updatedAt: 2000 },

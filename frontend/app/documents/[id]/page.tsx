@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent, SyntheticEvent, WheelEvent } from "react";
+import type { PointerEvent, SyntheticEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -37,6 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
 import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
+import { isLiveProcessingStatus, useDocumentsChanged } from "@/lib/realtime";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow, DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem, PosSettlementSummary, ReviewCandidate } from "@/types/document";
 
@@ -868,8 +869,9 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
     );
   }, [zoom, imageLayout, pdfLayout]);
 
-  function handlePreviewWheel(event: WheelEvent<HTMLDivElement>) {
+  const handlePreviewWheel = useCallback((event: globalThis.WheelEvent) => {
     event.preventDefault();
+    event.stopPropagation();
     const element = previewRef.current;
     if (!element) return;
     const rect = element.getBoundingClientRect();
@@ -882,7 +884,14 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
       offsetY,
     };
     setZoom((value) => clampNumber(value + (event.deltaY < 0 ? 10 : -10), 60, 320));
-  }
+  }, []);
+
+  useEffect(() => {
+    const element = previewRef.current;
+    if (!element) return;
+    element.addEventListener("wheel", handlePreviewWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handlePreviewWheel);
+  }, [handlePreviewWheel]);
 
   function handlePreviewPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -940,8 +949,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         {isImage ? (
           <div
             ref={previewRef}
-            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
-            onWheel={handlePreviewWheel}
+            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto overscroll-contain rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
             onPointerDown={handlePreviewPointerDown}
             onPointerMove={handlePreviewPointerMove}
             onPointerUp={endPreviewDrag}
@@ -981,8 +989,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         ) : isPdf ? (
           <div
             ref={previewRef}
-            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
-            onWheel={handlePreviewWheel}
+            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto overscroll-contain rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
             onPointerDown={handlePreviewPointerDown}
             onPointerMove={handlePreviewPointerMove}
             onPointerUp={endPreviewDrag}
@@ -1271,6 +1278,25 @@ export default function DocumentDetailPage() {
       })
       .catch(() => setExportTemplates([]));
   }, [params.id, syncDocument]);
+
+  const refreshDocument = useCallback(async () => {
+    try {
+      const item = await api.get(params.id);
+      syncDocument(item);
+    } catch {
+      // The user may be editing; leave the current form intact until the next successful refresh.
+    } finally {
+      setLoading(false);
+    }
+  }, [params.id, syncDocument]);
+
+  useDocumentsChanged(useCallback((detail) => {
+    if (!document) return;
+    if (form.formState.isDirty && !isLiveProcessingStatus(document.processing_status)) return;
+    if (isLiveProcessingStatus(document.processing_status) || detail.stats?.processing || detail.stats?.queued) {
+      void refreshDocument();
+    }
+  }, [document, form.formState.isDirty, refreshDocument]), Boolean(document));
 
   useEffect(() => {
     loadDocumentNeighbors(params.id)

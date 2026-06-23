@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { providerHealthLabel } from "@/lib/provider-health";
+import { emitDocumentsChanged } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
 import type { DocumentStats, ProviderHealth } from "@/types/document";
 
@@ -61,16 +62,45 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [notificationCount, setNotificationCount] = useState(0);
   const [stats, setStats] = useState<DocumentStats | null>(null);
   const [providerHealth, setProviderHealth] = useState<ProviderHealth | null>(null);
+  const statsSignatureRef = useRef("");
+
+  const refreshShellState = useCallback(async (source = "app-shell") => {
+    if (isAuthPage) return;
+    const [notificationsResult, statsResult, healthResult] = await Promise.allSettled([
+      api.notifications(),
+      api.stats(),
+      api.health(),
+    ]);
+    if (notificationsResult.status === "fulfilled") {
+      setNotificationCount(notificationsResult.value.filter((item) => item.action_required).length || notificationsResult.value.length);
+    } else {
+      setNotificationCount(0);
+    }
+    if (statsResult.status === "fulfilled") {
+      setStats(statsResult.value);
+      const signature = documentStatsSignature(statsResult.value);
+      if (signature !== statsSignatureRef.current) {
+        statsSignatureRef.current = signature;
+        emitDocumentsChanged({ source, stats: statsResult.value });
+      }
+    } else {
+      setStats(null);
+    }
+    if (healthResult.status === "fulfilled") {
+      setProviderHealth(healthResult.value);
+    } else {
+      setProviderHealth(null);
+    }
+  }, [isAuthPage]);
 
   useEffect(() => {
     if (isAuthPage) return;
-    api
-      .notifications()
-      .then((items) => setNotificationCount(items.filter((item) => item.action_required).length || items.length))
-      .catch(() => setNotificationCount(0));
-    api.stats().then(setStats).catch(() => setStats(null));
-    api.health().then(setProviderHealth).catch(() => setProviderHealth(null));
-  }, [isAuthPage, pathname]);
+    void refreshShellState("app-shell");
+    const interval = window.setInterval(() => {
+      void refreshShellState("app-shell-interval");
+    }, 3500);
+    return () => window.clearInterval(interval);
+  }, [isAuthPage, pathname, refreshShellState]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -205,4 +235,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
     </div>
   );
+}
+
+function documentStatsSignature(stats: DocumentStats) {
+  const recentStatuses = [...stats.recent, ...stats.recent_updated, ...stats.recent_review, ...stats.pinned]
+    .map((document) => `${document.id}:${document.processing_status}:${document.updated_at}`)
+    .join("|");
+  return [
+    stats.total,
+    stats.completed,
+    stats.confirmed,
+    stats.processing,
+    stats.queued,
+    stats.failed,
+    stats.needs_review,
+    recentStatuses,
+  ].join(":");
 }

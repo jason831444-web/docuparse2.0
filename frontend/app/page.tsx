@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, CalendarDays, CheckCircle2, Clock3, FileDown, RefreshCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { useDocumentsChanged } from "@/lib/realtime";
 import { cn, documentSummaryShort, formatCalendarItemTitle, formatDate, getCalendarItemScheduleDate, isReviewActionable, preferredCalendarItems, titleCaseLabel } from "@/lib/utils";
 import type { ActivitySummary, DocumentCalendarItem, DocumentStats } from "@/types/document";
 
@@ -18,11 +19,22 @@ export default function DashboardPage() {
   const [activity, setActivity] = useState<ActivitySummary | null>(null);
   const [calendar, setCalendar] = useState<DocumentCalendarItem[]>([]);
 
-  useEffect(() => {
+  const loadDashboard = useCallback(() => {
     api.stats().then(setStats).catch(() => setStats(null));
     api.activity().then(setActivity).catch(() => setActivity(null));
     api.calendar(new URLSearchParams({ limit: "80" })).then(setCalendar).catch(() => setCalendar([]));
   }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  useDocumentsChanged(useCallback((detail) => {
+    if (detail.stats) setStats(detail.stats);
+    if (detail.stats?.processing || detail.stats?.queued || detail.stats?.needs_review) {
+      loadDashboard();
+    }
+  }, [loadDashboard]), true);
 
   const preferredItems = preferredCalendarItems(calendar);
   const scheduleItems = preferredItems.filter((item) => item.date_role !== "issue_date");

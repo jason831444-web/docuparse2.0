@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { ApiRequestError, api } from "@/lib/api";
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
-  RECOMMENDED_MAX_UPLOAD_FILES,
   clearUploadQueue,
   createUploadQueueItems,
   explainUploadError,
@@ -30,6 +29,8 @@ import {
 } from "@/lib/upload-queue";
 import { cn } from "@/lib/utils";
 import type { DocumentRecord } from "@/types/document";
+
+const MAX_VISIBLE_QUEUE_ITEMS = 200;
 
 const acceptedTypes = [
   "image/jpeg",
@@ -89,6 +90,8 @@ export function UploadDropzone() {
   const [hydrated, setHydrated] = useState(false);
   const activeCount = useMemo(() => runningUploadCount(queue), [queue]);
   const hasPendingWork = queue.some((item) => ["selected", "waiting_upload", "accepting", "accepted", "queued", "processing"].includes(item.status));
+  const visibleQueue = useMemo(() => queue.slice(0, MAX_VISIBLE_QUEUE_ITEMS), [queue]);
+  const hiddenQueueCount = Math.max(0, queue.length - visibleQueue.length);
 
   const uploadQueueItem = useCallback(async (item: UploadQueueItem<File>) => {
     activeIds.current.add(item.id);
@@ -237,7 +240,7 @@ export function UploadDropzone() {
           파일을 끌어다 놓거나 클릭해서 업로드하세요
         </Button>
         <p className="mt-3 text-xs text-muted-foreground">
-          PDF, 이미지, 엑셀, 워드 문서를 지원합니다. 한 번에 최대 {RECOMMENDED_MAX_UPLOAD_FILES}개까지 추가할 수 있습니다.
+          PDF, 이미지, 엑셀, 워드 문서를 지원합니다. 대량 업로드도 대기열에 추가하고 {DEFAULT_UPLOAD_CONCURRENCY}개씩 순차 접수합니다.
         </p>
       </div>
 
@@ -264,7 +267,7 @@ export function UploadDropzone() {
             </div>
           </div>
           <div className="divide-y">
-            {queue.map((item) => (
+            {visibleQueue.map((item) => (
               <div key={item.id} className="grid gap-3 px-4 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
@@ -302,6 +305,11 @@ export function UploadDropzone() {
                 </div>
               </div>
             ))}
+            {hiddenQueueCount ? (
+              <div className="px-4 py-3 text-center text-xs text-muted-foreground">
+                화면 안정성을 위해 먼저 {visibleQueue.length.toLocaleString("ko-KR")}개만 표시합니다. 나머지 {hiddenQueueCount.toLocaleString("ko-KR")}개도 대기열에서 순차 처리됩니다.
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

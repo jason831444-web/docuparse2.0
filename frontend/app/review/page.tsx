@@ -9,6 +9,7 @@ import { TaxonomyBadges } from "@/components/taxonomy-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { useDocumentsChanged } from "@/lib/realtime";
 import { blockingReviewIssues, businessFieldDate, businessIssueDate, documentDisplayTitle, formatMoney, profileLabelForDocument, requiresReviewExportConfirmation, reviewIssueDescription, reviewIssueSummary, reviewIssueSummaryItems } from "@/lib/utils";
 import type { DocumentListResponse, DocumentRecord, ExportTemplateRecord, ManufacturingLineItem } from "@/types/document";
 
@@ -31,6 +32,10 @@ export default function ReviewPage() {
       })
       .catch(() => setExportTemplates([]));
   }, [load]);
+
+  useDocumentsChanged(useCallback((detail) => {
+    if (detail.stats?.processing || detail.stats?.queued || detail.stats?.needs_review) load();
+  }, [load]), true);
 
   const rows = useMemo(() => {
     return (data?.items || []).map((document) => {

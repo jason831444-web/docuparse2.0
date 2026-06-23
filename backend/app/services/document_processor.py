@@ -3731,8 +3731,12 @@ class DocumentProcessor:
             code_compatible = bool(candidate_codes and confirmed_codes and candidate_codes & confirmed_codes)
             name_compatible = self._layout_names_compatible(candidate_name, confirmed_name)
             fuzzy_name_compatible = self._layout_names_fuzzy_compatible(candidate_name, confirmed_name)
-            if not (code_compatible or name_compatible or fuzzy_name_compatible):
+            name_overlap = self._layout_names_overlap(candidate_name, confirmed_name)
+            if not (code_compatible or name_compatible or fuzzy_name_compatible or name_overlap):
                 continue
+            flags = {str(flag) for flag in candidate.get("review_flags", []) if flag}
+            if (name_compatible or fuzzy_name_compatible or name_overlap) and flags & {"row_boundary_uncertain", "fax_row_boundary_uncertain", "untrusted_ocr_amount"}:
+                return True
             if not self._line_item_measurements_compatible(
                 candidate_quantity,
                 self._vl_decimal(item.get("quantity")),
@@ -3760,6 +3764,8 @@ class DocumentProcessor:
                 return True
             if fuzzy_name_compatible and (candidate_unit_price is not None or candidate_line_total is not None):
                 return True
+            if name_overlap and (candidate_unit_price is not None or candidate_line_total is not None):
+                return True
         return False
 
     def _layout_names_compatible(self, left: str, right: str) -> bool:
@@ -3775,6 +3781,13 @@ class DocumentProcessor:
         if abs(len(left) - len(right)) > 2:
             return False
         return self._bounded_edit_distance(left, right, limit=2) <= 2
+
+    def _layout_names_overlap(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        if left in right or right in left:
+            return min(len(left), len(right)) >= 4
+        return False
 
     def _bounded_edit_distance(self, left: str, right: str, *, limit: int) -> int:
         if abs(len(left) - len(right)) > limit:

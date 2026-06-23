@@ -11,7 +11,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import { documentGroupingLabels, loadDocumentGroupingMode, saveDocumentGroupingMode, type DocumentGroupingMode } from "@/lib/settings";
+import { isLiveProcessingStatus, useDocumentsChanged } from "@/lib/realtime";
+import {
+  documentGroupingLabels,
+  loadDocumentGroupingMode,
+  loadDocumentViewMode,
+  saveDocumentGroupingMode,
+  saveDocumentViewMode,
+  type DocumentGroupingMode,
+  type DocumentViewMode,
+} from "@/lib/settings";
 import { primaryCategoryLabel, requiresReviewExportConfirmation, titleCaseLabel } from "@/lib/utils";
 import type { DocumentListResponse, FolderSummary, ProcessingStatus } from "@/types/document";
 
@@ -20,7 +29,6 @@ const MAX_GLOBAL_SELECTION = 500;
 type DocumentListItem = DocumentListResponse["items"][number];
 type FlatDocumentGroup = { label: string; items: DocumentListItem[] };
 type NestedDocumentGroup = { label: string; count: number; children: FlatDocumentGroup[] };
-type DocumentViewMode = "folders" | "list" | "grid";
 type FolderNodeKind = "mode" | "party" | "document_type";
 type FolderNode = {
   id: string;
@@ -91,6 +99,7 @@ function DocumentsContent() {
     api.categories().then(setCategories).catch(() => setCategories([]));
     api.stats().then((stats) => setAllDocumentCount(stats.total)).catch(() => setAllDocumentCount(null));
     setGrouping(loadDocumentGroupingMode());
+    setView(loadDocumentViewMode());
   }, []);
 
   const params = useMemo(() => {
@@ -106,20 +115,38 @@ function DocumentsContent() {
   const loadDocuments = useCallback(() => {
     setLoading(true);
     const handle = window.setTimeout(() => {
-      api.list(params).then(setData).catch((error) => toast.error(error instanceof Error ? error.message : "문서 목록을 불러오지 못했습니다")).finally(() => setLoading(false));
+      api.list(params)
+        .then(setData)
+        .catch((error) => toast.error(error instanceof Error ? error.message : "문서 목록을 불러오지 못했습니다"))
+        .finally(() => setLoading(false));
     }, 180);
     return () => window.clearTimeout(handle);
   }, [params]);
 
   useEffect(() => loadDocuments(), [loadDocuments]);
 
-  useEffect(() => {
-    if (!data?.items.some((document) => ["uploaded", "queued", "processing"].includes(document.processing_status))) return;
-    const interval = window.setInterval(() => {
-      api.list(params).then(setData).catch(() => undefined);
-    }, 2500);
-    return () => window.clearInterval(interval);
-  }, [data?.items, params]);
+  const refreshDocuments = useCallback(async () => {
+    try {
+      const [nextData, stats] = await Promise.all([
+        api.list(params),
+        api.stats().catch(() => null),
+      ]);
+      setData(nextData);
+      if (stats) setAllDocumentCount(stats.total);
+    } catch {
+      // The global shell poll will retry shortly.
+    } finally {
+      setLoading(false);
+    }
+  }, [params]);
+
+  useDocumentsChanged(useCallback((detail) => {
+    if (detail.stats) setAllDocumentCount(detail.stats.total);
+    if (detail.source === "documents-page") return;
+    if (data?.items.some((document) => isLiveProcessingStatus(document.processing_status)) || detail.stats?.processing || detail.stats?.queued) {
+      void refreshDocuments();
+    }
+  }, [data?.items, refreshDocuments]), true);
 
   function setFilter(key: keyof typeof filters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -222,6 +249,12 @@ function DocumentsContent() {
     setFolderPathIds([]);
   }
 
+  function updateView(value: DocumentViewMode) {
+    setView(value);
+    saveDocumentViewMode(value);
+    if (value !== "folders") setFolderPathIds([]);
+  }
+
   function selectedExportParams(extra?: Record<string, string>) {
     const exportParams = new URLSearchParams();
     selectedDocumentIds.forEach((id) => exportParams.append("document_ids", id));
@@ -290,9 +323,9 @@ function DocumentsContent() {
           <Button asChild variant="outline"><a href={api.exportCsvUrl()}><Download className="size-4" /> 전체 CSV</a></Button>
           <Button asChild variant="outline"><a href={api.exportExcelUrl()}><Download className="size-4" /> 전체 Excel</a></Button>
           <div className="flex rounded-md border bg-white p-1">
-            <Button type="button" variant={view === "folders" ? "default" : "ghost"} size="sm" onClick={() => setView("folders")} title="폴더 보기"><FolderOpen className="size-4" /></Button>
-            <Button type="button" variant={view === "list" ? "default" : "ghost"} size="sm" onClick={() => setView("list")}><Rows3 className="size-4" /></Button>
-            <Button type="button" variant={view === "grid" ? "default" : "ghost"} size="sm" onClick={() => setView("grid")}><Grid2X2 className="size-4" /></Button>
+            <Button type="button" variant={view === "folders" ? "default" : "ghost"} size="sm" onClick={() => updateView("folders")} title="폴더 보기"><FolderOpen className="size-4" /></Button>
+            <Button type="button" variant={view === "list" ? "default" : "ghost"} size="sm" onClick={() => updateView("list")}><Rows3 className="size-4" /></Button>
+            <Button type="button" variant={view === "grid" ? "default" : "ghost"} size="sm" onClick={() => updateView("grid")}><Grid2X2 className="size-4" /></Button>
           </div>
         </div>
       </div>
