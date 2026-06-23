@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Any
+
+from app.models.document import Document
+
+
+class RawExtractionSnapshotService:
+    """Builds the review-first view from raw extraction artifacts.
+
+    The snapshot is intentionally close to what OCR/VL returned: key-value pairs
+    and table cells are preserved before they are mapped into business meaning.
+    """
+
+    def build(self, document: Document, *, source: str = "review_snapshot") -> dict[str, Any]:
+        metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
+        key_values: list[dict[str, Any]] = []
+        tables = self._raw_tables(metadata)
+
+        self._add_current_document_fields(document, key_values)
+        self._add_pos_summary(metadata, key_values)
+        self._add_ai_parsed_key_values(metadata, key_values)
+        self._add_vl_document_key_values(metadata, key_values)
+        self._add_candidate_values(metadata, key_values)
+
+        return {
+            "version": "raw_extraction_v1",
+            "source": source,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "key_values": self._dedupe_key_values(key_values),
+            "tables": tables,
+        }
+
+    def _add_current_document_fields(self, document: Document, key_values: list[dict[str, Any]]) -> None:
+        fields = {
+            "문서유형": getattr(document.document_type, "value", str(document.document_type or "")),
+            "문서번호": document.document_number,
+            "제목": document.title,
+            "공급업체": document.vendor_name or document.merchant_name,
+            "고객사": document.customer_name,
+            "발행일": document.issue_date or document.extracted_date,
+            "납기일": document.due_date,
+            "공급가액": document.subtotal,
+            "세액": document.tax,
+            "합계금액": document.extracted_amount,
+            "통화": document.currency,
+        }
+        for key, value in fields.items():
+            self._append_key_value(key_values, key, value, "confirmed_document_field")
+
+    def _add_pos_summary(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
+        summary = metadata.get("pos_settlement_summary") if isinstance(metadata.get("pos_settlement_summary"), dict) else {}
+        for key, value in summary.items():
+            self._append_key_value(key_values, str(key), value, "pos_settlement_summary")
+
+    def _add_ai_parsed_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
+        ai = metadata.get("ai_parsed_document") if isinstance(metadata.get("ai_parsed_document"), dict) else {}
+        for section in ai.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            section_title = section.get("title") or section.get("section_title")
+            for item in section.get("items") or section.get("key_values") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
+                value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
+                self._append_key_value(key_values, key, value, "ai_parsed_document", section=str(section_title or "") or None)
+
+    def _add_vl_document_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
+        for candidate in self._vl_candidates(metadata):
+            structured = candidate.get("structured_candidate") if isinstance(candidate.get("structured_candidate"), dict) else {}
+            document = structured.get("document") if isinstance(structured.get("document"), dict) else {}
+            for key, value in document.items():
+                if isinstance(value, (dict, list)):
+                    continue
+                self._append_key_value(key_values, str(key), value, "vl_structured_document")
+
+    def _add_candidate_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
+        for bucket in (
+            "party_review_candidates",
+            "document_number_candidates",
+            "date_candidates",
+            "amount_candidates",
+            "tax_amount_candidates",
+        ):
+            values = metadata.get(bucket)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("source_label") or item.get("label") or item.get("field") or item.get("role") or bucket
+                value = item.get("normalized_value") if item.get("normalized_value") is not None else item.get("value")
+                self._append_key_value(
+                    key_values,
+                    key,
+                    value,
+                    bucket,
+                    role=str(item.get("role") or item.get("field") or "") or None,
+                    confidence=item.get("confidence"),
+                )
+
+    def _raw_tables(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+        tables: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in self._vl_candidates(metadata):
+            candidate_tables = list(candidate.get("tables") or [])
+            structured = candidate.get("structured_candidate") if isinstance(candidate.get("structured_candidate"), dict) else {}
+            candidate_tables.extend(structured.get("tables") or [])
+            for table in candidate_tables:
+                if not isinstance(table, dict):
+                    continue
+                raw_rows = self._table_rows(table)
+                if not raw_rows:
+                    continue
+                columns = self._table_columns(table, raw_rows)
+                key = repr((table.get("table_type"), columns, raw_rows[:3]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                tables.append({
+                    "table_type": table.get("table_type") or "table",
+                    "source": table.get("source") or "unknown",
+                    "columns": columns,
+                    "rows": raw_rows,
+                    "row_count": len(raw_rows),
+                })
+        return tables
+
+    def _table_rows(self, table: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+        raw_rows = table.get("raw_rows") if isinstance(table.get("raw_rows"), list) else []
+        normalized: list[dict[str, Any]] = []
+        if raw_rows:
+            for row in raw_rows:
+                if isinstance(row, dict):
+                    normalized.append({str(key): self._json_value(value) for key, value in row.items()})
+                elif isinstance(row, list):
+                    normalized.append({str(index + 1): self._json_value(value) for index, value in enumerate(row)})
+        if normalized:
+            return normalized
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_cells = row.get("raw_cells") if isinstance(row.get("raw_cells"), dict) else None
+            source = raw_cells or {key: value for key, value in row.items() if not str(key).startswith("_")}
+            normalized.append({str(key): self._json_value(value) for key, value in source.items()})
+        return normalized
+
+    def _table_columns(self, table: dict[str, Any], rows: list[dict[str, Any]]) -> list[str]:
+        raw_columns = table.get("raw_columns") if isinstance(table.get("raw_columns"), list) else []
+        columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+        selected = [str(column) for column in raw_columns or columns if str(column).strip()]
+        if selected:
+            return selected
+        keys: list[str] = []
+        for row in rows:
+            for key in row:
+                if key not in keys:
+                    keys.append(key)
+        return keys
+
+    def _vl_candidates(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+        candidates = metadata.get("vl_candidates")
+        return [item for item in candidates if isinstance(item, dict)] if isinstance(candidates, list) else []
+
+    def _append_key_value(
+        self,
+        key_values: list[dict[str, Any]],
+        key: object,
+        value: object,
+        source: str,
+        *,
+        role: str | None = None,
+        confidence: object = None,
+        section: str | None = None,
+    ) -> None:
+        if key is None or value in (None, ""):
+            return
+        item: dict[str, Any] = {"key": str(key), "value": self._json_value(value), "source": source}
+        if role:
+            item["role"] = role
+        if section:
+            item["section"] = section
+        if confidence not in (None, ""):
+            item["confidence"] = self._json_value(confidence)
+        key_values.append(item)
+
+    def _dedupe_key_values(self, key_values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[tuple[str, str, str]] = set()
+        result: list[dict[str, Any]] = []
+        for item in key_values:
+            identity = (str(item.get("key")), str(item.get("value")), str(item.get("source")))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            result.append(item)
+        return result
+
+    def _json_value(self, value: object) -> object:
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        return value

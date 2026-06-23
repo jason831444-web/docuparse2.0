@@ -37,6 +37,8 @@ from app.services.export import document_read_safety_overrides, document_to_json
 from app.services.category_taxonomy import category_path_for, clean_tags_for_context, display_label, normalize_category_value
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.queue_service import get_document_queue
+from app.services.raw_extraction_snapshot import RawExtractionSnapshotService
+from app.services.semantic_mapping import SemanticMappingService
 from app.services.storage import get_storage_service
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 from app.services.document_processor import DocumentProcessor
@@ -581,7 +583,8 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    previous_review = (document.workflow_metadata or {}).get("review") if isinstance(document.workflow_metadata, dict) else None
+    previous_metadata = dict(document.workflow_metadata or {}) if isinstance(document.workflow_metadata, dict) else {}
+    previous_review = previous_metadata.get("review") if isinstance(previous_metadata.get("review"), dict) else None
     values = sanitize_for_postgres(payload.model_dump(exclude_unset=True))
     if "category" in values:
         values["category"] = normalize_category_value(values.get("category"))
@@ -603,9 +606,10 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     document.key_dates = workflow.key_dates
     document.urgency_level = workflow.urgency_level
     document.follow_up_required = workflow.follow_up_required
-    workflow_metadata = workflow.workflow_metadata or {}
+    workflow_metadata = {**previous_metadata, **(workflow.workflow_metadata or {})}
     if isinstance(previous_review, dict):
         workflow_metadata["review"] = previous_review
+    workflow_metadata["raw_extraction"] = RawExtractionSnapshotService().build(document, source="manual_update")
     document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
     document.tags = clean_tags_for_context(
         document.tags,
@@ -630,11 +634,14 @@ def confirm_document(document_id: UUID, payload: ReviewApprovalRequest | None = 
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    validation = approve_document(document, approval_note=payload.approval_note if payload else None)
+    approval_note = payload.approval_note if payload else None
+    validation = approve_document(document, approval_note=approval_note)
     if not validation.ok:
         db.add(document)
         db.commit()
         raise HTTPException(status_code=409, detail=approval_error_payload(document, validation))
+    SemanticMappingService().apply_to_document(document, approval_note=approval_note)
+    document.workflow_metadata = sanitize_for_postgres(document.workflow_metadata or None)
     document.review_required = False
     document.processing_status = ProcessingStatus.confirmed
     db.add(document)

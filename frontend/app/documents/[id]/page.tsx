@@ -44,6 +44,7 @@ import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow
 const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
 type DocumentListItem = DocumentListResponse["items"][number];
+type DocumentReviewForm = DocumentUpdate & { tags_text: string };
 
 function itemMasterStatusLabel(status: string | null | undefined) {
   return {
@@ -66,7 +67,7 @@ function itemMasterStatusClass(status: string | null | undefined) {
   return "border-slate-200 bg-white text-slate-600";
 }
 
-function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string } {
+function toForm(document: DocumentRecord): DocumentReviewForm {
   const businessFields = (document.workflow_metadata?.business_fields ?? {}) as Record<string, unknown>;
   const transactionDate = typeof businessFields.transaction_date === "string" ? businessFields.transaction_date : document.extracted_date;
   const issueDate = document.document_type === "transaction_statement" ? transactionDate : document.issue_date;
@@ -92,7 +93,36 @@ function toForm(document: DocumentRecord): DocumentUpdate & { tags_text: string 
     summary: document.summary ?? "",
     is_favorite: document.is_favorite,
     tags_text: document.tags.join(", "),
-  } as DocumentUpdate & { tags_text: string };
+  } as DocumentReviewForm;
+}
+
+function buildDocumentUpdatePayload(values: DocumentReviewForm, documentType?: string): DocumentUpdate {
+  const { tags_text, ...fields } = values;
+  const isTransactionStatement = documentType === "transaction_statement";
+  return {
+    ...fields,
+    title: values.title || null,
+    raw_text: values.raw_text || null,
+    extracted_date: values.issue_date || values.extracted_date || null,
+    extracted_amount: values.extracted_amount || null,
+    subtotal: values.subtotal || null,
+    tax: values.tax || null,
+    currency: values.currency || null,
+    merchant_name: values.merchant_name || null,
+    vendor_name: values.vendor_name || null,
+    customer_name: values.customer_name || null,
+    document_number: values.document_number || null,
+    issue_date: isTransactionStatement ? values.due_date || values.issue_date || null : values.issue_date || null,
+    due_date: isTransactionStatement ? null : values.due_date || null,
+    line_items: cleanLineItems(values.line_items || []),
+    low_confidence_fields: values.low_confidence_fields || [],
+    category: values.category || null,
+    summary: values.summary || null,
+    tags: tags_text
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+  };
 }
 
 function readString(value: unknown): string | null {
@@ -351,6 +381,56 @@ function rawOfficialTableCell(row: Record<string, unknown>, column: string): str
     비고: "note",
   }[column];
   return normalizedKey ? displayValue(row[normalizedKey]) : "-";
+}
+
+function rawKeyValueEntries(document: DocumentRecord): Array<Record<string, unknown>> {
+  const metadata = readRecord(document.workflow_metadata);
+  const rawExtraction = readRecord(metadata.raw_extraction);
+  const entries = Array.isArray(rawExtraction.key_values)
+    ? rawExtraction.key_values.map((item) => readRecord(item)).filter((item) => item.key && item.value !== undefined)
+    : [];
+  if (entries.length) return entries;
+  return [
+    { key: "문서유형", value: document.document_type, source: "document_field" },
+    { key: "문서번호", value: document.document_number, source: "document_field" },
+    { key: "공급업체", value: document.vendor_name || document.merchant_name, source: "document_field" },
+    { key: "고객사", value: document.customer_name, source: "document_field" },
+    { key: "발행일", value: document.issue_date || document.extracted_date, source: "document_field" },
+    { key: "납기일", value: document.due_date, source: "document_field" },
+    { key: "공급가액", value: document.subtotal, source: "document_field" },
+    { key: "세액", value: document.tax, source: "document_field" },
+    { key: "합계금액", value: document.extracted_amount, source: "document_field" },
+  ].filter((item) => item.value !== null && item.value !== undefined && item.value !== "");
+}
+
+function RawExtractedKeyValues({ document }: { document: DocumentRecord }) {
+  const entries = rawKeyValueEntries(document);
+  if (!entries.length) return null;
+  return (
+    <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-blue-950">추출 원형 정보</p>
+          <p className="mt-1 text-xs text-blue-800">확정 전에는 AI가 읽은 key-value를 그대로 보고 검토합니다.</p>
+        </div>
+        <Badge variant="outline" className="bg-white text-blue-900">
+          {entries.length}개
+        </Badge>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {entries.slice(0, 36).map((entry, index) => (
+          <div key={`${entry.key}-${index}`} className="rounded-md border bg-white px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="truncate text-xs font-medium text-slate-500">{displayValue(entry.key)}</p>
+              {entry.source ? <span className="shrink-0 text-[10px] text-slate-400">{displayValue(entry.source)}</span> : null}
+            </div>
+            <p className="mt-1 break-words text-sm font-semibold text-slate-900">{displayValue(entry.value)}</p>
+          </div>
+        ))}
+      </div>
+      {entries.length > 36 ? <p className="text-xs text-blue-800">나머지 {entries.length - 36}개 값은 AI 추출 근거 탭에서 확인할 수 있습니다.</p> : null}
+    </div>
+  );
 }
 
 function RawExtractedTables({ document }: { document: DocumentRecord }) {
@@ -1400,35 +1480,10 @@ export default function DocumentDetailPage() {
       .catch(() => setDocumentNeighbors({ previous: null, next: null }));
   }, [params.id]);
 
-  async function onSubmit(values: DocumentUpdate & { tags_text: string }) {
+  async function onSubmit(values: DocumentReviewForm) {
     setSaving(true);
-    const { tags_text, ...fields } = values;
-    const isTransactionStatement = document?.document_type === "transaction_statement";
-    const payload: DocumentUpdate = {
-      ...fields,
-      title: values.title || null,
-      raw_text: values.raw_text || null,
-      extracted_date: values.issue_date || values.extracted_date || null,
-      extracted_amount: values.extracted_amount || null,
-      subtotal: values.subtotal || null,
-      tax: values.tax || null,
-      currency: values.currency || null,
-      merchant_name: values.merchant_name || null,
-      vendor_name: values.vendor_name || null,
-      customer_name: values.customer_name || null,
-      document_number: values.document_number || null,
-      issue_date: isTransactionStatement ? values.due_date || values.issue_date || null : values.issue_date || null,
-      due_date: isTransactionStatement ? null : values.due_date || null,
-      line_items: cleanLineItems(values.line_items || []),
-      low_confidence_fields: values.low_confidence_fields || [],
-      category: values.category || null,
-      summary: values.summary || null,
-      tags: tags_text
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-    };
     try {
+      const payload = buildDocumentUpdatePayload(values, document?.document_type);
       const updated = await api.update(params.id, payload);
       syncDocument(updated);
       toast.success("수정 내용을 저장했습니다");
@@ -1455,9 +1510,12 @@ export default function DocumentDetailPage() {
   async function confirmDocument() {
     setSaving(true);
     try {
+      const currentValues = form.getValues() as DocumentReviewForm;
+      const saved = await api.update(params.id, buildDocumentUpdatePayload(currentValues, document?.document_type));
+      syncDocument(saved);
       const updated = await api.confirm(params.id, { approval_note: approvalNote || null });
       syncDocument(updated);
-      toast.success("확정 완료로 변경했습니다");
+      toast.success("현재 리뷰값을 저장하고 확정 완료로 변경했습니다");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "확정 처리에 실패했습니다");
     } finally {
@@ -2082,6 +2140,7 @@ export default function DocumentDetailPage() {
                     품목 추가
                   </Button>
                 </div>
+                <RawExtractedKeyValues document={document} />
                 <RawExtractedTables document={document} />
                 {lineItems.length ? (
                   <div className="grid gap-4">

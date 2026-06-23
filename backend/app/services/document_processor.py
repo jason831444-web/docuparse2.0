@@ -27,6 +27,7 @@ from app.services.ocr import OCRService
 from app.services.parser import DocumentParser
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.quality_evaluation import DocumentQualityEvaluator, QualityEvaluation
+from app.services.raw_extraction_snapshot import RawExtractionSnapshotService
 from app.services.table_layout import BBoxTableReconstructor
 from app.services.vl_candidate_client import VLCandidateWorkerClient
 from app.services.vl_candidate_parser import VLCandidateParser
@@ -622,6 +623,7 @@ class DocumentProcessor:
                 stage_events,
                 prepare_metadata,
             )
+            workflow_metadata["raw_extraction"] = RawExtractionSnapshotService().build(document, source="processing_pipeline")
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             if parser_only:
                 logger.info("Parser-only processing completed for document %s.", document.id)
