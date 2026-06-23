@@ -316,9 +316,12 @@ class RawExtractionSnapshotService:
                 continue
             section = self._key_value_section_from_line(line) or section
             for key, value, _start, _end in self._parse_key_value_line(line):
+                full_key = self._sectioned_key(section, key)
+                if self._has_existing_key_value_key(key_values, full_key):
+                    continue
                 self._append_key_value(
                     key_values,
-                    self._sectioned_key(section, key),
+                    full_key,
                     value,
                     "raw_text_key_value",
                     section=section,
