@@ -87,6 +87,12 @@ export function markUploadStarted(items: UploadQueueItem<UploadQueueFileLike>[],
   return items.map((item) => item.id === id ? { ...item, status: "accepting" as const, attempts: item.attempts + 1, error: null, updatedAt: Date.now() } : item);
 }
 
+export function markUploadItemsStarted(items: UploadQueueItem<UploadQueueFileLike>[], ids: Iterable<string>, now = Date.now()) {
+  const startedIds = new Set(ids);
+  if (!startedIds.size) return items;
+  return items.map((item) => startedIds.has(item.id) ? { ...item, status: "accepting" as const, attempts: item.attempts + 1, error: null, updatedAt: now } : item);
+}
+
 export function markUploadProcessing(items: UploadQueueItem<UploadQueueFileLike>[], id: string, document: DocumentRecord) {
   const status = uploadQueueStatusFromDocument(document);
   return items.map((item) => item.id === id ? {
@@ -96,6 +102,35 @@ export function markUploadProcessing(items: UploadQueueItem<UploadQueueFileLike>
     documentTitle: document.title || document.original_filename,
     updatedAt: Date.now(),
   } : item);
+}
+
+export function mergeUploadBatchResultsIntoQueue(
+  items: UploadQueueItem<UploadQueueFileLike>[],
+  updates: Array<{ id: string; document?: DocumentRecord; error?: string }>,
+  now = Date.now(),
+) {
+  if (!updates.length) return items;
+  const byItemId = new Map(updates.map((update) => [update.id, update]));
+  return items.map((item) => {
+    const update = byItemId.get(item.id);
+    if (!update) return item;
+    if (update.document) {
+      return {
+        ...item,
+        status: uploadQueueStatusFromDocument(update.document),
+        error: update.document.processing_status === "failed" ? update.document.processing_error || "서버 처리가 실패했습니다." : null,
+        documentId: update.document.id,
+        documentTitle: update.document.title || update.document.original_filename,
+        updatedAt: now,
+      };
+    }
+    return {
+      ...item,
+      status: "failed" as const,
+      error: update.error || "업로드 요청을 처리하지 못했습니다.",
+      updatedAt: now,
+    };
+  });
 }
 
 export function markUploadCompleted(items: UploadQueueItem<UploadQueueFileLike>[], id: string, document: DocumentRecord) {

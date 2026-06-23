@@ -9,8 +9,10 @@ import {
   markUploadProcessing,
   markUploadCompleted,
   markUploadFailed,
+  markUploadItemsStarted,
   markUploadStarted,
   mergeDocumentStatusesIntoQueue,
+  mergeUploadBatchResultsIntoQueue,
   nextQueuedUploadIds,
   removeUploadQueueItemsForDocumentIds,
   restoreUploadQueue,
@@ -122,5 +124,29 @@ const afterDeletedDocument = removeUploadQueueItemsForDocumentIds([
   { ...queue[2], status: "waiting_upload", documentId: null },
 ], ["doc-deleted"]);
 assert.deepEqual(afterDeletedDocument.map((item) => item.documentId), ["doc-kept", null]);
+
+let bulkUpdated = markUploadItemsStarted(queue, [queue[0].id, queue[1].id], 3000);
+assert.deepEqual(bulkUpdated.slice(0, 3).map((item) => item.status), ["accepting", "accepting", "selected"]);
+assert.deepEqual(bulkUpdated.slice(0, 2).map((item) => item.attempts), [1, 1]);
+
+bulkUpdated = mergeUploadBatchResultsIntoQueue(bulkUpdated, [
+  {
+    id: queue[0].id,
+    document: {
+      id: "bulk-doc-1",
+      title: "Bulk one",
+      original_filename: "bulk-one.pdf",
+      processing_status: "queued",
+    },
+  },
+  {
+    id: queue[1].id,
+    error: "batch failed",
+  },
+], 4000);
+assert.equal(bulkUpdated[0].status, "queued");
+assert.equal(bulkUpdated[0].documentId, "bulk-doc-1");
+assert.equal(bulkUpdated[1].status, "failed");
+assert.equal(bulkUpdated[1].error, "batch failed");
 
 console.log("upload queue tests passed");

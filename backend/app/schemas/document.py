@@ -101,6 +101,11 @@ class DocumentBatchUploadResponse(BaseModel):
     errors: list[DocumentBatchUploadError] = Field(default_factory=list)
 
 
+class DocumentBulkStatusResponse(BaseModel):
+    items: list[DocumentRead]
+    missing_ids: list[UUID] = Field(default_factory=list)
+
+
 class DocumentStats(BaseModel):
     total: int
     receipts: int

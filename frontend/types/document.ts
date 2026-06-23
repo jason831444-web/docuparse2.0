@@ -373,6 +373,11 @@ export interface DocumentRecord {
   file_url: string;
 }
 
+export interface DocumentBulkStatusResponse {
+  items: DocumentRecord[];
+  missing_ids: string[];
+}
+
 export interface ManufacturingLineItem {
   [key: string]: unknown;
   item_name?: string | null;

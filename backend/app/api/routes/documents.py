@@ -20,6 +20,7 @@ from app.schemas.document import (
     DocumentBatchUploadError,
     DocumentBatchUploadItem,
     DocumentBatchUploadResponse,
+    DocumentBulkStatusResponse,
     CategoryFolderCreate,
     DocumentCalendarItem,
     DocumentListResponse,
@@ -553,6 +554,18 @@ def bulk_delete_documents(payload: BulkDocumentRequest, db: Session = Depends(ge
         deleted += 1
     db.commit()
     return {"deleted": deleted}
+
+
+@router.post("/bulk/status", response_model=DocumentBulkStatusResponse)
+def bulk_document_status(payload: BulkDocumentRequest, db: Session = Depends(get_db)) -> DocumentBulkStatusResponse:
+    requested_ids = list(dict.fromkeys(payload.ids))
+    documents = list(db.scalars(select(Document).where(Document.id.in_(requested_ids))).all())
+    by_id = {document.id: document for document in documents}
+    found_ids = set(by_id)
+    return DocumentBulkStatusResponse(
+        items=[_to_list_read(by_id[document_id]) for document_id in requested_ids if document_id in by_id],
+        missing_ids=[document_id for document_id in requested_ids if document_id not in found_ids],
+    )
 
 
 @router.get("/{document_id}", response_model=DocumentRead)

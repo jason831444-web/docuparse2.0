@@ -6,16 +6,14 @@ import { AlertCircle, CheckCircle2, Clock3, FileUp, Loader2, RotateCcw, X } from
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { ApiRequestError, api } from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   DEFAULT_UPLOAD_CONCURRENCY,
   clearUploadQueue,
   createUploadQueueItems,
   explainUploadError,
-  markUploadFailed,
-  markUploadProcessing,
-  markUploadStarted,
   mergeDocumentStatusesIntoQueue,
+  mergeUploadBatchResultsIntoQueue,
   nextQueuedUploadIds,
   removeUploadQueueItemsForDocumentIds,
   removeQueuedUploadItem,
@@ -24,13 +22,14 @@ import {
   runningUploadCount,
   serializeUploadQueue,
   UPLOAD_QUEUE_STORAGE_KEY,
+  markUploadItemsStarted,
   type UploadQueueItem,
   type UploadQueueFileLike,
 } from "@/lib/upload-queue";
 import { cn } from "@/lib/utils";
-import type { DocumentRecord } from "@/types/document";
 
 const MAX_VISIBLE_QUEUE_ITEMS = 200;
+const UPLOAD_QUEUE_STORAGE_WRITE_DELAY_MS = 750;
 
 const acceptedTypes = [
   "image/jpeg",
@@ -92,25 +91,41 @@ export function UploadDropzone() {
   const hasPendingWork = queue.some((item) => ["selected", "waiting_upload", "accepting", "accepted", "queued", "processing"].includes(item.status));
   const visibleQueue = useMemo(() => queue.slice(0, MAX_VISIBLE_QUEUE_ITEMS), [queue]);
   const hiddenQueueCount = Math.max(0, queue.length - visibleQueue.length);
+  const trackedDocumentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of queue) {
+      if (item.documentId && ["accepted", "queued", "processing"].includes(item.status)) {
+        ids.add(item.documentId);
+      }
+    }
+    return Array.from(ids);
+  }, [queue]);
+  const trackedDocumentKey = trackedDocumentIds.join("|");
 
   const uploadQueueItems = useCallback(async (items: UploadQueueItem<File>[]) => {
     if (!items.length) return;
     items.forEach((item) => activeIds.current.add(item.id));
-    setQueue((current) => items.reduce((next, item) => markUploadStarted(next, item.id), current));
+    setQueue((current) => markUploadItemsStarted(current, items.map((item) => item.id)));
     try {
       const result = items.length === 1
         ? { items: [{ index: 0, document: await api.upload(items[0].file) }], errors: [] }
         : await api.uploadBatch(items.map((item) => item.file));
       const documentsByIndex = new Map(result.items.map((item) => [item.index, item.document]));
       const errorsByIndex = new Map(result.errors.map((error) => [error.index, error.error]));
-      setQueue((current) => items.reduce((next, item, index) => {
-        const document = documentsByIndex.get(index);
-        if (document) return markUploadProcessing(next, item.id, document);
-        return markUploadFailed(next, item.id, errorsByIndex.get(index) || "업로드 요청을 처리하지 못했습니다.");
-      }, current));
+      setQueue((current) => mergeUploadBatchResultsIntoQueue(
+        current,
+        items.map((item, index) => ({
+          id: item.id,
+          document: documentsByIndex.get(index),
+          error: errorsByIndex.get(index) || "업로드 요청을 처리하지 못했습니다.",
+        }))
+      ));
     } catch (error) {
       const message = explainUploadError(error);
-      setQueue((current) => items.reduce((next, item) => markUploadFailed(next, item.id, message), current));
+      setQueue((current) => mergeUploadBatchResultsIntoQueue(
+        current,
+        items.map((item) => ({ id: item.id, error: message }))
+      ));
     } finally {
       items.forEach((item) => activeIds.current.delete(item.id));
     }
@@ -137,33 +152,22 @@ export function UploadDropzone() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem(UPLOAD_QUEUE_STORAGE_KEY, JSON.stringify(serializeUploadQueue(queue)));
+    const timeout = window.setTimeout(() => {
+      window.localStorage.setItem(UPLOAD_QUEUE_STORAGE_KEY, JSON.stringify(serializeUploadQueue(queue)));
+    }, UPLOAD_QUEUE_STORAGE_WRITE_DELAY_MS);
+    return () => window.clearTimeout(timeout);
   }, [hydrated, queue]);
 
   useEffect(() => {
     if (!hydrated) return;
-    const trackedIds = queue
-      .filter((item) => item.documentId)
-      .map((item) => item.documentId as string);
+    const trackedIds = trackedDocumentKey ? trackedDocumentKey.split("|").filter(Boolean) : [];
     if (!trackedIds.length) return;
     let cancelled = false;
     const refresh = async () => {
       try {
-        const results = await Promise.allSettled(trackedIds.map((id) => api.get(id)));
+        const result = await api.bulkStatus(trackedIds);
         if (cancelled) return;
-        const documents: DocumentRecord[] = [];
-        const deletedIds: string[] = [];
-        for (let index = 0; index < results.length; index += 1) {
-          const result = results[index];
-          if (result.status === "fulfilled") {
-            documents.push(result.value);
-          } else if (result.reason instanceof ApiRequestError && result.reason.status === 404) {
-            deletedIds.push(trackedIds[index]);
-          } else {
-            return;
-          }
-        }
-        setQueue((current) => removeUploadQueueItemsForDocumentIds(mergeDocumentStatusesIntoQueue(current, documents), deletedIds));
+        setQueue((current) => removeUploadQueueItemsForDocumentIds(mergeDocumentStatusesIntoQueue(current, result.items), result.missing_ids));
       } catch {
         // Keep the queue visible; the next interval will retry.
       }
@@ -174,7 +178,7 @@ export function UploadDropzone() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [hydrated, queue]);
+  }, [hydrated, trackedDocumentKey]);
 
   useEffect(() => {
     const available = DEFAULT_UPLOAD_CONCURRENCY - activeIds.current.size;

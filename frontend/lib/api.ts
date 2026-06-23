@@ -3,6 +3,7 @@ import type {
   AppNotification,
   CalendarItemUpdate,
   DocumentBatchUploadResponse,
+  DocumentBulkStatusResponse,
   DocumentCalendarItem,
   DocumentListResponse,
   DocumentRecord,
@@ -109,6 +110,15 @@ export const api = {
       deleted += result.deleted;
     }
     return { deleted };
+  },
+  bulkStatus: async (ids: string[]) => {
+    const merged: DocumentBulkStatusResponse = { items: [], missing_ids: [] };
+    for (const chunk of chunkArray(ids, BULK_DOCUMENT_CHUNK_SIZE)) {
+      const result = await request<DocumentBulkStatusResponse>("/documents/bulk/status", { method: "POST", body: JSON.stringify({ ids: chunk }) });
+      merged.items.push(...result.items);
+      merged.missing_ids.push(...result.missing_ids);
+    }
+    return merged;
   },
   bulkDownload: async (ids: string[]) => {
     const chunks = chunkArray(ids, BULK_DOCUMENT_CHUNK_SIZE);

@@ -18,7 +18,7 @@ sys.modules.setdefault(
 
 from app.api.routes import documents as document_routes
 from app.models.document import DocumentType, ProcessingStatus
-from app.schemas.document import BulkDocumentRequest, DocumentBatchUploadResponse, DocumentRead
+from app.schemas.document import BulkDocumentRequest, DocumentBatchUploadResponse, DocumentBulkStatusResponse, DocumentRead
 
 
 def test_bulk_document_request_accepts_up_to_5000_ids():
@@ -82,6 +82,73 @@ def test_document_batch_upload_response_preserves_success_and_error_indexes():
     assert response.items[0].index == 1
     assert response.items[0].document.original_filename == "ok.pdf"
     assert response.errors[0].index == 0
+
+
+def test_document_bulk_status_response_tracks_missing_ids():
+    found_id = uuid4()
+    missing_id = uuid4()
+    document_payload = {
+        "id": found_id,
+        "original_filename": "queued.pdf",
+        "stored_file_path": "/tmp/queued.pdf",
+        "mime_type": "application/pdf",
+        "document_type": DocumentType.general_document,
+        "line_items": [],
+        "processing_status": ProcessingStatus.processing,
+        "created_at": "2026-06-15T00:00:00Z",
+        "updated_at": "2026-06-15T00:00:00Z",
+        "file_url": "http://localhost/uploads/queued.pdf",
+    }
+
+    response = DocumentBulkStatusResponse.model_validate({
+        "items": [document_payload],
+        "missing_ids": [missing_id],
+    })
+
+    assert response.items[0].id == found_id
+    assert response.items[0].processing_status == ProcessingStatus.processing
+    assert response.missing_ids == [missing_id]
+
+
+def test_bulk_status_route_returns_found_documents_in_request_order(monkeypatch):
+    first_id = uuid4()
+    second_id = uuid4()
+    missing_id = uuid4()
+    stored_documents = [
+        SimpleNamespace(id=second_id, original_filename="second.pdf"),
+        SimpleNamespace(id=first_id, original_filename="first.pdf"),
+    ]
+
+    class FakeScalarResult:
+        def all(self):
+            return stored_documents
+
+    class FakeDb:
+        def scalars(self, _stmt):
+            return FakeScalarResult()
+
+    def fake_to_list_read(document: SimpleNamespace) -> DocumentRead:
+        return DocumentRead.model_validate(
+            {
+                "id": document.id,
+                "original_filename": document.original_filename,
+                "stored_file_path": f"/tmp/{document.original_filename}",
+                "mime_type": "application/pdf",
+                "document_type": DocumentType.general_document,
+                "line_items": [],
+                "processing_status": ProcessingStatus.processing,
+                "created_at": "2026-06-15T00:00:00Z",
+                "updated_at": "2026-06-15T00:00:00Z",
+                "file_url": f"http://localhost/uploads/{document.original_filename}",
+            }
+        )
+
+    monkeypatch.setattr(document_routes, "_to_list_read", fake_to_list_read)
+
+    response = document_routes.bulk_document_status(BulkDocumentRequest(ids=[first_id, missing_id, second_id]), FakeDb())
+
+    assert [item.id for item in response.items] == [first_id, second_id]
+    assert response.missing_ids == [missing_id]
 
 
 def _upload(filename: str, content: bytes = b"body", content_type: str = "application/pdf") -> UploadFile:
