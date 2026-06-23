@@ -624,7 +624,11 @@ class DocumentProcessor:
                 stage_events,
                 prepare_metadata,
             )
-            raw_extraction = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+            raw_extraction = RawExtractionSnapshotService().build(
+                document,
+                source="processing_pipeline",
+                line_candidates=self._ocr_line_candidates(normalized),
+            )
             workflow_metadata["raw_extraction"] = raw_extraction
             workflow_metadata["classification_pre_mapping"] = SemanticMappingService().classification_pre_mapping(document, raw_extraction)
             workflow_metadata["raw_semantic_mapping"] = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")

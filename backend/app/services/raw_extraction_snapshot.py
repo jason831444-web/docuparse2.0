@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -14,7 +15,14 @@ class RawExtractionSnapshotService:
     and table cells are preserved before they are mapped into business meaning.
     """
 
-    def build(self, document: Document, *, source: str = "review_snapshot", reviewed_key_values: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def build(
+        self,
+        document: Document,
+        *,
+        source: str = "review_snapshot",
+        reviewed_key_values: list[dict[str, Any]] | None = None,
+        line_candidates: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
         key_values: list[dict[str, Any]] = []
         tables = self._reviewed_line_item_tables(document) or self._raw_tables(metadata)
@@ -24,6 +32,7 @@ class RawExtractionSnapshotService:
         elif existing_key_values and source in {"manual_update", "confirmed_review"}:
             key_values = existing_key_values
         else:
+            self._add_ocr_line_key_values(line_candidates or [], key_values)
             self._add_current_document_fields(document, key_values)
             self._add_pos_summary(metadata, key_values)
             self._add_ai_parsed_key_values(metadata, key_values)
@@ -54,6 +63,51 @@ class RawExtractionSnapshotService:
         }
         for key, value in fields.items():
             self._append_key_value(key_values, key, value, "confirmed_document_field")
+
+    def _add_ocr_line_key_values(self, line_candidates: list[dict[str, Any]], key_values: list[dict[str, Any]]) -> None:
+        if not line_candidates:
+            return
+        scale_x = max([self._candidate_coord(candidate, "x_max") or 0 for candidate in line_candidates] + [1.0])
+        scale_y = max([self._candidate_coord(candidate, "y_max") or 0 for candidate in line_candidates] + [1.0])
+        for candidate in line_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            text = str(candidate.get("text") or "").strip()
+            parsed = self._parse_key_value_line(text)
+            if not parsed:
+                continue
+            key, value = parsed
+            bbox = self._line_candidate_bbox(candidate, scale_x=scale_x, scale_y=scale_y)
+            key_bbox, value_bbox = self._split_key_value_bbox(text, key, bbox)
+            self._append_key_value(
+                key_values,
+                key,
+                value,
+                "ocr_line_bbox",
+                confidence=candidate.get("confidence"),
+                bbox=bbox,
+                page_index=candidate.get("page_index") or candidate.get("page"),
+                key_bbox=key_bbox,
+                value_bbox=value_bbox,
+            )
+
+    def _parse_key_value_line(self, text: str) -> tuple[str, str] | None:
+        if not text or len(text) > 160:
+            return None
+        match = re.match(r"^\s*([^:：]{1,40})\s*[:：]\s*(.{1,80})\s*$", text)
+        if not match:
+            match = re.match(r"^\s*([가-힣A-Za-z0-9/().\s]{1,30})\s{2,}(.{1,80})\s*$", text)
+        if not match:
+            return None
+        key = re.sub(r"\s+", " ", match.group(1)).strip()
+        value = match.group(2).strip()
+        if not key or not value:
+            return None
+        if len(key) > 40 or len(value) > 100:
+            return None
+        if re.fullmatch(r"[-_./\\|]+", key) or re.fullmatch(r"[-_./\\|]+", value):
+            return None
+        return key, value
 
     def _add_pos_summary(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
         summary = metadata.get("pos_settlement_summary") if isinstance(metadata.get("pos_settlement_summary"), dict) else {}
@@ -261,6 +315,8 @@ class RawExtractionSnapshotService:
         section: str | None = None,
         bbox: object = None,
         page_index: object = None,
+        key_bbox: object = None,
+        value_bbox: object = None,
     ) -> None:
         if key is None or value in (None, ""):
             return
@@ -274,9 +330,59 @@ class RawExtractionSnapshotService:
         normalized_bbox = self._normalize_bbox(bbox)
         if normalized_bbox:
             item["normalized_bbox"] = normalized_bbox
+        normalized_key_bbox = self._normalize_bbox(key_bbox)
+        if normalized_key_bbox:
+            item["key_bbox"] = normalized_key_bbox
+        normalized_value_bbox = self._normalize_bbox(value_bbox)
+        if normalized_value_bbox:
+            item["value_bbox"] = normalized_value_bbox
         if page_index not in (None, ""):
             item["page_index"] = self._json_value(page_index)
         key_values.append(item)
+
+    def _candidate_coord(self, candidate: dict[str, Any], key: str) -> float | None:
+        try:
+            value = candidate.get(key)
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    def _line_candidate_bbox(self, candidate: dict[str, Any], *, scale_x: float, scale_y: float) -> list[float] | None:
+        values = [self._candidate_coord(candidate, key) for key in ("x_min", "y_min", "x_max", "y_max")]
+        if any(value is None for value in values):
+            bbox = candidate.get("bbox")
+            if isinstance(bbox, list) and bbox:
+                try:
+                    xs = [float(point[0]) for point in bbox if isinstance(point, (list, tuple)) and len(point) >= 2]
+                    ys = [float(point[1]) for point in bbox if isinstance(point, (list, tuple)) and len(point) >= 2]
+                except (TypeError, ValueError):
+                    return None
+                if not xs or not ys:
+                    return None
+                values = [min(xs), min(ys), max(xs), max(ys)]
+            else:
+                return None
+        x1, y1, x2, y2 = [float(value or 0) for value in values]
+        divisor_x = scale_x if scale_x > 1 else 1.0
+        divisor_y = scale_y if scale_y > 1 else 1.0
+        return [
+            max(0.0, min(1.0, x1 / divisor_x)),
+            max(0.0, min(1.0, y1 / divisor_y)),
+            max(0.0, min(1.0, x2 / divisor_x)),
+            max(0.0, min(1.0, y2 / divisor_y)),
+        ]
+
+    def _split_key_value_bbox(self, text: str, key: str, bbox: list[float] | None) -> tuple[list[float] | None, list[float] | None]:
+        if not bbox:
+            return None, None
+        separator_index = max(text.find(":"), text.find("："))
+        if separator_index < 0:
+            separator_index = len(key)
+        denominator = max(len(text), 1)
+        split = bbox[0] + (bbox[2] - bbox[0]) * min(0.85, max(0.15, (separator_index + 1) / denominator))
+        key_bbox = [bbox[0], bbox[1], split, bbox[3]]
+        value_bbox = [split, bbox[1], bbox[2], bbox[3]]
+        return key_bbox, value_bbox
 
     def _bbox_from_item(self, item: dict[str, Any]) -> object | None:
         for key in ("normalized_bbox", "bbox", "box", "bounding_box", "bbox_span"):
