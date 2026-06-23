@@ -28,6 +28,7 @@ from app.services.canonical_schema import (
     expected_column_groups,
     inspection_header_or_note,
 )
+from app.services.image_preprocessor import ImagePreprocessor
 
 
 app = FastAPI(title="Docparse PaddleOCR-VL GGUF Worker")
@@ -318,15 +319,20 @@ def _analyze_path(
         schema_payload: dict[str, Any] | None = None
         tables: list[dict[str, Any]] = []
         key_values: list[dict[str, Any]] = []
-        output: Any
         with _inference_lock:
-            output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
-        text = extract_text(output)
-        tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename or path.name)
-        key_values = _key_values_from_official_paddle_output(output, image_path=image_path)
+            variant_result = _select_best_full_page_vl_variant(
+                image_path,
+                settings,
+                original_filename=original_filename or path.name,
+            )
+        output = variant_result["output"]
+        text = str(variant_result.get("text") or "")
+        tables = list(variant_result.get("tables") or [])
+        key_values = list(variant_result.get("key_values") or [])
         schema_metadata["official_table_count"] = len(tables)
         if schema_metadata["enabled"]:
-            prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
+            selected_image_path = Path(variant_result.get("image_path") or image_path)
+            prompt_payload, prompt_metadata = _run_schema_prompt_inference(selected_image_path, settings)
             schema_payload = prompt_payload
             schema_metadata.update(prompt_metadata)
             if schema_payload:
@@ -406,7 +412,13 @@ def _analyze_path(
                 "ok": readable_output,
                 "classification": validation.get("status") or ("warn" if official_table_available else None),
                 "validation": validation,
-                "render": {"image_path": str(image_path)},
+                "render": {
+                    "image_path": str(variant_result.get("image_path") or image_path),
+                    "original_image_path": str(image_path),
+                    "vl_full_page_variant": variant_result.get("variant_name"),
+                    "vl_full_page_variant_comparison": variant_result.get("comparison"),
+                    "vl_full_page_preprocess": variant_result.get("preprocess"),
+                },
                 "text_preview": text[:5000],
                 "structured_schema": VLM_STRUCTURED_OUTPUT_SCHEMA,
                 "schema_prompt": schema_metadata,
@@ -502,6 +514,128 @@ def _prepare_input_image(path: Path) -> Path:
     if path.suffix.casefold() == ".pdf":
         return _render_first_page(path)
     return path
+
+
+def _select_best_full_page_vl_variant(
+    image_path: Path,
+    settings: Any,
+    *,
+    original_filename: str,
+) -> dict[str, Any]:
+    variants = _full_page_vl_variants(image_path, settings)
+    results: list[dict[str, Any]] = []
+    for variant in variants:
+        candidate_path = Path(variant.get("processed_path") or variant.get("path") or image_path)
+        output = _predict_with_optional_paddle_schema_prompt(candidate_path, settings)
+        text = extract_text(output)
+        tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename)
+        key_values = _key_values_from_official_paddle_output(output, image_path=candidate_path)
+        score = _vl_variant_score(text, tables, key_values)
+        results.append(
+            {
+                "variant_name": variant.get("variant_name") or "original_full_page",
+                "image_path": str(candidate_path),
+                "output": output,
+                "text": text,
+                "tables": tables,
+                "key_values": key_values,
+                "score": score,
+                "preprocess": variant,
+            }
+        )
+    selected = max(results, key=lambda item: item["score"]["total_score"]) if results else {}
+    selected["comparison"] = [
+        {
+            "variant_name": item.get("variant_name"),
+            "image_path": item.get("image_path"),
+            "score": item.get("score"),
+            "preprocess_operations": (item.get("preprocess") or {}).get("operations") or [],
+            "preprocess_warnings": (item.get("preprocess") or {}).get("warnings") or [],
+        }
+        for item in results
+    ]
+    return selected
+
+
+def _full_page_vl_variants(image_path: Path, settings: Any) -> list[dict[str, Any]]:
+    original = {
+        "variant_name": "original_full_page",
+        "path": str(image_path),
+        "processed_path": str(image_path),
+        "operations": ["original_full_page"],
+        "warnings": ["no_crop_applied"],
+    }
+    if not _is_readable_image(image_path):
+        return [original]
+    output_dir = Path(getattr(settings, "upload_dir", image_path.parent)) / "vl_full_page_variants"
+    preprocessor = ImagePreprocessor()
+    candidates = [
+        original,
+        preprocessor.prepare_light_page_vl_input(image_path, output_dir, avoid_page_crop=True),
+        preprocessor.prepare_standard_vl_input(image_path, output_dir),
+        preprocessor.prepare_contrast_only_vl_input(image_path, output_dir),
+    ]
+    variants: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for candidate in candidates:
+        candidate_path = str(candidate.get("processed_path") or candidate.get("path") or "")
+        if not candidate_path or candidate_path in seen_paths or not Path(candidate_path).exists():
+            continue
+        seen_paths.add(candidate_path)
+        variants.append(candidate)
+    return variants or [original]
+
+
+def _is_readable_image(image_path: Path) -> bool:
+    try:
+        with Image.open(image_path) as image:
+            image.verify()
+        return True
+    except Exception:
+        return False
+
+
+def _vl_variant_score(text: str, tables: list[dict[str, Any]], key_values: list[dict[str, Any]]) -> dict[str, Any]:
+    coverage = _key_value_core_coverage(key_values)
+    kv_bbox_count = sum(1 for item in key_values if item.get("bbox") or item.get("normalized_bbox") or item.get("key_bbox") or item.get("value_bbox"))
+    table_rows = sum(len(table.get("rows") or []) for table in tables if isinstance(table, dict))
+    text_len = min(len(str(text or "").strip()), 5000)
+    total_score = (
+        len(coverage) * 100
+        + kv_bbox_count * 12
+        + len(key_values) * 5
+        + len(tables) * 10
+        + table_rows * 2
+        + text_len / 1000
+    )
+    return {
+        "total_score": round(total_score, 4),
+        "core_fields_covered": sorted(coverage),
+        "core_field_count": len(coverage),
+        "key_value_count": len(key_values),
+        "key_value_bbox_count": kv_bbox_count,
+        "table_count": len(tables),
+        "table_row_count": table_rows,
+        "text_length": len(str(text or "").strip()),
+    }
+
+
+def _key_value_core_coverage(key_values: list[dict[str, Any]]) -> set[str]:
+    keys = [re.sub(r"\s+", "", str(item.get("key") or "")).casefold() for item in key_values]
+    coverage: set[str] = set()
+    if any(re.search(r"문서번호|document(?:number|no)|doc(?:number|no)", key) for key in keys):
+        coverage.add("document_number")
+    if any(re.search(r"샘플번호|sample", key) for key in keys):
+        coverage.add("sample_number")
+    if any(re.search(r"작성일|발행일|견적일|거래일자|요청일|invoice(?:date)?|date", key) for key in keys):
+        coverage.add("date")
+    if any(re.search(r"공급자|seller|vendor", key) for key in keys):
+        coverage.add("supplier")
+    if any(re.search(r"공급받는자|고객|buyer|customer", key) for key in keys):
+        coverage.add("customer")
+    if any(re.search(r"합계|total|amount", key) for key in keys):
+        coverage.add("total")
+    return coverage
 
 
 def _render_first_page(path: Path) -> Path:
