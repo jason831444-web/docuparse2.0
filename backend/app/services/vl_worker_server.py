@@ -868,10 +868,15 @@ def _key_values_from_official_paddle_output(
     full_width = max(1, int(full_width or width))
     full_height = max(1, int(full_height or height))
     key_values: list[dict[str, Any]] = []
+    section: str | None = None
     for block in _official_parsing_blocks(output):
         label = str(block.get("block_label") or "").casefold()
         text = str(block.get("block_content") or "")
         if not text:
+            continue
+        block_section = _official_single_section_block(text)
+        if block_section:
+            section = block_section
             continue
         bbox = _normalize_official_block_bbox(
             block,
@@ -883,9 +888,9 @@ def _key_values_from_official_paddle_output(
             full_height=full_height,
         )
         entries = (
-            _key_value_entries_from_official_table_block(text, bbox)
+            _key_value_entries_from_official_table_block(text, bbox, initial_section=section)
             if label == "table"
-            else _key_value_entries_from_official_text_block(text, bbox)
+            else _key_value_entries_from_official_text_block(text, bbox, initial_section=section)
         )
         for key, value, item_bbox, key_bbox, value_bbox in entries:
             item = {
@@ -913,13 +918,15 @@ def _image_size(image_path: Path) -> tuple[int, int]:
 def _key_value_entries_from_official_text_block(
     text: str,
     bbox: list[float] | None,
+    *,
+    initial_section: str | None = None,
 ) -> list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]]:
     raw_lines = [line.strip() for line in str(text or "").splitlines()]
     lines = [line for line in raw_lines if line]
     if not lines:
         cleaned = _clean_cell(str(text or ""))
         lines = [cleaned] if cleaned else []
-    section: str | None = None
+    section: str | None = initial_section
     entries: list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]] = []
     value_line_count = max(1, len(lines))
     for index, line in enumerate(lines):
@@ -939,11 +946,13 @@ def _key_value_entries_from_official_text_block(
 def _key_value_entries_from_official_table_block(
     html_table: str,
     bbox: list[float] | None,
+    *,
+    initial_section: str | None = None,
 ) -> list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]]:
     rows = _parse_html_table_rows(html_table)
     if not _looks_like_key_value_table(rows):
         return []
-    section: str | None = None
+    section: str | None = initial_section
     entries: list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]] = []
     value_rows = [row for row in rows if row and _clean_cell(row[0])]
     row_count = max(1, len(value_rows))
@@ -985,6 +994,13 @@ def _official_section_from_text(text: str) -> str | None:
     if normalized in {"공급받는자", "궁급받는자", "공급받는자정보", "고객사"}:
         return "공급받는자"
     return None
+
+
+def _official_single_section_block(text: str) -> str | None:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if len(lines) != 1:
+        return None
+    return _official_section_from_text(lines[0])
 
 
 def _sectioned_official_key(section: str | None, key: str) -> str:

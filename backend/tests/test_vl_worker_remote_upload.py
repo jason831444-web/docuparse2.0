@@ -556,8 +556,13 @@ def test_vl_worker_key_values_from_official_crop_blocks():
                         },
                         {
                             "block_label": "text",
-                            "block_content": "공급받는자\n상호: (주)시흥대야점\n작성일: 2026.06.07\n유효기간: 견적일로부터 14일",
-                            "block_bbox": [400, 100, 700, 220],
+                            "block_content": "공급받는자",
+                            "block_bbox": [400, 100, 500, 130],
+                        },
+                        {
+                            "block_label": "text",
+                            "block_content": "상호: (주)시흥대야점\n작성일: 2026.06.07\n유효기간: 견적일로부터 14일",
+                            "block_bbox": [400, 130, 700, 220],
                         },
                         {
                             "block_label": "table",
