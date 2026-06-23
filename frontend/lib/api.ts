@@ -2,6 +2,7 @@ import type {
   ActivitySummary,
   AppNotification,
   CalendarItemUpdate,
+  DocumentBatchUploadResponse,
   DocumentCalendarItem,
   DocumentListResponse,
   DocumentRecord,
@@ -89,6 +90,11 @@ export const api = {
     const data = new FormData();
     data.append("file", file);
     return request<DocumentRecord>("/documents/upload", { method: "POST", body: data });
+  },
+  uploadBatch: (files: File[]) => {
+    const data = new FormData();
+    files.forEach((file) => data.append("files", file));
+    return request<DocumentBatchUploadResponse>("/documents/upload/batch", { method: "POST", body: data });
   },
   update: (id: string, payload: DocumentUpdate) =>
     request<DocumentRecord>(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),

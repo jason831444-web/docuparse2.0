@@ -1,6 +1,6 @@
 import type { DocumentRecord } from "@/types/document";
 
-export const DEFAULT_UPLOAD_CONCURRENCY = 3;
+export const DEFAULT_UPLOAD_CONCURRENCY = 6;
 export const RECOMMENDED_MAX_UPLOAD_FILES = 200;
 export const UPLOAD_QUEUE_STORAGE_KEY = "docuparse.uploadQueue.v1";
 export const UPLOAD_QUEUE_SCHEMA_VERSION = 1;

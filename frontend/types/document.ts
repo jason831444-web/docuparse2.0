@@ -495,6 +495,22 @@ export interface DocumentListResponse {
   page_size: number;
 }
 
+export interface DocumentBatchUploadError {
+  index: number;
+  filename: string;
+  error: string;
+}
+
+export interface DocumentBatchUploadItem {
+  index: number;
+  document: DocumentRecord;
+}
+
+export interface DocumentBatchUploadResponse {
+  items: DocumentBatchUploadItem[];
+  errors: DocumentBatchUploadError[];
+}
+
 export interface DocumentCalendarItem {
   id: string;
   document_id: string;

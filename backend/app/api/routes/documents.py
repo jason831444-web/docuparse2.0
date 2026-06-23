@@ -17,6 +17,9 @@ from app.schemas.document import (
     ActivitySummary,
     BulkDocumentRequest,
     CalendarItemUpdate,
+    DocumentBatchUploadError,
+    DocumentBatchUploadItem,
+    DocumentBatchUploadResponse,
     CategoryFolderCreate,
     DocumentCalendarItem,
     DocumentListResponse,
@@ -126,18 +129,9 @@ def _process_document_in_background(document_id: UUID) -> None:
         DocumentProcessor().process(db, document)
 
 
-@router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
-def upload_document(
-    file: Annotated[UploadFile, File(...)],
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-) -> DocumentRead:
+def _create_uploaded_document(file: UploadFile, db: Session) -> Document:
     storage = get_storage_service()
-    try:
-        stored_path = storage.save_upload(file)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    stored_path = storage.save_upload(file)
     document = Document(
         original_filename=_safe_original_filename(file.filename),
         stored_file_path=str(stored_path),
@@ -147,10 +141,47 @@ def upload_document(
     db.add(document)
     db.commit()
     db.refresh(document)
-    document = get_document_queue().enqueue(db, document, process_inline=False)
+    return get_document_queue().enqueue(db, document, process_inline=False)
+
+
+@router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
+def upload_document(
+    file: Annotated[UploadFile, File(...)],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> DocumentRead:
+    try:
+        document = _create_uploaded_document(file, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if get_settings().background_processing_enabled:
         background_tasks.add_task(_process_document_in_background, document.id)
     return _to_read(document)
+
+
+@router.post("/upload/batch", response_model=DocumentBatchUploadResponse, status_code=status.HTTP_201_CREATED)
+def upload_documents_batch(
+    files: Annotated[list[UploadFile], File(...)],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> DocumentBatchUploadResponse:
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded.")
+
+    documents: list[DocumentBatchUploadItem] = []
+    errors: list[DocumentBatchUploadError] = []
+    background_processing_enabled = get_settings().background_processing_enabled
+    for index, file in enumerate(files):
+        try:
+            document = _create_uploaded_document(file, db)
+        except ValueError as exc:
+            errors.append(DocumentBatchUploadError(index=index, filename=_safe_original_filename(file.filename), error=str(exc)))
+            continue
+        if background_processing_enabled:
+            background_tasks.add_task(_process_document_in_background, document.id)
+        documents.append(DocumentBatchUploadItem(index=index, document=_to_read(document)))
+    return DocumentBatchUploadResponse(items=documents, errors=errors)
 
 
 @router.get("", response_model=DocumentListResponse)

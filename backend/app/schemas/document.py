@@ -85,6 +85,22 @@ class DocumentListResponse(BaseModel):
     page_size: int
 
 
+class DocumentBatchUploadError(BaseModel):
+    index: int
+    filename: str
+    error: str
+
+
+class DocumentBatchUploadItem(BaseModel):
+    index: int
+    document: DocumentRead
+
+
+class DocumentBatchUploadResponse(BaseModel):
+    items: list[DocumentBatchUploadItem]
+    errors: list[DocumentBatchUploadError] = Field(default_factory=list)
+
+
 class DocumentStats(BaseModel):
     total: int
     receipts: int

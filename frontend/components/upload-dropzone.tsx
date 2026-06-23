@@ -93,16 +93,26 @@ export function UploadDropzone() {
   const visibleQueue = useMemo(() => queue.slice(0, MAX_VISIBLE_QUEUE_ITEMS), [queue]);
   const hiddenQueueCount = Math.max(0, queue.length - visibleQueue.length);
 
-  const uploadQueueItem = useCallback(async (item: UploadQueueItem<File>) => {
-    activeIds.current.add(item.id);
-    setQueue((current) => markUploadStarted(current, item.id));
+  const uploadQueueItems = useCallback(async (items: UploadQueueItem<File>[]) => {
+    if (!items.length) return;
+    items.forEach((item) => activeIds.current.add(item.id));
+    setQueue((current) => items.reduce((next, item) => markUploadStarted(next, item.id), current));
     try {
-      const uploaded = await api.upload(item.file);
-      setQueue((current) => markUploadProcessing(current, item.id, uploaded));
+      const result = items.length === 1
+        ? { items: [{ index: 0, document: await api.upload(items[0].file) }], errors: [] }
+        : await api.uploadBatch(items.map((item) => item.file));
+      const documentsByIndex = new Map(result.items.map((item) => [item.index, item.document]));
+      const errorsByIndex = new Map(result.errors.map((error) => [error.index, error.error]));
+      setQueue((current) => items.reduce((next, item, index) => {
+        const document = documentsByIndex.get(index);
+        if (document) return markUploadProcessing(next, item.id, document);
+        return markUploadFailed(next, item.id, errorsByIndex.get(index) || "업로드 요청을 처리하지 못했습니다.");
+      }, current));
     } catch (error) {
-      setQueue((current) => markUploadFailed(current, item.id, explainUploadError(error)));
+      const message = explainUploadError(error);
+      setQueue((current) => items.reduce((next, item) => markUploadFailed(next, item.id, message), current));
     } finally {
-      activeIds.current.delete(item.id);
+      items.forEach((item) => activeIds.current.delete(item.id));
     }
   }, []);
 
@@ -172,11 +182,11 @@ export function UploadDropzone() {
     const nextIds = nextQueuedUploadIds(queue, DEFAULT_UPLOAD_CONCURRENCY)
       .filter((id) => !activeIds.current.has(id))
       .slice(0, available);
-    nextIds.forEach((id) => {
-      const item = queue.find((candidate) => candidate.id === id);
-      if (item && item.fileAvailable !== false) void uploadQueueItem(item as UploadQueueItem<File>);
-    });
-  }, [queue, uploadQueueItem]);
+    const items = nextIds
+      .map((id) => queue.find((candidate) => candidate.id === id))
+      .filter((item): item is UploadQueueItem<UploadQueueFileLike> => Boolean(item && item.fileAvailable !== false));
+    if (items.length) void uploadQueueItems(items as UploadQueueItem<File>[]);
+  }, [queue, uploadQueueItems]);
 
   useEffect(() => {
     if (!hasPendingWork) return;
