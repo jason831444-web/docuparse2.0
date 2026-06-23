@@ -81,24 +81,62 @@ class SemanticMappingService:
     def apply_to_document(self, document: Document, *, approval_note: str | None = None) -> dict[str, Any]:
         metadata = dict(document.workflow_metadata or {})
         raw = self.raw_snapshot.build(document, source="confirmed_review")
-        mapping = self.map_raw(document, raw)
+        pre_mapping = self.classification_pre_mapping(document, raw)
+        mapping = self.map_raw(document, raw, mapping_source="confirmed_raw_data")
 
         metadata["raw_extraction"] = raw
+        metadata["classification_pre_mapping"] = pre_mapping
         metadata["confirmed_raw_data"] = {
             **raw,
             "confirmed_at": datetime.now(timezone.utc).isoformat(),
             "approval_note": approval_note,
         }
-        metadata["semantic_mapping"] = mapping
+        metadata.pop("semantic_mapping", None)
+        metadata["confirmed_semantic_mapping"] = mapping
         metadata["business_fields"] = {**(metadata.get("business_fields") if isinstance(metadata.get("business_fields"), dict) else {}), **mapping.get("fields", {})}
-        metadata["semantic_mapping_version"] = mapping["version"]
+        metadata["confirmed_semantic_mapping_version"] = mapping["version"]
         self._apply_document_type(document, mapping)
         document.workflow_metadata = metadata
         return mapping
 
-    def map_raw(self, document: Document, raw: dict[str, Any]) -> dict[str, Any]:
+    def classification_pre_mapping(self, document: Document, raw: dict[str, Any] | None = None) -> dict[str, Any]:
+        raw = raw or self.raw_snapshot.build(document, source="classification_pre_mapping")
         text = self._semantic_text(document, raw)
-        category, document_type = self._classify_type(document, text)
+        headers = self._table_headers(raw)
+        key_text = " ".join(str(item.get("key") or "") for item in raw.get("key_values") or [] if isinstance(item, dict))
+        amount_present = bool(re.search(r"(?:금액|합계|공급가액|부가세|V\.?A\.?T|total|amount|price)", f"{text} {key_text}", flags=re.IGNORECASE))
+        candidates: list[dict[str, Any]] = []
+        for category, document_type, pattern in self.TYPE_LABELS:
+            keyword_hits = re.findall(pattern, text, flags=re.IGNORECASE)
+            header_hits = [header for header in headers if re.search(pattern, header, flags=re.IGNORECASE)]
+            score = min(1.0, (0.45 if keyword_hits else 0) + (0.35 if header_hits else 0) + (0.1 if amount_present else 0))
+            if score:
+                candidates.append({
+                    "category": category,
+                    "document_type": document_type,
+                    "score": round(score, 2),
+                    "keyword_hits": list(dict.fromkeys(str(hit) for hit in keyword_hits[:8])),
+                    "header_hits": header_hits[:8],
+                })
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        return {
+            "version": "classification_pre_mapping_v1",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "signals": {
+                "title": document.title,
+                "keyword_text_present": bool(text.strip()),
+                "table_headers": headers,
+                "amount_present": amount_present,
+                "raw_key_value_count": len(raw.get("key_values") or []),
+                "raw_table_count": len(raw.get("tables") or []),
+            },
+            "candidates": candidates[:5],
+        }
+
+    def map_raw(self, document: Document, raw: dict[str, Any], *, mapping_source: str = "raw_extraction") -> dict[str, Any]:
+        text = self._semantic_text(document, raw)
+        pre_mapping = self.classification_pre_mapping(document, raw)
+        category, document_type = self._classify_type(document, text, pre_mapping)
         fields = self._base_fields(document)
         fields.update(self._fields_from_key_values(raw.get("key_values") or [], self.FIELD_ALIASES))
         if category == "pos_daily_settlement":
@@ -107,9 +145,11 @@ class SemanticMappingService:
         mapping_confidence = self._confidence(fields, line_items)
         return {
             "version": "semantic_mapping_v1",
+            "mapping_source": mapping_source,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "document_type": document_type,
             "category": category,
+            "classification_pre_mapping": pre_mapping,
             "fields": fields,
             "line_items": line_items,
             "raw_table_count": len(raw.get("tables") or []),
@@ -176,13 +216,29 @@ class SemanticMappingService:
                 return target
         return None
 
-    def _classify_type(self, document: Document, text: str) -> tuple[str, str]:
+    def _classify_type(self, document: Document, text: str, pre_mapping: dict[str, Any] | None = None) -> tuple[str, str]:
         current_doc_type = getattr(document.document_type, "value", str(document.document_type or "general_document"))
         current_category = normalize_category_value(document.category) or current_doc_type
+        candidates = pre_mapping.get("candidates") if isinstance(pre_mapping, dict) else []
+        if isinstance(candidates, list) and candidates:
+            top = candidates[0] if isinstance(candidates[0], dict) else {}
+            if float(top.get("score") or 0) >= 0.45:
+                return str(top.get("category") or current_category), str(top.get("document_type") or current_doc_type)
         for category, document_type, pattern in self.TYPE_LABELS:
             if re.search(pattern, text, flags=re.IGNORECASE):
                 return category, document_type
         return current_category or "other", current_doc_type or "general_document"
+
+    def _table_headers(self, raw: dict[str, Any]) -> list[str]:
+        headers: list[str] = []
+        for table in raw.get("tables") or []:
+            if not isinstance(table, dict):
+                continue
+            for column in table.get("columns") or []:
+                value = str(column or "").strip()
+                if value and value not in headers:
+                    headers.append(value)
+        return headers
 
     def _apply_document_type(self, document: Document, mapping: dict[str, Any]) -> None:
         category = normalize_category_value(str(mapping.get("category") or "")) or document.category

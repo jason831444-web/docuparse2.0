@@ -98,7 +98,7 @@ class MonthlyReportService:
             if amount is not None:
                 party_row["total_amount"] += amount
 
-            for item in document.line_items or []:
+            for item in self._line_items(document):
                 if not isinstance(item, dict):
                     continue
                 item_name = self._clean_text(item.get("item_name")) or "품목 미확인"
@@ -192,6 +192,28 @@ class MonthlyReportService:
     def _date_from_datetime(self, value: datetime | None) -> date | None:
         return value.date() if isinstance(value, datetime) else None
 
+    def _parse_date(self, value: Any) -> date | None:
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            return None
+
+    def _parse_datetime(self, value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
     def _is_verified(self, document: Document) -> bool:
         if document.processing_status in VERIFIED_STATUSES:
             return True
@@ -199,7 +221,8 @@ class MonthlyReportService:
         return bool(isinstance(review, dict) and review.get("approved"))
 
     def _party_name(self, document: Document) -> str:
-        return self._clean_text(document.customer_name or document.vendor_name or document.merchant_name) or "거래처 미확인"
+        fields = self._semantic_fields(document)
+        return self._clean_text(fields.get("customer_name") or fields.get("vendor_name") or document.customer_name or document.vendor_name or document.merchant_name) or "거래처 미확인"
 
     def _normalize_party_filter(self, value: str | None) -> str:
         return re.sub(r"\s+", "", self._clean_text(value) or "").casefold()
@@ -209,15 +232,25 @@ class MonthlyReportService:
         return value.isoformat() if value else None
 
     def _document_date_value(self, document: Document) -> date | None:
-        return document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
+        fields = self._semantic_fields(document)
+        semantic_date = self._parse_date(fields.get("issue_date"))
+        return semantic_date or document.issue_date or document.extracted_date or self._date_from_datetime(document.created_at)
 
     def _document_amount(self, document: Document) -> Decimal | None:
-        explicit_amount = self._decimal(document.extracted_amount)
+        fields = self._semantic_fields(document)
+        explicit_amount = self._decimal(
+            fields.get("document_total")
+            or fields.get("payment_total")
+            or fields.get("estimated_total")
+            or fields.get("krw_converted")
+            or fields.get("total_usd")
+            or document.extracted_amount
+        )
         if explicit_amount is not None:
             return explicit_amount
         line_total = Decimal("0")
         has_line_amount = False
-        for item in document.line_items or []:
+        for item in self._line_items(document):
             if not isinstance(item, dict):
                 continue
             amount = self._line_amount(item)
@@ -229,6 +262,30 @@ class MonthlyReportService:
     def _line_amount(self, item: dict[str, Any]) -> Decimal | None:
         return self._decimal(item.get("supply_amount") or item.get("line_total") or item.get("line_amount"))
 
+    def _semantic_fields(self, document: Document) -> dict[str, Any]:
+        mapping = self._confirmed_semantic_mapping(document)
+        fields = mapping.get("fields") if isinstance(mapping.get("fields"), dict) else {}
+        return fields
+
+    def _line_items(self, document: Document) -> list[dict[str, Any]]:
+        mapping = self._confirmed_semantic_mapping(document)
+        semantic_items = mapping.get("line_items") if isinstance(mapping.get("line_items"), list) else []
+        if semantic_items:
+            return [item for item in semantic_items if isinstance(item, dict)]
+        return [item for item in document.line_items or [] if isinstance(item, dict)]
+
+    def _confirmed_semantic_mapping(self, document: Document) -> dict[str, Any]:
+        if document.review_required or not self._is_verified(document):
+            return {}
+        metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
+        mapping = metadata.get("confirmed_semantic_mapping") if isinstance(metadata.get("confirmed_semantic_mapping"), dict) else {}
+        confirmed = metadata.get("confirmed_raw_data") if isinstance(metadata.get("confirmed_raw_data"), dict) else {}
+        confirmed_at = self._parse_datetime(confirmed.get("confirmed_at"))
+        mapping_at = self._parse_datetime(mapping.get("created_at"))
+        if confirmed_at is None or mapping_at is None or mapping_at < confirmed_at:
+            return {}
+        return mapping
+
     def _missing_required_field_issues(self, document: Document) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         missing: list[str] = []
@@ -236,9 +293,10 @@ class MonthlyReportService:
             missing.append("거래처명")
         if not self._document_date(document):
             missing.append("문서 날짜")
-        if not document.line_items:
+        line_items = self._line_items(document)
+        if not line_items:
             missing.append("품목")
-        for index, item in enumerate(document.line_items or [], start=1):
+        for index, item in enumerate(line_items, start=1):
             if not isinstance(item, dict):
                 missing.append(f"{index}번째 품목")
                 continue
@@ -256,7 +314,7 @@ class MonthlyReportService:
         if not self._amount_required(document):
             return []
         issues: list[dict[str, Any]] = []
-        for index, item in enumerate(document.line_items or [], start=1):
+        for index, item in enumerate(self._line_items(document), start=1):
             if not isinstance(item, dict):
                 continue
             quantity = self._decimal(item.get("quantity"))
@@ -369,7 +427,8 @@ class MonthlyReportService:
         return {key: self._number(value) if isinstance(value, Decimal) else value for key, value in row.items()}
 
     def _document_type_value(self, document: Document) -> str:
-        return getattr(document.document_type, "value", str(document.document_type or "unknown")) or "unknown"
+        mapping = self._confirmed_semantic_mapping(document)
+        return str(mapping.get("category") or mapping.get("document_type") or getattr(document.document_type, "value", str(document.document_type or "unknown")) or "unknown")
 
     def _number(self, value: Decimal | None) -> int | float | None:
         if value is None:

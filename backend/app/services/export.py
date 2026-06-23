@@ -42,27 +42,31 @@ def serialize_document(document: Document) -> dict:
         data["currency"] = None
     data["document_taxonomy"] = taxonomy
     data["export_policy"] = policy
+    semantic = _semantic_mapping(document)
+    semantic_fields = _semantic_fields(document)
     data["canonical_export"] = {
         "document": {
             "document_id": str(document.id) if document.id else None,
             "filename": document.original_filename,
-            "document_type": _doc_type(document),
+            "document_type": semantic.get("document_type") or _doc_type(document),
+            "category": semantic.get("category") or document.category,
             "document_subtype": taxonomy.get("document_subtype"),
             "document_profile": taxonomy.get("document_profile"),
             "document_profiles": taxonomy.get("document_profiles", []),
             "layout_profile": taxonomy.get("layout_profile"),
             "processing_status": getattr(document.processing_status, "value", str(document.processing_status)) if document.processing_status else None,
             "review_required": document.review_required,
-            "document_number": document.document_number,
-            "issue_date": str(document.issue_date or document.extracted_date or "") or None,
+            "document_number": semantic_fields.get("document_number") or document.document_number,
+            "issue_date": str(semantic_fields.get("issue_date") or document.issue_date or document.extracted_date or "") or None,
             "due_date": str(document.due_date or "") or None,
-            "vendor_name": document.vendor_name or document.merchant_name,
-            "customer_name": document.customer_name,
-            "currency": None if export_conflict_blocked else document.currency,
-            "subtotal": None if export_conflict_blocked else _decimal_text(document.subtotal),
-            "tax": None if export_conflict_blocked else _decimal_text(document.tax),
-            "total": None if export_conflict_blocked else _decimal_text(document.extracted_amount),
+            "vendor_name": semantic_fields.get("vendor_name") or document.vendor_name or document.merchant_name,
+            "customer_name": semantic_fields.get("customer_name") or document.customer_name,
+            "currency": None if export_conflict_blocked else semantic_fields.get("currency") or document.currency,
+            "subtotal": None if export_conflict_blocked else _decimal_text(semantic_fields.get("supply_amount") or document.subtotal),
+            "tax": None if export_conflict_blocked else _decimal_text(semantic_fields.get("tax_amount") or document.tax),
+            "total": None if export_conflict_blocked else _decimal_text(_semantic_total(document) or document.extracted_amount),
         },
+        "confirmed_semantic_mapping": semantic,
         "policy": policy,
         "line_items": _canonical_line_items(document),
         "review_candidates": {
@@ -193,6 +197,8 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
         taxonomy = _export_taxonomy(document)
         policy = _export_policy(document, taxonomy)
         export_conflict_blocked = _return_credit_purchase_order_export_conflict(document, taxonomy)
+        semantic = _semantic_mapping(document)
+        semantic_fields = _semantic_fields(document)
         layout_summary = _layout_candidate_summary(document)
         vl_summary = _vl_candidate_summary(document)
         review_reasons = _review_reason_text(document)
@@ -201,12 +207,12 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
         line_items = line_items or [{}]
         for index, item in enumerate(line_items, start=1):
             rows.append({
-                "문서유형": getattr(document.document_type, "value", str(document.document_type)),
-                "공급업체": document.vendor_name or document.merchant_name,
-                "고객사": document.customer_name,
-                "거래처 탭": document.customer_name or document.vendor_name or document.merchant_name or "미분류",
-                "문서번호": document.document_number,
-                "발행일": str(document.issue_date or document.extracted_date or "") or None,
+                "문서유형": semantic.get("category") or getattr(document.document_type, "value", str(document.document_type)),
+                "공급업체": semantic_fields.get("vendor_name") or document.vendor_name or document.merchant_name,
+                "고객사": semantic_fields.get("customer_name") or document.customer_name,
+                "거래처 탭": semantic_fields.get("customer_name") or semantic_fields.get("vendor_name") or document.customer_name or document.vendor_name or document.merchant_name or "미분류",
+                "문서번호": semantic_fields.get("document_number") or document.document_number,
+                "발행일": str(semantic_fields.get("issue_date") or document.issue_date or document.extracted_date or "") or None,
                 "납기일": str(document.due_date or "") or None,
                 "품목명": item.get("item_name"),
                 "품목코드": item.get("item_code"),
@@ -225,12 +231,12 @@ def documents_to_erp_rows(documents: list[Document]) -> list[dict]:
                 "단가": item.get("unit_price"),
                 "공급가액": item.get("supply_amount"),
                 "세액": item.get("tax_amount"),
-                "합계금액": None if export_conflict_blocked else (item.get("line_total") if has_line_items else document.extracted_amount),
-                "통화": None if export_conflict_blocked else document.currency,
+                "합계금액": None if export_conflict_blocked else (item.get("line_total") if has_line_items else _semantic_total(document) or document.extracted_amount),
+                "통화": None if export_conflict_blocked else semantic_fields.get("currency") or document.currency,
                 "검토상태": "검토 필요" if document.review_required else "확정 가능",
                 "document_id": str(document.id) if document.id else None,
                 "filename": document.original_filename,
-                "document_total": None if export_conflict_blocked else _decimal_text(document.extracted_amount),
+                "document_total": None if export_conflict_blocked else _decimal_text(_semantic_total(document) or document.extracted_amount),
                 "document_subtype": taxonomy.get("document_subtype"),
                 "document_profile": taxonomy.get("document_profile"),
                 "document_profiles": ", ".join(taxonomy.get("document_profiles") or []),
@@ -660,7 +666,7 @@ def _canonical_line_items(document: Document) -> list[dict]:
 def _exportable_line_items(document: Document) -> list[dict]:
     cleaned: list[dict] = []
     seen: set[tuple] = set()
-    for item in document.line_items or []:
+    for item in _semantic_line_items(document) or document.line_items or []:
         if not isinstance(item, dict):
             continue
         if _line_item_excluded_from_export(document, item):
@@ -816,6 +822,41 @@ def _workflow_dict(document: Document, key: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _semantic_mapping(document: Document) -> dict:
+    if document.review_required:
+        return {}
+    workflow = document.workflow_metadata or {}
+    value = workflow.get("confirmed_semantic_mapping")
+    if not isinstance(value, dict):
+        return {}
+    confirmed = workflow.get("confirmed_raw_data") if isinstance(workflow.get("confirmed_raw_data"), dict) else {}
+    confirmed_at = _parse_datetime(confirmed.get("confirmed_at"))
+    mapping_at = _parse_datetime(value.get("created_at"))
+    if confirmed_at is None or mapping_at is None or mapping_at < confirmed_at:
+        return {}
+    return value
+
+
+def _semantic_fields(document: Document) -> dict:
+    mapping = _semantic_mapping(document)
+    value = mapping.get("fields")
+    return value if isinstance(value, dict) else {}
+
+
+def _semantic_line_items(document: Document) -> list[dict]:
+    mapping = _semantic_mapping(document)
+    values = mapping.get("line_items")
+    return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
+
+
+def _semantic_total(document: Document) -> object | None:
+    fields = _semantic_fields(document)
+    for key in ("document_total", "payment_total", "estimated_total", "total_usd", "krw_converted"):
+        if fields.get(key) not in (None, "", []):
+            return fields.get(key)
+    return None
+
+
 def _related_document_number(document: Document) -> str | None:
     metadata = document.workflow_metadata or {}
     business = metadata.get("business_fields") if isinstance(metadata.get("business_fields"), dict) else {}
@@ -843,6 +884,17 @@ def _json_safe(value: object) -> object:
     if isinstance(value, list):
         return [_json_safe(inner) for inner in value]
     return value
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _excel_sheet_name(value: str) -> str:

@@ -433,6 +433,33 @@ function RawExtractedKeyValues({ document }: { document: DocumentRecord }) {
   );
 }
 
+function classificationCandidates(document: DocumentRecord): Array<Record<string, unknown>> {
+  const metadata = readRecord(document.workflow_metadata);
+  const preMapping = readRecord(metadata.classification_pre_mapping);
+  return Array.isArray(preMapping.candidates) ? preMapping.candidates.map((item) => readRecord(item)).filter((item) => item.category || item.document_type) : [];
+}
+
+function ClassificationCandidatePanel({ document }: { document: DocumentRecord }) {
+  const candidates = classificationCandidates(document);
+  if (!candidates.length) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-slate-700">문서 유형 후보</p>
+        <Badge variant="outline" className="bg-white">{candidates.length}개</Badge>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {candidates.map((candidate, index) => (
+          <Badge key={`${candidate.category}-${index}`} variant="outline" className="bg-white text-slate-700">
+            {displayValue(candidate.category || candidate.document_type)}
+            {candidate.score ? <span className="ml-1 text-slate-400">{Math.round(Number(candidate.score) * 100)}%</span> : null}
+          </Badge>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RawExtractedTables({ document }: { document: DocumentRecord }) {
   const tables = officialTableEntries(document)
     .map((table) => ({ table, rows: rawOfficialTableRows(table) }))
@@ -2123,6 +2150,7 @@ export default function DocumentDetailPage() {
                   folders={categories}
                   onChange={(value) => form.setValue("category", value, { shouldDirty: true })}
                 />
+                <ClassificationCandidatePanel document={document} />
                 <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <Tag className="size-3.5" />
                   문서 유형은 검색, 필터, 내보내기 데이터에 함께 반영됩니다.
