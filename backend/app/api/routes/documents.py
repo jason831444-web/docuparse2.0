@@ -586,6 +586,7 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     previous_metadata = dict(document.workflow_metadata or {}) if isinstance(document.workflow_metadata, dict) else {}
     previous_review = previous_metadata.get("review") if isinstance(previous_metadata.get("review"), dict) else None
     values = sanitize_for_postgres(payload.model_dump(exclude_unset=True))
+    reviewed_key_values = values.pop("reviewed_key_values", None)
     if "category" in values:
         values["category"] = normalize_category_value(values.get("category"))
     if "tags" in values:
@@ -609,7 +610,11 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     workflow_metadata = {**previous_metadata, **(workflow.workflow_metadata or {})}
     if isinstance(previous_review, dict):
         workflow_metadata["review"] = previous_review
-    raw_extraction = RawExtractionSnapshotService().build(document, source="manual_update")
+    raw_extraction = RawExtractionSnapshotService().build(
+        document,
+        source="manual_update",
+        reviewed_key_values=reviewed_key_values if isinstance(reviewed_key_values, list) else None,
+    )
     workflow_metadata["raw_extraction"] = raw_extraction
     workflow_metadata["classification_pre_mapping"] = SemanticMappingService().classification_pre_mapping(document, raw_extraction)
     workflow_metadata["raw_semantic_mapping"] = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")

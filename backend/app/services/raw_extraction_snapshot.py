@@ -14,16 +14,21 @@ class RawExtractionSnapshotService:
     and table cells are preserved before they are mapped into business meaning.
     """
 
-    def build(self, document: Document, *, source: str = "review_snapshot") -> dict[str, Any]:
+    def build(self, document: Document, *, source: str = "review_snapshot", reviewed_key_values: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
         key_values: list[dict[str, Any]] = []
         tables = self._reviewed_line_item_tables(document) or self._raw_tables(metadata)
-
-        self._add_current_document_fields(document, key_values)
-        self._add_pos_summary(metadata, key_values)
-        self._add_ai_parsed_key_values(metadata, key_values)
-        self._add_vl_document_key_values(metadata, key_values)
-        self._add_candidate_values(metadata, key_values)
+        existing_key_values = self._existing_key_values(metadata)
+        if reviewed_key_values is not None:
+            key_values = self._reviewed_key_values(existing_key_values, reviewed_key_values)
+        elif existing_key_values and source in {"manual_update", "confirmed_review"}:
+            key_values = existing_key_values
+        else:
+            self._add_current_document_fields(document, key_values)
+            self._add_pos_summary(metadata, key_values)
+            self._add_ai_parsed_key_values(metadata, key_values)
+            self._add_vl_document_key_values(metadata, key_values)
+            self._add_candidate_values(metadata, key_values)
 
         return {
             "version": "raw_extraction_v1",
@@ -66,7 +71,15 @@ class RawExtractionSnapshotService:
                     continue
                 key = item.get("key") or item.get("label") or item.get("field") or item.get("name")
                 value = item.get("value") if item.get("value") is not None else item.get("normalized_value")
-                self._append_key_value(key_values, key, value, "ai_parsed_document", section=str(section_title or "") or None)
+                self._append_key_value(
+                    key_values,
+                    key,
+                    value,
+                    "ai_parsed_document",
+                    section=str(section_title or "") or None,
+                    bbox=self._bbox_from_item(item),
+                    page_index=self._page_index_from_item(item),
+                )
 
     def _add_vl_document_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
         for candidate in self._vl_candidates(metadata):
@@ -100,6 +113,8 @@ class RawExtractionSnapshotService:
                     bucket,
                     role=str(item.get("role") or item.get("field") or "") or None,
                     confidence=item.get("confidence"),
+                    bbox=self._bbox_from_item(item),
+                    page_index=self._page_index_from_item(item),
                 )
 
     def _raw_tables(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -209,6 +224,31 @@ class RawExtractionSnapshotService:
         candidates = metadata.get("vl_candidates")
         return [item for item in candidates if isinstance(item, dict)] if isinstance(candidates, list) else []
 
+    def _existing_key_values(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+        raw = metadata.get("raw_extraction") if isinstance(metadata.get("raw_extraction"), dict) else {}
+        values = raw.get("key_values") if isinstance(raw.get("key_values"), list) else []
+        return [dict(item) for item in values if isinstance(item, dict) and item.get("key") is not None]
+
+    def _reviewed_key_values(self, existing: list[dict[str, Any]], reviewed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not existing:
+            return []
+        reviewed_by_id = {self._key_value_identity(item): item for item in reviewed if isinstance(item, dict)}
+        result: list[dict[str, Any]] = []
+        for item in existing:
+            identity = self._key_value_identity(item)
+            replacement = reviewed_by_id.get(identity)
+            if replacement is None:
+                result.append(dict(item))
+                continue
+            next_item = dict(item)
+            next_item["value"] = self._json_value(replacement.get("value"))
+            next_item["reviewed"] = True
+            result.append(next_item)
+        return result
+
+    def _key_value_identity(self, item: dict[str, Any]) -> str:
+        return "|".join(str(item.get(key) or "") for key in ("key", "source", "role", "section"))
+
     def _append_key_value(
         self,
         key_values: list[dict[str, Any]],
@@ -219,6 +259,8 @@ class RawExtractionSnapshotService:
         role: str | None = None,
         confidence: object = None,
         section: str | None = None,
+        bbox: object = None,
+        page_index: object = None,
     ) -> None:
         if key is None or value in (None, ""):
             return
@@ -229,7 +271,46 @@ class RawExtractionSnapshotService:
             item["section"] = section
         if confidence not in (None, ""):
             item["confidence"] = self._json_value(confidence)
+        normalized_bbox = self._normalize_bbox(bbox)
+        if normalized_bbox:
+            item["normalized_bbox"] = normalized_bbox
+        if page_index not in (None, ""):
+            item["page_index"] = self._json_value(page_index)
         key_values.append(item)
+
+    def _bbox_from_item(self, item: dict[str, Any]) -> object | None:
+        for key in ("normalized_bbox", "bbox", "box", "bounding_box", "bbox_span"):
+            value = item.get(key)
+            if value not in (None, "", []):
+                return value
+        return None
+
+    def _page_index_from_item(self, item: dict[str, Any]) -> object | None:
+        for key in ("page_index", "page", "page_no"):
+            value = item.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+
+    def _normalize_bbox(self, bbox: object) -> list[float] | None:
+        if isinstance(bbox, dict):
+            values = [bbox.get(key) for key in ("x1", "y1", "x2", "y2")]
+        elif isinstance(bbox, (list, tuple)):
+            values = list(bbox[:4])
+        else:
+            return None
+        if len(values) != 4 or any(value is None for value in values):
+            return None
+        try:
+            numbers = [float(value) for value in values]
+        except (TypeError, ValueError):
+            return None
+        max_value = max(abs(value) for value in numbers)
+        if max_value > 1:
+            width = max(numbers[0], numbers[2], 1.0)
+            height = max(numbers[1], numbers[3], 1.0)
+            numbers = [numbers[0] / width, numbers[1] / height, numbers[2] / width, numbers[3] / height]
+        return [max(0.0, min(1.0, value)) for value in numbers]
 
     def _dedupe_key_values(self, key_values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: set[tuple[str, str, str]] = set()

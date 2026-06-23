@@ -659,6 +659,7 @@ export type DocumentUpdate = Pick<
   confidence_score?: string | null;
   processing_status?: ProcessingStatus;
   is_favorite?: boolean;
+  reviewed_key_values?: Array<Record<string, unknown>> | null;
 };
 
 export interface ActivitySummary {

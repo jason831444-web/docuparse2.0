@@ -33,6 +33,7 @@ class DocumentUpdate(DocumentBase):
     confidence_score: Decimal | None = Field(default=None, ge=0, le=1)
     processing_status: ProcessingStatus | None = None
     is_favorite: bool | None = None
+    reviewed_key_values: list[dict] | None = None
 
 
 class CalendarItemUpdate(BaseModel):

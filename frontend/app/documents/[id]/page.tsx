@@ -66,6 +66,7 @@ function toForm(document: DocumentRecord): DocumentReviewForm {
     issue_date: issueDate ?? "",
     due_date: roleDate ?? "",
     line_items: cleanLineItems(document.line_items ?? []),
+    reviewed_key_values: rawKeyValueEntries(document),
     low_confidence_fields: document.low_confidence_fields ?? [],
     category: document.category ?? "",
     tags: document.tags,
@@ -94,6 +95,7 @@ function buildDocumentUpdatePayload(values: DocumentReviewForm, documentType?: s
     issue_date: isTransactionStatement ? values.due_date || values.issue_date || null : values.issue_date || null,
     due_date: isTransactionStatement ? null : values.due_date || null,
     line_items: cleanLineItems(values.line_items || []),
+    reviewed_key_values: Array.isArray(values.reviewed_key_values) ? values.reviewed_key_values : null,
     low_confidence_fields: values.low_confidence_fields || [],
     category: values.category || null,
     summary: values.summary || null,
@@ -433,49 +435,136 @@ function rawEditorColumns(document: DocumentRecord, items: ManufacturingLineItem
 function rawKeyValueEntries(document: DocumentRecord): Array<Record<string, unknown>> {
   const metadata = readRecord(document.workflow_metadata);
   const rawExtraction = readRecord(metadata.raw_extraction);
-  const entries = Array.isArray(rawExtraction.key_values)
+  return Array.isArray(rawExtraction.key_values)
     ? rawExtraction.key_values.map((item) => readRecord(item)).filter((item) => item.key && item.value !== undefined)
     : [];
-  if (entries.length) return entries;
-  return [
-    { key: "문서유형", value: document.document_type, source: "document_field" },
-    { key: "문서번호", value: document.document_number, source: "document_field" },
-    { key: "공급업체", value: document.vendor_name || document.merchant_name, source: "document_field" },
-    { key: "고객사", value: document.customer_name, source: "document_field" },
-    { key: "발행일", value: document.issue_date || document.extracted_date, source: "document_field" },
-    { key: "납기일", value: document.due_date, source: "document_field" },
-    { key: "공급가액", value: document.subtotal, source: "document_field" },
-    { key: "세액", value: document.tax, source: "document_field" },
-    { key: "합계금액", value: document.extracted_amount, source: "document_field" },
-  ].filter((item) => item.value !== null && item.value !== undefined && item.value !== "");
 }
 
-function RawExtractedKeyValues({ document }: { document: DocumentRecord }) {
-  const entries = rawKeyValueEntries(document);
+function keyValueIdentity(entry: Record<string, unknown>, index: number): string {
+  return [entry.key, entry.source, entry.role, entry.section, index].map((value) => String(value ?? "")).join("|");
+}
+
+function keyValueBBox(entry: Record<string, unknown>): [number, number, number, number] | null {
+  const value = Array.isArray(entry.normalized_bbox) ? entry.normalized_bbox : Array.isArray(entry.bbox) ? entry.bbox : null;
+  if (!value || value.length < 4) return null;
+  const numbers = value.slice(0, 4).map(Number);
+  if (numbers.some((number) => !Number.isFinite(number))) return null;
+  return numbers.map((number) => Math.max(0, Math.min(1, number))) as [number, number, number, number];
+}
+
+function fallbackKeyValueRows(entries: Array<Record<string, unknown>>): Array<Array<Record<string, unknown>>> {
+  const rowHints: Array<RegExp[]> = [
+    [/문서\s*번호|document.*no|doc.*no/i, /샘플\s*번호|sample/i],
+    [/요청\s*부서|request.*department/i, /입고\s*창고|to.*location|receiv/i],
+    [/출고\s*창고|from.*location|ship/i, /요청\s*일|request.*date/i],
+    [/공급|seller|vendor/i, /공급받|고객|buyer|customer/i],
+    [/발행일|작성일|issue/i, /납기일|due/i],
+    [/공급가액|subtotal/i, /세액|tax|vat/i, /합계|total|amount/i],
+  ];
+  const remaining = entries.map((entry, index) => ({ entry, index }));
+  const rows: Array<Array<Record<string, unknown>>> = [];
+  for (const hints of rowHints) {
+    const row: Array<Record<string, unknown>> = [];
+    for (const pattern of hints) {
+      const matchIndex = remaining.findIndex(({ entry }) => pattern.test(String(entry.key ?? "")));
+      if (matchIndex >= 0) {
+        row.push(remaining[matchIndex].entry);
+        remaining.splice(matchIndex, 1);
+      }
+    }
+    if (row.length) rows.push(row);
+  }
+  for (let index = 0; index < remaining.length; index += 2) {
+    rows.push(remaining.slice(index, index + 2).map((item) => item.entry));
+  }
+  return rows;
+}
+
+function bboxKeyValueRows(entries: Array<Record<string, unknown>>): Array<Array<{ entry: Record<string, unknown>; bbox: [number, number, number, number] }>> {
+  const positioned = entries
+    .map((entry) => ({ entry, bbox: keyValueBBox(entry) }))
+    .filter((item): item is { entry: Record<string, unknown>; bbox: [number, number, number, number] } => Boolean(item.bbox))
+    .sort((a, b) => ((a.entry.page_index as number | undefined) ?? 0) - ((b.entry.page_index as number | undefined) ?? 0) || a.bbox[1] - b.bbox[1] || a.bbox[0] - b.bbox[0]);
+  const rows: Array<Array<{ entry: Record<string, unknown>; bbox: [number, number, number, number] }>> = [];
+  for (const item of positioned) {
+    const centerY = (item.bbox[1] + item.bbox[3]) / 2;
+    const row = rows.find((candidate) => {
+      const candidateCenter = (candidate[0].bbox[1] + candidate[0].bbox[3]) / 2;
+      return Math.abs(candidateCenter - centerY) < 0.035;
+    });
+    if (row) row.push(item);
+    else rows.push([item]);
+  }
+  return rows.map((row) => row.sort((a, b) => a.bbox[0] - b.bbox[0]));
+}
+
+function RawKeyValueLayoutEditor({
+  entries,
+  saving,
+  onChange,
+}: {
+  entries: Array<Record<string, unknown>>;
+  saving: boolean;
+  onChange: (index: number, value: string) => void;
+}) {
   if (!entries.length) return null;
+  const positionedRows = bboxKeyValueRows(entries);
+  const positionedEntries = new Set(positionedRows.flat().map(({ entry }) => entry));
+  const fallbackEntries = entries.filter((entry) => !positionedEntries.has(entry));
+  const fallbackRows = fallbackKeyValueRows(fallbackEntries);
+  const entryIndex = new Map(entries.map((entry, index) => [entry, index]));
   return (
     <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-blue-950">추출 원형 정보</p>
-          <p className="mt-1 text-xs text-blue-800">확정 전에는 AI가 읽은 key-value를 그대로 보고 검토합니다.</p>
+          <p className="mt-1 text-xs text-blue-800">원본 문서의 줄/좌우 배치를 최대한 유지해서 검토합니다.</p>
         </div>
         <Badge variant="outline" className="bg-white text-blue-900">
           {entries.length}개
         </Badge>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {entries.slice(0, 36).map((entry, index) => (
-          <div key={`${entry.key}-${index}`} className="rounded-md border bg-white px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="truncate text-xs font-medium text-slate-500">{displayValue(entry.key)}</p>
-              {entry.source ? <span className="shrink-0 text-[10px] text-slate-400">{displayValue(entry.source)}</span> : null}
+      {positionedRows.length ? (
+        <div className="grid gap-2 rounded-md border bg-white p-3">
+          {positionedRows.map((row, rowIndex) => (
+            <div key={rowIndex} className="relative min-h-12">
+              {row.map(({ entry, bbox }) => {
+                const index = entryIndex.get(entry) ?? 0;
+                return (
+                  <label
+                    key={keyValueIdentity(entry, index)}
+                    className="absolute grid min-w-32 gap-1 text-xs font-medium text-slate-600"
+                    style={{
+                      left: `${Math.min(78, Math.max(0, bbox[0] * 100))}%`,
+                      width: `${Math.max(20, Math.min(42, (bbox[2] - bbox[0]) * 100 + 18))}%`,
+                    }}
+                  >
+                    {displayValue(entry.key)}
+                    <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
+                  </label>
+                );
+              })}
             </div>
-            <p className="mt-1 break-words text-sm font-semibold text-slate-900">{displayValue(entry.value)}</p>
-          </div>
-        ))}
-      </div>
-      {entries.length > 36 ? <p className="text-xs text-blue-800">나머지 {entries.length - 36}개 값은 AI 추출 근거 탭에서 확인할 수 있습니다.</p> : null}
+          ))}
+        </div>
+      ) : null}
+      {fallbackRows.length ? (
+        <div className="grid gap-2 rounded-md border bg-white p-3">
+          {fallbackRows.map((row, rowIndex) => (
+            <div key={rowIndex} className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {row.map((entry) => {
+                const index = entryIndex.get(entry) ?? 0;
+                return (
+                  <label key={keyValueIdentity(entry, index)} className="grid gap-1 text-xs font-medium text-slate-600">
+                    {displayValue(entry.key)}
+                    <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
+                  </label>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1647,6 +1736,15 @@ export default function DocumentDetailPage() {
     form.setValue("line_items", items, { shouldDirty: true });
   }
 
+  function updateReviewedKeyValue(index: number, value: string) {
+    const entries = [...((form.getValues("reviewed_key_values") as Array<Record<string, unknown>> | undefined) || [])];
+    const current = { ...(entries[index] || {}) };
+    current.value = value;
+    current.reviewed = true;
+    entries[index] = current;
+    form.setValue("reviewed_key_values", entries, { shouldDirty: true });
+  }
+
   function addLineItem() {
     const columns = document ? rawEditorColumns(document, form.getValues("line_items") || []) : [];
     const items = [...(form.getValues("line_items") || [])];
@@ -1668,6 +1766,7 @@ export default function DocumentDetailPage() {
   }
 
   const watchedLineItems = form.watch("line_items") ?? [];
+  const reviewedKeyValues = (form.watch("reviewed_key_values") as Array<Record<string, unknown>> | undefined) ?? [];
 
   const categoryInterpretation = useMemo(
     () => (document?.workflow_metadata?.category_interpretation ?? document?.ingestion_metadata?.category_interpretation ?? null) as Record<string, unknown> | null,
@@ -2100,7 +2199,7 @@ export default function DocumentDetailPage() {
                     <p className="mt-1 text-xs text-muted-foreground">추출된 표를 그대로 확인하고 필요한 셀만 수정하세요.</p>
                   </div>
                 </div>
-                <RawExtractedKeyValues document={document} />
+                <RawKeyValueLayoutEditor entries={reviewedKeyValues} saving={saving} onChange={updateReviewedKeyValue} />
                 <EditableRawExtractedTable
                   document={document}
                   items={lineItems}
