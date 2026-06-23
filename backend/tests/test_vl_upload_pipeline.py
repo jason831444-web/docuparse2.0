@@ -506,6 +506,24 @@ def test_return_credit_reference_number_is_not_document_number_candidate():
     assert workflow_metadata["document_number_candidates"][0]["normalized_value"] == "TS-2026-0034"
 
 
+def test_filename_doc_number_guard_corrects_conflicting_doc_header_with_sample_number():
+    document = _document(
+        original_filename="DOC-028_return_credit_uncropped_photo.pdf",
+        document_type=DocumentType.general_document,
+        document_number="DOC-078",
+    )
+    processor = DocumentProcessor()
+
+    issues = processor._apply_final_business_safety_overrides(
+        document,
+        "문서번호:DOC-078\n반품/크레딧 메모\n샘플번호:028",
+    )
+
+    assert document.document_number == "DOC-028"
+    assert document.field_sources["document_number"] == "filename_doc_number_consistency_guard"
+    assert "document_number_filename_mismatch_corrected" in {issue["code"] for issue in issues}
+
+
 def test_receipt_approval_number_is_kept_separate_from_document_number():
     processor = _processor(FakeVLWorker())
     document = _document(document_type=DocumentType.receipt, document_number=None)
@@ -1842,6 +1860,150 @@ def test_ai_parsed_document_table_rows_promote_safe_no_price_line_item_candidate
     assert workflow_metadata["ai_parsed_document_mapping"]["table_line_items_added"] == 1
 
 
+def test_ai_parsed_document_table_row_does_not_duplicate_existing_code_row():
+    processor = DocumentProcessor()
+    document = _document(
+        document_type=DocumentType.transaction_statement,
+        line_items=[
+            {
+                "item_name": "스테인리스 브라켓",
+                "document_item_code": "BRK-SUS",
+                "quantity": 5,
+                "unit": "EA",
+                "unit_price": 4300,
+                "line_total": 21500,
+            }
+        ],
+    )
+    workflow_metadata = {}
+    ai_doc = {
+        "policy": {"amount_allowed": True},
+        "sections": [
+            {
+                "type": "table",
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "canonical_cells": {
+                            "item_name": "스테인리스 브라젯",
+                            "specification": "BRK-SUS",
+                            "quantity": "5",
+                            "unit": "EA",
+                            "unit_price": "4,300",
+                            "line_total": "21,500",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "거래명세서 스테인리스 브라켓 BRK-SUS 5 EA 4,300 21,500",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert len(document.line_items or []) == 1
+    mapping = workflow_metadata["ai_parsed_document_mapping"]
+    assert mapping["table_line_items_added"] == 0
+    assert mapping["table_line_items_skipped_reasons"] == ["duplicate_existing_line_item"]
+
+
+def test_final_business_safety_removes_confirmed_duplicate_code_line_item():
+    processor = DocumentProcessor()
+    document = _document(
+        document_type=DocumentType.transaction_statement,
+        line_items=[
+            {
+                "item_name": "스테인리스 브라켓",
+                "document_item_code": "BRK-SUS",
+                "quantity": 5,
+                "unit": "EA",
+                "unit_price": 4300,
+                "line_total": 21500,
+            },
+            {
+                "item_name": "스테인리스 브라젯",
+                "specification": "BRK-SUS",
+                "quantity": "5",
+                "unit": "EA",
+                "unit_price": "4,300",
+                "line_total": "21,500",
+            },
+        ],
+    )
+
+    issues = processor._apply_final_business_safety_overrides(
+        document,
+        "거래명세서 스테인리스 브라켓 BRK-SUS 5 EA 4,300 21,500",
+    )
+
+    assert len(document.line_items or []) == 1
+    assert document.line_items[0]["document_item_code"] == "BRK-SUS"
+    assert "duplicate_line_item_removed" in {issue["code"] for issue in issues}
+
+
+def test_ai_parsed_document_table_repairs_invalid_vl_amount_shifted_row():
+    processor = DocumentProcessor()
+    document = _document(
+        document_type=DocumentType.invoice,
+        category="tax_invoice",
+        tags=["tax_invoice"],
+        line_items=[
+            {
+                "item_name": "06.08 S45C PIN",
+                "document_item_code": "PIN-8X60",
+                "quantity": 7,
+                "unit_price": 50,
+                "tax_amount": 1750,
+                "line_total": 350,
+                "validation_warnings": ["invalid_tax_greater_than_total"],
+            }
+        ],
+    )
+    workflow_metadata = {}
+    ai_doc = {
+        "policy": {"amount_allowed": True},
+        "sections": [
+            {
+                "type": "table",
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "canonical_cells": {
+                            "item_name": "S45C PIN 8X60",
+                            "specification": "PIN-8X60",
+                            "quantity": "50",
+                            "unit_price": "350",
+                            "supply_amount": "17,500",
+                            "tax_amount": "1,750",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    processor._apply_ai_parsed_document_candidates(
+        document,
+        ai_doc,
+        workflow_metadata,
+        "세금계산서 06.08 S45C PIN 8X60 수량 50 단가 350 공급가액 17,500 세액 1,750",
+        "paddleocr_vl_1_6_gguf_primary_reader",
+    )
+
+    assert len(document.line_items or []) == 1
+    repaired = document.line_items[0]
+    assert repaired["item_name"] == "S45C PIN 8X60"
+    assert repaired["quantity"] == "50"
+    assert repaired["unit_price"] == "350"
+    assert "ai_parsed_document_table_repaired_invalid_vl_row" in repaired["review_flags"]
+    assert workflow_metadata["ai_parsed_document_mapping"]["table_line_items_repaired"] == 1
+
+
 def test_ai_parsed_document_pos_settlement_table_is_not_promoted_to_line_items():
     processor = DocumentProcessor()
     document = _document(document_type=DocumentType.general_document, line_items=[])
@@ -1943,6 +2105,34 @@ def test_ai_parsed_document_receipt_fragments_are_review_only_candidates():
     assert candidate["item_name"] == "PCB Connector 12P"
     assert candidate["quantity"] == "5"
     assert candidate["line_total"] == "3100"
+
+
+def test_tax_invoice_approval_number_date_does_not_override_visible_row_date():
+    processor = DocumentProcessor()
+    document = _document(
+        document_type=DocumentType.invoice,
+        category="tax_invoice",
+        tags=["tax_invoice"],
+        issue_date=date(2026, 6, 16),
+        extracted_date=date(2026, 6, 16),
+    )
+
+    issues = processor._apply_final_business_safety_overrides(
+        document,
+        "\n".join(
+            [
+                "세금계산서",
+                "전자세금계산서 승인번호: 20260616-TEST",
+                "06.11 M3 육각너트 NUT-M3 12 18 216 22",
+                "06.11 HDPE 포장필름 FILM-HDPE 12 56,000 672,000 67,200",
+            ]
+        ),
+    )
+
+    assert document.issue_date == date(2026, 6, 11)
+    assert document.extracted_date == date(2026, 6, 11)
+    assert document.field_sources["issue_date"] == "tax_invoice_visible_row_date_guard"
+    assert "tax_invoice_approval_date_not_issue_date" in {issue["code"] for issue in issues}
 
 
 def test_receipt_with_pos_item_name_is_not_pos_daily_settlement():

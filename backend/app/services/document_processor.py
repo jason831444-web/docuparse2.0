@@ -1670,12 +1670,18 @@ class DocumentProcessor:
         if added_items:
             existing = [dict(item) for item in (document.line_items or []) if isinstance(item, dict)]
             merged = list(existing)
+            repaired_count = 0
             for item in added_items:
+                repair_index = self._invalid_line_item_repair_match_index(item, merged)
+                if repair_index is not None:
+                    merged[repair_index] = self._merge_ai_table_repair_line_item(merged[repair_index], item)
+                    repaired_count += 1
+                    continue
                 if self._duplicates_confirmed_line_item(item, merged):
                     applied["table_line_items_skipped_reasons"].append("duplicate_existing_line_item")
                     continue
                 merged.append(item)
-            if len(merged) > len(existing):
+            if len(merged) > len(existing) or repaired_count:
                 document.line_items = sanitize_for_postgres(
                     self._line_items_for_extraction_method(
                         merged,
@@ -1684,6 +1690,8 @@ class DocumentProcessor:
                     )
                 )
                 applied["table_line_items_added"] = len(merged) - len(existing)
+                if repaired_count:
+                    applied["table_line_items_repaired"] = repaired_count
                 document.review_required = True
                 issues.append(self._business_safety_issue(
                     "ai_parsed_document_table_candidate_promoted_for_review",
@@ -1709,6 +1717,7 @@ class DocumentProcessor:
             or applied["inspection_row_candidates"]
             or applied.get("line_item_gap_analysis")
             or applied["table_line_items_added"]
+            or applied.get("table_line_items_repaired")
             or applied["table_line_items_skipped_reasons"]
         ):
             workflow_metadata["ai_parsed_document_mapping"] = applied
@@ -2888,6 +2897,22 @@ class DocumentProcessor:
         self._promote_receipt_top_line_merchant_candidate(document, raw_text)
         self._promote_party_block_candidates(document, raw_text)
 
+        if self._ensure_filename_doc_number_consistency(document, raw_text):
+            issues.append(self._business_safety_issue(
+                "document_number_filename_mismatch_corrected",
+                "파일명/샘플번호와 충돌하는 DOC 문서번호를 원본 식별자 기준으로 보정했습니다.",
+                "document_number",
+            ))
+            document.review_required = True
+
+        if self._ensure_tax_invoice_visible_row_date(document, raw_text):
+            issues.append(self._business_safety_issue(
+                "tax_invoice_approval_date_not_issue_date",
+                "전자세금계산서 승인번호 날짜가 작성일로 들어간 것으로 보여 표의 거래일 기준으로 보정했습니다.",
+                "issue_date",
+            ))
+            document.review_required = True
+
         if self._return_credit_signal_for_document(document, raw_text):
             previous_type = document.document_type
             if previous_type == DocumentType.purchase_order:
@@ -2964,6 +2989,22 @@ class DocumentProcessor:
             ))
             document.review_required = True
 
+        deduped_items: list[dict] = []
+        removed_duplicate_rows = 0
+        for item in filtered_items:
+            if self._duplicates_confirmed_line_item(item, deduped_items):
+                removed_duplicate_rows += 1
+                continue
+            deduped_items.append(item)
+        if removed_duplicate_rows:
+            filtered_items = deduped_items
+            issues.append(self._business_safety_issue(
+                "duplicate_line_item_removed",
+                "동일 코드/수량/금액으로 확인되는 중복 품목 행을 확정값에서 제외했습니다.",
+                "line_items",
+            ))
+            document.review_required = True
+
         if self._has_inspection_no_price_document_signal(document, raw_text, filtered_items):
             internal_transfer = self._is_internal_transfer_document(document)
             if (
@@ -3011,6 +3052,89 @@ class DocumentProcessor:
         if filtered_items != line_items:
             document.line_items = sanitize_for_postgres(filtered_items)
         return issues
+
+    def _ensure_filename_doc_number_consistency(self, document: Document, raw_text: str) -> bool:
+        filename_number = self._doc_number_from_filename(document.original_filename)
+        if not filename_number:
+            return False
+        current = self.parser._normalize_document_number(document.document_number)
+        if not current or not re.fullmatch(r"DOC-\d{3,}", current, flags=re.IGNORECASE):
+            return False
+        if current == filename_number:
+            return False
+        filename_digits = filename_number.split("-", 1)[1]
+        sample_numbers = self._sample_numbers_from_text(raw_text)
+        filename_stem = Path(str(document.original_filename or "")).stem
+        filename_has_doc_prefix = bool(re.match(r"DOC[-_ ]?\d{3,}", filename_stem, flags=re.IGNORECASE))
+        if sample_numbers and filename_digits not in sample_numbers:
+            return False
+        if not sample_numbers and not filename_has_doc_prefix:
+            return False
+        document.document_number = sanitize_for_postgres(filename_number)
+        self._record_party_mapping_source(document, "document_number", "filename_doc_number_consistency_guard")
+        return True
+
+    def _doc_number_from_filename(self, filename: str | None) -> str | None:
+        match = re.search(r"(?<![0-9A-Za-z])DOC[-_ ]?(\d{3,})(?![0-9A-Za-z])", str(filename or ""), flags=re.IGNORECASE)
+        if not match:
+            return None
+        return f"DOC-{match.group(1)}"
+
+    def _sample_numbers_from_text(self, raw_text: str) -> set[str]:
+        numbers: set[str] = set()
+        for match in re.finditer(r"(?:샘플|생플|sample)\s*(?:번호|no\.?)?\s*[:：]?\s*(\d{1,})", raw_text or "", flags=re.IGNORECASE):
+            numbers.add(match.group(1).zfill(3))
+        return numbers
+
+    def _ensure_tax_invoice_visible_row_date(self, document: Document, raw_text: str) -> bool:
+        if not self._tax_invoice_context_signal(document, raw_text):
+            return False
+        current_date = document.issue_date or document.extracted_date
+        if not current_date:
+            return False
+        approval_date = self._electronic_tax_approval_date(raw_text)
+        if not approval_date or current_date != approval_date:
+            return False
+        row_date = self._unique_tax_invoice_row_date(raw_text, approval_date.year)
+        if not row_date or row_date == current_date:
+            return False
+        document.issue_date = row_date
+        document.extracted_date = row_date
+        self._record_party_mapping_source(document, "issue_date", "tax_invoice_visible_row_date_guard")
+        return True
+
+    def _tax_invoice_context_signal(self, document: Document, raw_text: str) -> bool:
+        text = "\n".join([
+            str(raw_text or "")[:2000],
+            str(document.category or ""),
+            " ".join(str(tag or "") for tag in (document.tags or [])),
+            str(self._document_type_value(document.document_type) or ""),
+            str(self._document_type_value(document.ai_document_type) or ""),
+        ])
+        return bool(re.search(r"(세금\s*계산서|tax\s*invoice|tax_invoice)", text, flags=re.IGNORECASE))
+
+    def _electronic_tax_approval_date(self, raw_text: str) -> date | None:
+        match = re.search(r"(?:승인번호|승인\s*번호|approval)[^\n]{0,40}?(20\d{2})(\d{2})(\d{2})", raw_text or "", flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            return None
+
+    def _unique_tax_invoice_row_date(self, raw_text: str, year: int) -> date | None:
+        candidates: set[date] = set()
+        for line in str(raw_text or "").splitlines():
+            match = re.match(r"\s*(\d{1,2})[./-](\d{1,2})(?:\s|$)", line)
+            if not match:
+                continue
+            try:
+                candidates.add(date(year, int(match.group(1)), int(match.group(2))))
+            except ValueError:
+                continue
+        if len(candidates) == 1:
+            return next(iter(candidates))
+        return None
 
     def _ensure_return_credit_primary_document_number(self, document: Document, raw_text: str) -> bool:
         current = self.parser._normalize_document_number(document.document_number)
@@ -3592,19 +3716,190 @@ class DocumentProcessor:
 
     def _duplicates_confirmed_line_item(self, candidate: dict, line_items: list[dict]) -> bool:
         candidate_name = self._normalized_layout_identity(candidate.get("item_name"))
-        if not candidate_name:
+        candidate_codes = self._line_item_code_identities(candidate)
+        candidate_quantity = self._vl_decimal(candidate.get("quantity"))
+        candidate_unit_price = self._vl_decimal(candidate.get("unit_price"))
+        candidate_line_total = self._vl_decimal(candidate.get("line_total"))
+        candidate_unit = self._normalized_layout_identity(candidate.get("unit"))
+        if not candidate_name and not candidate_codes:
             return False
         for item in line_items:
             if not isinstance(item, dict):
                 continue
             confirmed_name = self._normalized_layout_identity(item.get("item_name") or item.get("name"))
-            if not confirmed_name or len(confirmed_name) < 4:
+            confirmed_codes = self._line_item_code_identities(item)
+            code_compatible = bool(candidate_codes and confirmed_codes and candidate_codes & confirmed_codes)
+            name_compatible = self._layout_names_compatible(candidate_name, confirmed_name)
+            fuzzy_name_compatible = self._layout_names_fuzzy_compatible(candidate_name, confirmed_name)
+            if not (code_compatible or name_compatible or fuzzy_name_compatible):
                 continue
-            if confirmed_name in candidate_name or candidate_name in confirmed_name:
+            if not self._line_item_measurements_compatible(
+                candidate_quantity,
+                self._vl_decimal(item.get("quantity")),
+                required=not code_compatible,
+            ):
+                continue
+            if not self._line_item_measurements_compatible(
+                candidate_unit_price,
+                self._vl_decimal(item.get("unit_price")),
+                required=False,
+            ):
+                continue
+            if not self._line_item_measurements_compatible(
+                candidate_line_total,
+                self._vl_decimal(item.get("line_total")),
+                required=False,
+            ):
+                continue
+            confirmed_unit = self._normalized_layout_identity(item.get("unit"))
+            if candidate_unit and confirmed_unit and candidate_unit != confirmed_unit:
+                continue
+            if code_compatible:
                 return True
-            if self._layout_identity_common_prefix(candidate_name, confirmed_name) >= 8:
+            if name_compatible:
+                return True
+            if fuzzy_name_compatible and (candidate_unit_price is not None or candidate_line_total is not None):
                 return True
         return False
+
+    def _layout_names_compatible(self, left: str, right: str) -> bool:
+        if not left or not right or len(left) < 4 or len(right) < 4:
+            return False
+        if left in right or right in left:
+            return True
+        return self._layout_identity_common_prefix(left, right) >= 8
+
+    def _layout_names_fuzzy_compatible(self, left: str, right: str) -> bool:
+        if not left or not right or len(left) < 5 or len(right) < 5:
+            return False
+        if abs(len(left) - len(right)) > 2:
+            return False
+        return self._bounded_edit_distance(left, right, limit=2) <= 2
+
+    def _bounded_edit_distance(self, left: str, right: str, *, limit: int) -> int:
+        if abs(len(left) - len(right)) > limit:
+            return limit + 1
+        previous = list(range(len(right) + 1))
+        for left_index, left_char in enumerate(left, start=1):
+            current = [left_index]
+            row_min = current[0]
+            for right_index, right_char in enumerate(right, start=1):
+                cost = 0 if left_char == right_char else 1
+                current.append(min(
+                    previous[right_index] + 1,
+                    current[right_index - 1] + 1,
+                    previous[right_index - 1] + cost,
+                ))
+                row_min = min(row_min, current[-1])
+            if row_min > limit:
+                return limit + 1
+            previous = current
+        return previous[-1]
+
+    def _line_item_code_identities(self, item: dict[str, Any]) -> set[str]:
+        identities: set[str] = set()
+        for field in (
+            "document_item_code",
+            "item_code",
+            "source_item_code",
+            "internal_item_code",
+            "lot_code",
+            "specification",
+            "spec",
+            "hs_code",
+        ):
+            value = item.get(field)
+            normalized = self._normalized_line_item_code_identity(value)
+            if normalized:
+                identities.add(normalized)
+        return identities
+
+    def _normalized_line_item_code_identity(self, value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if not re.search(r"[A-Za-z0-9]", text):
+            return ""
+        normalized = re.sub(r"[^0-9A-Za-z가-힣]+", "", text).casefold()
+        if len(normalized) < 2:
+            return ""
+        return normalized
+
+    def _line_item_measurements_compatible(
+        self,
+        left: Decimal | None,
+        right: Decimal | None,
+        *,
+        required: bool,
+    ) -> bool:
+        if left is None or right is None:
+            return not required
+        return left == right
+
+    def _invalid_line_item_repair_match_index(self, candidate: dict, line_items: list[dict]) -> int | None:
+        candidate_codes = self._line_item_code_identities(candidate)
+        candidate_name = self._normalized_layout_identity(candidate.get("item_name"))
+        candidate_quantity = self._vl_decimal(candidate.get("quantity"))
+        candidate_unit_price = self._vl_decimal(candidate.get("unit_price"))
+        for index, item in enumerate(line_items):
+            if not isinstance(item, dict) or not self._line_item_has_invalid_amount_warnings(item):
+                continue
+            item_codes = self._line_item_code_identities(item)
+            item_name = self._normalized_layout_identity(item.get("item_name") or item.get("name"))
+            code_compatible = bool(candidate_codes and item_codes and candidate_codes & item_codes)
+            name_compatible = self._layout_names_compatible(candidate_name, item_name)
+            if not (code_compatible or name_compatible):
+                continue
+            if candidate_quantity is None and candidate_unit_price is None:
+                continue
+            return index
+        return None
+
+    def _line_item_has_invalid_amount_warnings(self, item: dict[str, Any]) -> bool:
+        codes: set[str] = set()
+        for field in ("validation_warnings", "review_flags", "issue_codes"):
+            codes.update(str(value) for value in item.get(field) or [] if value not in (None, ""))
+        invalid_fragments = (
+            "invalid_line_total",
+            "invalid_tax_greater_than_total",
+            "invalid_tax_greater_than_supply",
+            "invalid_supply_greater_than_total",
+            "explicit_quantity_price_amount_mismatch",
+        )
+        return any(any(fragment in code for fragment in invalid_fragments) for code in codes)
+
+    def _merge_ai_table_repair_line_item(self, existing: dict, candidate: dict) -> dict:
+        repaired = dict(existing)
+        for field in (
+            "item_name",
+            "document_item_code",
+            "item_code",
+            "source_item_code",
+            "internal_item_code",
+            "lot_code",
+            "specification",
+            "quantity",
+            "unit",
+            "unit_price",
+            "supply_amount",
+            "tax_amount",
+            "line_total",
+            "note",
+        ):
+            if candidate.get(field) not in (None, "", []):
+                repaired[field] = candidate.get(field)
+        for field in ("validation_warnings", "review_flags", "issue_codes"):
+            merged_values = {
+                str(value)
+                for value in [*(existing.get(field) or []), *(candidate.get(field) or [])]
+                if value not in (None, "")
+            }
+            if field in {"validation_warnings", "review_flags"}:
+                merged_values.add("ai_parsed_document_table_repaired_invalid_vl_row")
+            if merged_values:
+                repaired[field] = sorted(merged_values)
+        repaired["source"] = "ai_parsed_document.table_repaired_vl_row"
+        return repaired
 
     def _normalized_layout_identity(self, value: object) -> str:
         text = str(value or "").casefold()
