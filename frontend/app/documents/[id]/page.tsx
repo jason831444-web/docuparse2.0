@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
-import { cleanLineItemValue, cleanLineItems, lineItemAddableFields, lineItemDisplayFields, lineItemFieldLabel, normalizeCustomLineItemField, numericLineItemFields } from "@/lib/line-items";
+import { cleanLineItemValue, cleanLineItems, lineItemFieldLabel, numericLineItemFields } from "@/lib/line-items";
 import { isLiveProcessingStatus, useDocumentsChanged } from "@/lib/realtime";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow, DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem, PosSettlementSummary, ReviewCandidate } from "@/types/document";
@@ -45,27 +45,6 @@ const detailTabs = ["extracted", "ai"] as const;
 type DetailTab = (typeof detailTabs)[number];
 type DocumentListItem = DocumentListResponse["items"][number];
 type DocumentReviewForm = DocumentUpdate & { tags_text: string };
-
-function itemMasterStatusLabel(status: string | null | undefined) {
-  return {
-    auto_matched: "자동 매칭됨",
-    direct_code_match: "직접 코드 매칭",
-    alias_matched: "별칭 매칭됨",
-    user_selected: "사용자 선택",
-    manual_confirmed: "사용자 확정",
-    ambiguous: "후보 확인 필요",
-    needs_review: "검토 필요",
-    unmatched: "미매칭",
-    skipped_no_item_master: "품목마스터 없음",
-  }[status || ""] ?? "확인 전";
-}
-
-function itemMasterStatusClass(status: string | null | undefined) {
-  if (status === "auto_matched" || status === "direct_code_match" || status === "alias_matched" || status === "user_selected" || status === "manual_confirmed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  if (status === "needs_review" || status === "ambiguous") return "border-amber-300 bg-amber-50 text-amber-800";
-  if (status === "unmatched" || status === "skipped_no_item_master") return "border-slate-300 bg-slate-50 text-slate-700";
-  return "border-slate-200 bg-white text-slate-600";
-}
 
 function toForm(document: DocumentRecord): DocumentReviewForm {
   const businessFields = (document.workflow_metadata?.business_fields ?? {}) as Record<string, unknown>;
@@ -383,6 +362,74 @@ function rawOfficialTableCell(row: Record<string, unknown>, column: string): str
   return normalizedKey ? displayValue(row[normalizedKey]) : "-";
 }
 
+function rawTableFieldForColumn(column: string): string {
+  const normalizedKey = {
+    No: "line_number",
+    번호: "line_number",
+    품목명: "item_name",
+    품명: "item_name",
+    Description: "item_name",
+    "규격/코드": "document_item_code",
+    품목코드: "document_item_code",
+    내부코드: "document_item_code",
+    "HS/Code": "document_item_code",
+    규격: "specification",
+    "Lot No": "lot_code",
+    "Lot/Code": "lot_code",
+    수량: "quantity",
+    Qty: "quantity",
+    단위: "unit",
+    Unit: "unit",
+    단가: "unit_price",
+    "Unit Price": "unit_price",
+    공급가액: "supply_amount",
+    세액: "tax_amount",
+    금액: "line_total",
+    합계금액: "line_total",
+    Amount: "line_total",
+    판정: "inspection_result",
+    검사판정: "inspection_result",
+    검사항목: "inspection_item",
+    비고: "note",
+    이동사유: "note",
+  }[column];
+  return normalizedKey ?? (column.trim().replace(/\s+/g, "_").replace(/[^A-Za-z0-9가-힣_]/g, "") || column);
+}
+
+function rawLineItemsFromOfficialTables(document: DocumentRecord): ManufacturingLineItem[] {
+  const table = officialTableEntries(document)[0];
+  if (!table) return [];
+  const rows = rawOfficialTableRows(table);
+  const columns = rawOfficialTableColumns(table, rows);
+  return rows.map((row) => {
+    const item: ManufacturingLineItem = {};
+    for (const column of columns) {
+      const field = rawTableFieldForColumn(column);
+      const value = rawOfficialTableCell(row, column);
+      const cleaned = cleanLineItemValue(field, value === "-" ? "" : value);
+      if (cleaned !== "") (item as Record<string, unknown>)[field] = cleaned;
+    }
+    return item;
+  }).filter((item) => Object.keys(item).length);
+}
+
+function rawEditorColumns(document: DocumentRecord, items: ManufacturingLineItem[]): string[] {
+  const table = officialTableEntries(document)[0];
+  if (table) {
+    const rows = rawOfficialTableRows(table);
+    const columns = rawOfficialTableColumns(table, rows);
+    if (columns.length) return columns;
+  }
+  const fields = new Set<string>();
+  for (const item of items) {
+    for (const field of Object.keys(item || {})) {
+      if (!field.startsWith("_") && field !== "item_master_candidates") fields.add(field);
+    }
+  }
+  const preferred = ["item_name", "document_item_code", "specification", "lot_code", "quantity", "unit", "unit_price", "supply_amount", "tax_amount", "line_total", "inspection_result", "note"];
+  return preferred.filter((field) => fields.has(field)).concat([...fields].filter((field) => !preferred.includes(field)).sort());
+}
+
 function rawKeyValueEntries(document: DocumentRecord): Array<Record<string, unknown>> {
   const metadata = readRecord(document.workflow_metadata);
   const rawExtraction = readRecord(metadata.raw_extraction);
@@ -460,53 +507,82 @@ function ClassificationCandidatePanel({ document }: { document: DocumentRecord }
   );
 }
 
-function RawExtractedTables({ document }: { document: DocumentRecord }) {
-  const tables = officialTableEntries(document)
-    .map((table) => ({ table, rows: rawOfficialTableRows(table) }))
-    .filter(({ rows }) => rows.length);
-  if (!tables.length) return null;
+function EditableRawExtractedTable({
+  document,
+  items,
+  saving,
+  onChange,
+  onDelete,
+  onAdd,
+}: {
+  document: DocumentRecord;
+  items: ManufacturingLineItem[];
+  saving: boolean;
+  onChange: (index: number, field: string, value: string) => void;
+  onDelete: (index: number) => void;
+  onAdd: () => void;
+}) {
+  const columns = rawEditorColumns(document, items);
   return (
     <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-blue-950">추출 원형 표</p>
-          <p className="mt-1 text-xs text-blue-800">OCR/VL이 읽은 셀 값을 정규화하지 않고 먼저 보여줍니다.</p>
+          <p className="mt-1 text-xs text-blue-800">표에서 바로 수정하고, 필요 없는 행은 삭제하세요.</p>
         </div>
-        <Badge variant="outline" className="bg-white text-blue-900">
-          {tables.reduce((sum, { rows }) => sum + rows.length, 0)}행
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="bg-white text-blue-900">{items.length}행</Badge>
+          <Button type="button" variant="outline" size="sm" onClick={onAdd} disabled={saving}>
+            <Plus className="size-4" />
+            행 추가
+          </Button>
+        </div>
       </div>
-      {tables.map(({ table, rows }, tableIndex) => {
-        const columns = rawOfficialTableColumns(table, rows);
-        return (
-          <div key={`${table.source ?? "raw"}-${tableIndex}`} className="overflow-hidden rounded-md border bg-white">
-            <div className="flex flex-wrap items-center gap-2 border-b bg-slate-50 px-3 py-2">
-              <span className="text-xs font-medium text-slate-700">{officialTableLabel(table.table_type)}</span>
-              <Badge variant="outline" className="bg-white">{rows.length}행</Badge>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full border-collapse text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600">
-                  <tr>
-                    {columns.map((column) => (
-                      <th key={column} className="whitespace-nowrap border-b px-3 py-2 font-medium">{column}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, rowIndex) => (
-                    <tr key={rowIndex} className="border-b last:border-0">
-                      {columns.map((column) => (
-                        <td key={column} className="whitespace-nowrap px-3 py-2 text-slate-800">{rawOfficialTableCell(row, column)}</td>
-                      ))}
-                    </tr>
+      {items.length ? (
+        <div className="overflow-hidden rounded-md border bg-white">
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  {columns.map((column) => (
+                    <th key={column} className="whitespace-nowrap border-b px-2 py-2 font-medium">{lineItemFieldLabel(rawTableFieldForColumn(column))}</th>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                  <th className="w-16 whitespace-nowrap border-b px-2 py-2 text-right font-medium">삭제</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item, rowIndex) => (
+                  <tr key={rowIndex} className="border-b last:border-0">
+                    {columns.map((column) => {
+                      const field = rawTableFieldForColumn(column);
+                      return (
+                        <td key={column} className="min-w-[120px] px-2 py-2">
+                          <Input
+                            value={String((item as Record<string, unknown>)[field] ?? "")}
+                            onChange={(event) => onChange(rowIndex, field, event.target.value)}
+                            className="h-8 min-w-[110px] text-xs"
+                            inputMode={numericLineItemFields.has(field) ? "decimal" : undefined}
+                            disabled={saving}
+                          />
+                        </td>
+                      );
+                    })}
+                    <td className="px-2 py-2 text-right">
+                      <Button type="button" variant="outline" size="sm" onClick={() => onDelete(rowIndex)} disabled={saving}>
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        );
-      })}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed bg-white p-4 text-sm text-muted-foreground">
+          추출된 표 행이 없습니다. 행 추가로 직접 입력할 수 있습니다.
+        </div>
+      )}
     </div>
   );
 }
@@ -1309,71 +1385,6 @@ function pdfPreviewLayout({ previewSize, zoom }: { previewSize: PreviewSize; zoo
   };
 }
 
-function LineItemField({
-  index,
-  field,
-  label,
-  item,
-  low,
-  blockingIssues,
-  infoIssues,
-  onChange,
-  onRemove,
-}: {
-  index: number;
-  field: string;
-  label: string;
-  item: ManufacturingLineItem;
-  low: boolean;
-  blockingIssues: ReturnType<typeof blockingReviewIssues>;
-  infoIssues: ReturnType<typeof informationalReviewIssues>;
-  onChange: (index: number, field: string, value: string) => void;
-  onRemove: (index: number, field: string) => void;
-}) {
-  const visibleInfoIssues = infoIssues.slice(0, 2);
-  const hiddenInfoCount = Math.max(0, infoIssues.length - visibleInfoIssues.length);
-  return (
-    <div className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
-      <div className="flex items-center justify-between gap-2">
-        <label htmlFor={`line-item-${index}-${field}`}>{label}</label>
-        <button
-          type="button"
-          className="text-[11px] font-normal text-slate-500 underline-offset-4 hover:text-red-600 hover:underline"
-          onClick={() => onRemove(index, field)}
-        >
-          필드 삭제
-        </button>
-      </div>
-      <Input
-        id={`line-item-${index}-${field}`}
-        aria-label={`${index + 1}행 ${label}`}
-        className={low ? "border-amber-400 bg-amber-50" : ""}
-        value={String(item?.[field] ?? "")}
-        onChange={(event) => onChange(index, field, event.target.value)}
-      />
-      {blockingIssues.length || infoIssues.length ? (
-        <div className="flex flex-wrap gap-1">
-          {blockingIssues.map((issue) => (
-            <Badge key={`${issue.code}-${issue.message_ko}`} className="border-amber-300 bg-amber-50 text-[11px] text-amber-800">
-              {numericLineItemFields.has(field) ? "확인 필요" : issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
-            </Badge>
-          ))}
-          {visibleInfoIssues.map((issue) => (
-            <Badge key={`${issue.code}-${issue.message_ko}`} variant="outline" className="bg-white text-[11px] text-slate-600">
-              {issue.message_ko.replace(/^\d+번째 품목\s*/, "")}
-            </Badge>
-          ))}
-          {hiddenInfoCount ? (
-            <Badge variant="outline" className="bg-white text-[11px] text-slate-500">
-              참고 {hiddenInfoCount}건 더보기
-            </Badge>
-          ) : null}
-        </div>
-      ) : low ? <p className="text-[11px] text-amber-700">확인 필요</p> : null}
-    </div>
-  );
-}
-
 function InfoIssueDetails({ items }: { items: string[] }) {
   if (!items.length) return null;
   return (
@@ -1452,12 +1463,9 @@ export default function DocumentDetailPage() {
   const [categories, setCategories] = useState<FolderSummary[]>([]);
   const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
   const [selectedExportTemplateId, setSelectedExportTemplateId] = useState("");
-  const [aliasSaveRows, setAliasSaveRows] = useState<Record<number, boolean>>({});
   const [approvalNote, setApprovalNote] = useState("");
-  const [, setActiveLineItemIndex] = useState(0);
-  const [lineItemFieldSelections, setLineItemFieldSelections] = useState<Record<number, string>>({});
-  const [customLineItemFields, setCustomLineItemFields] = useState<Record<number, string>>({});
   const [documentNeighbors, setDocumentNeighbors] = useState<DocumentNeighbors>({ previous: null, next: null });
+  const rawLineItemsInitializedFor = useRef<string | null>(null);
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
@@ -1506,6 +1514,17 @@ export default function DocumentDetailPage() {
       .then(setDocumentNeighbors)
       .catch(() => setDocumentNeighbors({ previous: null, next: null }));
   }, [params.id]);
+
+  useEffect(() => {
+    if (!document || rawLineItemsInitializedFor.current === document.id) return;
+    rawLineItemsInitializedFor.current = document.id;
+    const currentItems = form.getValues("line_items") || [];
+    if (currentItems.length) return;
+    const rawItems = rawLineItemsFromOfficialTables(document);
+    if (rawItems.length) {
+      form.setValue("line_items", rawItems, { shouldDirty: false });
+    }
+  }, [document, form]);
 
   async function onSubmit(values: DocumentReviewForm) {
     setSaving(true);
@@ -1629,88 +1648,26 @@ export default function DocumentDetailPage() {
   }
 
   function addLineItem() {
+    const columns = document ? rawEditorColumns(document, form.getValues("line_items") || []) : [];
     const items = [...(form.getValues("line_items") || [])];
-    items.push({});
-    form.setValue("line_items", items, { shouldDirty: true });
-    setActiveLineItemIndex(items.length - 1);
-  }
-
-  function addLineItemField(index: number, field: string) {
-    const normalizedField = normalizeCustomLineItemField(field);
-    if (!normalizedField) {
-      toast.error("추가할 필드명을 입력하세요");
-      return;
+    const next: ManufacturingLineItem = {};
+    for (const column of columns) {
+      (next as Record<string, unknown>)[rawTableFieldForColumn(column)] = "";
     }
-    const items = [...(form.getValues("line_items") || [])];
-    const current = { ...(items[index] || {}) };
-    if (Object.prototype.hasOwnProperty.call(current, normalizedField)) {
-      toast.error("이미 있는 필드입니다");
-      return;
-    }
-    current[normalizedField] = "";
-    items[index] = current;
+    items.push(next);
     form.setValue("line_items", items, { shouldDirty: true });
-    setLineItemFieldSelections((state) => ({ ...state, [index]: "" }));
-    setCustomLineItemFields((state) => ({ ...state, [index]: "" }));
-  }
-
-  function removeLineItemField(index: number, field: string) {
-    const items = [...(form.getValues("line_items") || [])];
-    const current = { ...(items[index] || {}) };
-    delete current[field];
-    items[index] = current;
-    form.setValue("line_items", items, { shouldDirty: true });
-  }
-
-  async function selectItemMasterCandidate(index: number, candidate: NonNullable<ManufacturingLineItem["item_master_candidates"]>[number]) {
-    const items = [...(form.getValues("line_items") || [])];
-    const currentItem = items[index] || {};
-    items[index] = {
-      ...currentItem,
-      internal_item_code: candidate.internal_item_code,
-      item_master_match_status: "user_selected",
-      item_master_match_confidence: "1",
-      item_master_match_reason: "USER_SELECTED_CANDIDATE",
-    };
-    form.setValue("line_items", items, { shouldDirty: true });
-    if ((aliasSaveRows[index] ?? true) && candidate.item_master_id && currentItem.item_name) {
-      try {
-        await api.itemMaster.createAlias(candidate.item_master_id, {
-          alias_name: String(currentItem.item_name),
-          alias_spec: currentItem.specification ? String(currentItem.specification) : null,
-          vendor_name: document?.vendor_name ?? document?.merchant_name ?? null,
-          customer_name: document?.customer_name ?? null,
-          source: "document_selection",
-          confidence: "1",
-          memo: `문서 ${document?.document_number || document?.original_filename || ""}에서 선택됨`.trim(),
-          active: true,
-        });
-        toast.success("후보를 선택하고 별칭으로 저장했습니다");
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "별칭 저장에 실패했습니다. 선택 내용은 문서에 반영되었습니다");
-      }
-    } else {
-      toast.success("선택한 내부 품목코드를 문서에 반영했습니다");
-    }
   }
 
   function removeLineItem(index: number) {
     const items = [...(form.getValues("line_items") || [])];
     const itemLabel = String(items[index]?.item_name || items[index]?.document_item_code || items[index]?.item_code || `${index + 1}번째 품목`);
-    if (!window.confirm(`"${itemLabel}" 품목 행을 삭제할까요? 저장 버튼을 눌러야 최종 반영됩니다.`)) return;
+    if (!window.confirm(`"${itemLabel}" 행을 삭제할까요? 저장 버튼을 눌러야 최종 반영됩니다.`)) return;
     items.splice(index, 1);
     form.setValue("line_items", items, { shouldDirty: true });
-    setActiveLineItemIndex((current) => Math.max(0, Math.min(current, items.length - 1)));
-    toast.success("품목 행을 삭제했습니다. 저장하면 문서에 반영됩니다.");
+    toast.success("행을 삭제했습니다. 저장하면 문서에 반영됩니다.");
   }
 
   const watchedLineItems = form.watch("line_items") ?? [];
-  useEffect(() => {
-    setActiveLineItemIndex((current) => {
-      if (!watchedLineItems.length) return 0;
-      return Math.min(Math.max(current, 0), watchedLineItems.length - 1);
-    });
-  }, [watchedLineItems.length]);
 
   const categoryInterpretation = useMemo(
     () => (document?.workflow_metadata?.category_interpretation ?? document?.ingestion_metadata?.category_interpretation ?? null) as Record<string, unknown> | null,
@@ -1750,33 +1707,12 @@ export default function DocumentDetailPage() {
   const blockingIssueSummaryItems = reviewIssueSummaryItems(blockingIssues);
   const groupedBlockingIssueItems = groupedReviewIssues(blockingIssues);
   const infoIssues = informationalReviewIssues(document);
-  const lowConfidenceFields = document.low_confidence_fields ?? [];
   const fieldLabels = documentFieldLabels(document.document_type);
   const displayTitle = documentDisplayTitle(document);
   const reviewMetadata = documentReviewMetadata(document);
   const reviewIssueProgress = reviewIssueProgressCounts(reviewMetadata, blockingIssues.length);
   const openIssueCount = reviewIssueProgress.open;
   const resolvedIssueCount = reviewIssueProgress.resolved;
-  function lineItemFieldState(index: number, field: string) {
-    const itemCode = `item_${index + 1}`;
-    const structuredLowCodes = [
-      field === "item_code" ? `missing_item_code:${itemCode}` : null,
-      field === "internal_item_code" ? `item_master_match_required:${itemCode}` : null,
-      field === "internal_item_code" ? `item_master_unmatched:${itemCode}` : null,
-      field === "internal_item_code" ? "item_matching_skipped" : null,
-      field === "item_name" ? `missing_item_name:${itemCode}` : null,
-      field === "quantity" ? `missing_quantity:${itemCode}` : null,
-      field === "unit_price" || field === "line_total" ? `missing_price_or_total:${itemCode}` : null,
-    ].filter(Boolean);
-    const fieldBlockingIssues = blockingIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
-    const fieldInfoIssues = infoIssues.filter((issue) => issue.item_index === index && issue.field === `line_items.${field}`);
-    const low =
-      fieldBlockingIssues.length > 0 ||
-      structuredLowCodes.some((code) => lowConfidenceFields.includes(code as string)) ||
-      lowConfidenceFields.includes(`line_items[${index + 1}].${field}`) ||
-      (field === "line_total" && lowConfidenceFields.includes("missing_line_items"));
-    return { fieldBlockingIssues, fieldInfoIssues, low };
-  }
   const exportNotice = document.review_required && !reviewMetadata.approved
     ? "검토 필요 상태입니다. 내보내기 파일에는 review_required와 경고 정보가 함께 포함됩니다."
     : isConfirmed
@@ -2161,161 +2097,18 @@ export default function DocumentDetailPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold">품목 정보</p>
-                    <p className="mt-1 text-xs text-muted-foreground">품목명, 규격, 수량 등 문서에 보이는 업무데이터를 확인하세요. 내부 품목코드는 보조 정보이며 필요할 때만 입력하거나 후보를 선택하면 됩니다.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">추출된 표를 그대로 확인하고 필요한 셀만 수정하세요.</p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={addLineItem}>
-                    <Plus className="size-4" />
-                    품목 추가
-                  </Button>
                 </div>
                 <RawExtractedKeyValues document={document} />
-                <RawExtractedTables document={document} />
-                {lineItems.length ? (
-                  <div className="grid gap-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-slate-50 px-3 py-2">
-                      <div>
-                        <p className="text-sm font-medium">전체 품목 {lineItems.length}건</p>
-                        <p className="text-xs text-muted-foreground">임시로 모든 품목을 한 화면에 펼쳐 표시합니다.</p>
-                      </div>
-                    </div>
-                    {lineItems.map((lineItem, lineItemIndex) => {
-                      const reviewFields = [...blockingIssues, ...infoIssues]
-                        .filter((issue) => issue.item_index === lineItemIndex && typeof issue.field === "string" && issue.field.startsWith("line_items."))
-                        .map((issue) => String(issue.field).replace(/^line_items\./, ""));
-                      const displayFields = lineItemDisplayFields(lineItem, reviewFields);
-                      const addableFields = lineItemAddableFields(lineItem);
-                      return (
-                      <div key={lineItemIndex} className="rounded-xl border bg-slate-50/50 p-4">
-                        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-950">품목 {lineItemIndex + 1}</p>
-                            <p className="mt-1 break-words text-xs text-muted-foreground">{String(lineItem.item_name || lineItem.document_item_code || lineItem.item_code || "품목명 미확인")}</p>
-                          </div>
-                          <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(lineItemIndex)}>
-                            <Trash2 className="size-4" />
-                            품목 삭제
-                          </Button>
-                        </div>
-
-                        <div className="grid gap-4">
-                          {displayFields.length ? (
-                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                              {displayFields.map((field) => {
-                                const { fieldBlockingIssues, fieldInfoIssues, low } = lineItemFieldState(lineItemIndex, field);
-                                return (
-                                  <LineItemField
-                                    key={field}
-                                    index={lineItemIndex}
-                                    field={field}
-                                    label={lineItemFieldLabel(field)}
-                                    item={lineItem}
-                                    low={low}
-                                    blockingIssues={fieldBlockingIssues}
-                                    infoIssues={fieldInfoIssues}
-                                    onChange={updateLineItem}
-                                    onRemove={removeLineItemField}
-                                  />
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="rounded-lg border border-dashed bg-white p-4 text-sm text-muted-foreground">
-                              이 품목에 저장된 필드가 없습니다. 원본에 보이는 품목명, 수량, 규격 등을 아래에서 추가하세요.
-                            </div>
-                          )}
-
-                          <div className="grid gap-3 rounded-lg border bg-white p-3">
-                            <div>
-                              <p className="text-xs font-semibold text-slate-800">필드 추가</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">원본에는 있지만 자동 추출되지 않은 품목 정보를 직접 추가할 수 있습니다.</p>
-                            </div>
-                            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                              <select
-                                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                                value={lineItemFieldSelections[lineItemIndex] ?? ""}
-                                onChange={(event) => setLineItemFieldSelections({ ...lineItemFieldSelections, [lineItemIndex]: event.target.value })}
-                              >
-                                <option value="">추가할 표준 필드 선택</option>
-                                {addableFields.map((field) => (
-                                  <option key={field} value={field}>{lineItemFieldLabel(field)}</option>
-                                ))}
-                              </select>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => addLineItemField(lineItemIndex, lineItemFieldSelections[lineItemIndex] || "")}
-                                disabled={!lineItemFieldSelections[lineItemIndex]}
-                              >
-                                <Plus className="size-4" />
-                                표준 필드 추가
-                              </Button>
-                            </div>
-                            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                              <Input
-                                placeholder="예: 검사자, 차대번호, 포장상태"
-                                value={customLineItemFields[lineItemIndex] ?? ""}
-                                onChange={(event) => setCustomLineItemFields({ ...customLineItemFields, [lineItemIndex]: event.target.value })}
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => addLineItemField(lineItemIndex, customLineItemFields[lineItemIndex] || "")}
-                                disabled={!customLineItemFields[lineItemIndex]?.trim()}
-                              >
-                                <Plus className="size-4" />
-                                직접 필드 추가
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 rounded-lg border bg-white p-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline" className={itemMasterStatusClass(lineItem.item_master_match_status)}>
-                              {itemMasterStatusLabel(lineItem.item_master_match_status)}
-                            </Badge>
-                            {lineItem.item_master_match_confidence ? (
-                              <span className="text-xs text-muted-foreground">신뢰도 {Math.round(Number(lineItem.item_master_match_confidence) * 100)}%</span>
-                            ) : null}
-                          </div>
-                          {lineItem.item_master_candidates?.length ? (
-                            <div className="mt-3 grid gap-2">
-                              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <input
-                                  type="checkbox"
-                                  checked={aliasSaveRows[lineItemIndex] ?? true}
-                                  onChange={(event) => setAliasSaveRows({ ...aliasSaveRows, [lineItemIndex]: event.target.checked })}
-                                />
-                                이 선택을 별칭으로 저장
-                              </label>
-                              <div className="grid gap-2">
-                                {lineItem.item_master_candidates.slice(0, 3).map((candidate) => (
-                                  <div key={candidate.internal_item_code} className="rounded-lg border bg-white p-3 text-xs">
-                                    <div className="flex flex-wrap items-start justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <p className="break-words font-semibold text-slate-950">{candidate.internal_item_code}</p>
-                                        <p className="mt-1 break-words text-muted-foreground">{candidate.item_name} · {candidate.spec || "규격 없음"} · {candidate.unit || "단위 없음"}</p>
-                                        <p className="mt-1 text-muted-foreground">후보 신뢰도 {Math.round(Number(candidate.score) * 100)}%</p>
-                                      </div>
-                                      <Button type="button" variant="outline" size="sm" onClick={() => selectItemMasterCandidate(lineItemIndex, candidate)}>
-                                        선택
-                                      </Button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-                    품목 정보가 추출되지 않았습니다. 사람이 확인해야 합니다.
-                  </div>
-                )}
+                <EditableRawExtractedTable
+                  document={document}
+                  items={lineItems}
+                  saving={saving}
+                  onChange={updateLineItem}
+                  onDelete={removeLineItem}
+                  onAdd={addLineItem}
+                />
               </section>
 
               <section className="grid gap-4 rounded-lg border bg-slate-50/60 p-4">

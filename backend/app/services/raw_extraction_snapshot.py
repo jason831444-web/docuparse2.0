@@ -17,7 +17,7 @@ class RawExtractionSnapshotService:
     def build(self, document: Document, *, source: str = "review_snapshot") -> dict[str, Any]:
         metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
         key_values: list[dict[str, Any]] = []
-        tables = self._raw_tables(metadata)
+        tables = self._reviewed_line_item_tables(document) or self._raw_tables(metadata)
 
         self._add_current_document_fields(document, key_values)
         self._add_pos_summary(metadata, key_values)
@@ -128,6 +128,49 @@ class RawExtractionSnapshotService:
                     "row_count": len(raw_rows),
                 })
         return tables
+
+    def _reviewed_line_item_tables(self, document: Document) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        columns: list[str] = []
+        labels = {
+            "line_number": "No",
+            "item_name": "품목명",
+            "document_item_code": "품목코드",
+            "item_code": "품목코드",
+            "specification": "규격",
+            "lot_code": "Lot/Code",
+            "quantity": "수량",
+            "unit": "단위",
+            "unit_price": "단가",
+            "supply_amount": "공급가액",
+            "tax_amount": "세액",
+            "line_total": "금액",
+            "inspection_result": "판정",
+            "inspection_item": "검사항목",
+            "note": "비고",
+        }
+        for item in document.line_items or []:
+            if not isinstance(item, dict):
+                continue
+            row: dict[str, Any] = {}
+            for key, value in item.items():
+                if key.startswith("_") or key in {"item_master_candidates"} or value in (None, ""):
+                    continue
+                label = labels.get(str(key), str(key))
+                row[label] = self._json_value(value)
+                if label not in columns:
+                    columns.append(label)
+            if row:
+                rows.append(row)
+        if not rows:
+            return []
+        return [{
+            "table_type": "reviewed_line_items",
+            "source": "user_reviewed_line_items",
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+        }]
 
     def _table_rows(self, table: dict[str, Any]) -> list[dict[str, Any]]:
         rows = table.get("rows") if isinstance(table.get("rows"), list) else []
