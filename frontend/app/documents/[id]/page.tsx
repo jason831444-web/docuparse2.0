@@ -308,6 +308,102 @@ function officialTableRowCount(table: Record<string, unknown>): number {
   return Array.isArray(table.rows) ? table.rows.length : 0;
 }
 
+function rawOfficialTableRows(table: Record<string, unknown>): Array<Record<string, unknown>> {
+  const rows = Array.isArray(table.rows) ? table.rows : [];
+  return rows
+    .map((row) => readRecord(row))
+    .filter((row) => Object.keys(row).length);
+}
+
+function rawOfficialTableColumns(table: Record<string, unknown>, rows: Array<Record<string, unknown>>): string[] {
+  const rawColumns = Array.isArray(table.raw_columns) ? table.raw_columns.map(String).filter(Boolean) : [];
+  const columns = Array.isArray(table.columns) ? table.columns.map(String).filter(Boolean) : [];
+  if (rawColumns.length) return rawColumns;
+  if (columns.length) return columns;
+  const keys = new Set<string>();
+  for (const row of rows) {
+    const rawCells = readRecord(row.raw_cells);
+    for (const key of Object.keys(rawCells).length ? Object.keys(rawCells) : Object.keys(row)) {
+      if (!key.startsWith("_") && key !== "raw_cells" && key !== "validation_warnings" && key !== "review_flags") keys.add(key);
+    }
+  }
+  return Array.from(keys);
+}
+
+function rawOfficialTableCell(row: Record<string, unknown>, column: string): string {
+  const rawCells = readRecord(row.raw_cells);
+  if (rawCells[column] !== undefined) return displayValue(rawCells[column]);
+  if (row[column] !== undefined) return displayValue(row[column]);
+  const normalizedKey = {
+    No: "no",
+    품목명: "item_name",
+    "규격/코드": "document_item_code",
+    품목코드: "document_item_code",
+    내부코드: "document_item_code",
+    수량: "quantity",
+    단위: "unit",
+    단가: "unit_price",
+    금액: "line_total",
+    합계금액: "line_total",
+    공급가액: "supply_amount",
+    세액: "tax_amount",
+    판정: "inspection_result",
+    비고: "note",
+  }[column];
+  return normalizedKey ? displayValue(row[normalizedKey]) : "-";
+}
+
+function RawExtractedTables({ document }: { document: DocumentRecord }) {
+  const tables = officialTableEntries(document)
+    .map((table) => ({ table, rows: rawOfficialTableRows(table) }))
+    .filter(({ rows }) => rows.length);
+  if (!tables.length) return null;
+  return (
+    <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-blue-950">추출 원형 표</p>
+          <p className="mt-1 text-xs text-blue-800">OCR/VL이 읽은 셀 값을 정규화하지 않고 먼저 보여줍니다.</p>
+        </div>
+        <Badge variant="outline" className="bg-white text-blue-900">
+          {tables.reduce((sum, { rows }) => sum + rows.length, 0)}행
+        </Badge>
+      </div>
+      {tables.map(({ table, rows }, tableIndex) => {
+        const columns = rawOfficialTableColumns(table, rows);
+        return (
+          <div key={`${table.source ?? "raw"}-${tableIndex}`} className="overflow-hidden rounded-md border bg-white">
+            <div className="flex flex-wrap items-center gap-2 border-b bg-slate-50 px-3 py-2">
+              <span className="text-xs font-medium text-slate-700">{officialTableLabel(table.table_type)}</span>
+              <Badge variant="outline" className="bg-white">{rows.length}행</Badge>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    {columns.map((column) => (
+                      <th key={column} className="whitespace-nowrap border-b px-3 py-2 font-medium">{column}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, rowIndex) => (
+                    <tr key={rowIndex} className="border-b last:border-0">
+                      {columns.map((column) => (
+                        <td key={column} className="whitespace-nowrap px-3 py-2 text-slate-800">{rawOfficialTableCell(row, column)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function OfficialTableSourceCard({ document }: { document: DocumentRecord }) {
   const tables = officialTableEntries(document);
   if (!tables.length) return null;
@@ -1986,6 +2082,7 @@ export default function DocumentDetailPage() {
                     품목 추가
                   </Button>
                 </div>
+                <RawExtractedTables document={document} />
                 {lineItems.length ? (
                   <div className="grid gap-4">
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-slate-50 px-3 py-2">
