@@ -265,6 +265,40 @@ def test_raw_extraction_prefers_direct_vl_key_value_bbox_over_ocr_line_bbox():
     assert matches[0]["bbox_source"] == "vl_direct_key_value_bbox"
 
 
+def test_raw_extraction_skips_ocr_fallback_when_vl_coverage_is_sufficient():
+    document = Document(
+        original_filename="quote.pdf",
+        stored_file_path="/tmp/quote.pdf",
+        mime_type="application/pdf",
+        workflow_metadata={
+            "vl_candidates": [
+                {
+                    "key_values": [
+                        {"key": "문서번호", "value": "DOC-003", "source": "vl_text_block_key_value_bbox", "bbox": [0.1, 0.1, 0.2, 0.12]},
+                        {"key": "작성일", "value": "2026.06.07", "source": "vl_text_block_key_value_bbox", "bbox": [0.5, 0.2, 0.7, 0.22]},
+                        {"key": "공급자 상호", "value": "(주)미래테크", "source": "vl_block_postprocess_bbox", "bbox": [0.1, 0.2, 0.3, 0.22]},
+                        {"key": "공급받는자 상호", "value": "(주)시흥대야점", "source": "vl_block_postprocess_bbox", "bbox": [0.5, 0.25, 0.7, 0.27]},
+                    ],
+                    "structured_candidate": {"key_values": []},
+                }
+            ]
+        },
+    )
+
+    snapshot = RawExtractionSnapshotService().build(
+        document,
+        source="processing_pipeline",
+        line_candidates=[
+            {"text": "유효기간: 견적일로부터 14일", "x_min": 100, "y_min": 100, "x_max": 300, "y_max": 130}
+        ],
+    )
+
+    assert snapshot["coverage_summary"]["ocr_fallback_used"] is False
+    assert snapshot["coverage_summary"]["ocr_fallback_reason"] == "vl_coverage_sufficient"
+    assert snapshot["coverage_summary"]["ocr_fallback_key_values"] == 0
+    assert all(item["source"] != "ocr_line_bbox_fallback" for item in snapshot["key_values"])
+
+
 def test_raw_extraction_table_preserves_raw_columns_for_raw_rows():
     document = Document(
         original_filename="quote.pdf",
@@ -330,16 +364,17 @@ def test_raw_extraction_key_values_are_raw_source_values_only():
     snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
     values = {(item["key"], item["value"], item["source"]) for item in snapshot["key_values"]}
 
-    assert ("문서번호", "DOC-003", "raw_text_key_value") in values
-    assert ("샘플번호", "003", "raw_text_key_value") in values
-    assert ("공급자 상호", "(주)미래테크", "raw_text_key_value") in values
-    assert ("공급자 사업자번호", "123-45-67890", "raw_text_key_value") in values
-    assert ("공급자 담당", "김선영 / 회계팀", "raw_text_key_value") in values
-    assert ("공급받는자 상호", "(주)시흥대야점", "raw_text_key_value") in values
-    assert ("작성일", "2026.06.07", "raw_text_key_value") in values
-    assert ("유효기간", "견적일로부터 14일", "raw_text_key_value") in values
-    assert ("예상 합계", "1,639,000", "raw_text_key_value") in values
+    assert ("문서번호", "DOC-003", "raw_text_fallback") in values
+    assert ("샘플번호", "003", "raw_text_fallback") in values
+    assert ("공급자 상호", "(주)미래테크", "raw_text_fallback") in values
+    assert ("공급자 사업자번호", "123-45-67890", "raw_text_fallback") in values
+    assert ("공급자 담당", "김선영 / 회계팀", "raw_text_fallback") in values
+    assert ("공급받는자 상호", "(주)시흥대야점", "raw_text_fallback") in values
+    assert ("작성일", "2026.06.07", "raw_text_fallback") in values
+    assert ("유효기간", "견적일로부터 14일", "raw_text_fallback") in values
+    assert ("예상 합계", "1,639,000", "raw_text_fallback") in values
     assert all(item["source"] not in {"confirmed_document_field", "vl_structured_document"} for item in snapshot["key_values"])
+    assert snapshot["coverage_summary"]["raw_text_fallback_key_values"] == 9
 
 
 def test_raw_extraction_ocr_key_values_keep_line_bboxes():
@@ -386,7 +421,8 @@ def test_raw_extraction_ocr_key_values_keep_line_bboxes():
 
     values = {item["key"]: item for item in snapshot["key_values"]}
     assert values["문서번호"]["value"] == "DOC-003"
-    assert values["문서번호"]["bbox_source"] == "ocr_line_candidate"
+    assert values["문서번호"]["source"] == "ocr_line_bbox_fallback"
+    assert values["문서번호"]["bbox_source"] == "ocr_line_bbox_fallback"
     assert "normalized_bbox" in values["문서번호"]
     assert "key_bbox" in values["문서번호"]
     assert "value_bbox" in values["문서번호"]
@@ -419,6 +455,7 @@ def test_raw_extraction_ocr_row_key_values_merge_nearby_value_tokens():
 
     values = {item["key"]: item for item in snapshot["key_values"]}
     assert values["문서번호"]["value"] == "DOC-003"
-    assert values["문서번호"]["bbox_source"] == "ocr_row_candidate"
+    assert values["문서번호"]["source"] == "ocr_line_bbox_fallback"
+    assert values["문서번호"]["bbox_source"] == "ocr_line_bbox_fallback"
     assert values["작성일"]["value"] == "20260607"
     assert values["상호"]["value"] == "(주)미래테크"

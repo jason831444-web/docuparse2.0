@@ -836,17 +836,21 @@ def _key_values_from_official_paddle_output(
             full_width=full_width,
             full_height=full_height,
         )
-        entries = (
-            _key_value_entries_from_official_table_block(text, bbox, initial_section=section)
-            if label == "table"
-            else _key_value_entries_from_official_text_block(text, bbox, initial_section=section)
-        )
+        if label == "table":
+            entries = _key_value_entries_from_official_table_block(text, bbox, initial_section=section)
+            source = "vl_block_postprocess_bbox"
+            vl_source = "paddleocrvl_official_table_block_postprocess"
+        else:
+            entries = _key_value_entries_from_official_text_block(text, bbox, initial_section=section)
+            source = "vl_text_block_key_value_bbox"
+            vl_source = "paddleocrvl_official_text_block"
         for key, value, item_bbox, key_bbox, value_bbox in entries:
             item = {
                 "key": key,
                 "value": value,
-                "source": "vl_direct_key_value_bbox",
-                "vl_source": "paddleocrvl_official_text_block",
+                "source": source,
+                "bbox_source": source,
+                "vl_source": vl_source,
                 "bbox": item_bbox,
                 "key_bbox": key_bbox,
                 "value_bbox": value_bbox,

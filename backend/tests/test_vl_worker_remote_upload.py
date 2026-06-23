@@ -422,7 +422,7 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     assert payload["schema_prompt"]["prompt_bypassed"] is True
     assert payload["key_values"][0]["key"] == "문서번호"
     assert payload["key_values"][0]["value"] == "DOC-001"
-    assert payload["key_values"][0]["source"] == "vl_direct_key_value_bbox"
+    assert payload["key_values"][0]["source"] == "vl_text_block_key_value_bbox"
     assert payload["key_values"][0]["vl_source"] == "paddleocrvl_official_text_block"
     assert payload["key_values"][0]["bbox"]
     assert payload["key_values"][0]["key_bbox"]
@@ -596,7 +596,8 @@ def test_vl_worker_key_values_from_official_crop_blocks():
     assert by_key["작성일"]["value"] == "2026.06.07"
     assert by_key["유효기간"]["value"] == "견적일로부터 14일"
     assert "품목명" not in by_key
-    assert all(item["source"] == "vl_direct_key_value_bbox" for item in values)
+    assert by_key["공급자 상호"]["source"] == "vl_block_postprocess_bbox"
+    assert by_key["공급받는자 상호"]["source"] == "vl_text_block_key_value_bbox"
     assert all(item.get("bbox") and item.get("key_bbox") and item.get("value_bbox") for item in values)
 
 

@@ -465,6 +465,14 @@ function keyValueBBox(entry: Record<string, unknown>): [number, number, number, 
   return numbers.map((number) => Math.max(0, Math.min(1, number))) as [number, number, number, number];
 }
 
+function keyValueSourceLabel(entry: Record<string, unknown>): string | null {
+  const source = String(entry.source ?? "");
+  if (["vl_direct_key_value_bbox", "vl_text_block_key_value_bbox", "vl_block_postprocess_bbox"].includes(source)) return "VL 위치 기반";
+  if (source === "ocr_line_bbox_fallback") return "OCR 보완";
+  if (source === "raw_text_fallback") return "위치 없음";
+  return null;
+}
+
 function fallbackKeyValueRows(entries: Array<Record<string, unknown>>): Array<Array<Record<string, unknown>>> {
   const rowHints: Array<RegExp[]> = [
     [/문서\s*번호|document.*no|doc.*no/i, /샘플\s*번호|sample/i],
@@ -552,7 +560,10 @@ function RawKeyValueLayoutEditor({
                       width: `${Math.max(20, Math.min(42, (bbox[2] - bbox[0]) * 100 + 18))}%`,
                     }}
                   >
-                    {displayValue(entry.key)}
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="truncate">{displayValue(entry.key)}</span>
+                      {keyValueSourceLabel(entry) ? <span className="shrink-0 rounded border bg-slate-50 px-1 py-0.5 text-[10px] font-normal text-slate-500">{keyValueSourceLabel(entry)}</span> : null}
+                    </span>
                     <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
                   </label>
                 );
@@ -569,7 +580,10 @@ function RawKeyValueLayoutEditor({
                 const index = entryIndex.get(entry) ?? 0;
                 return (
                   <label key={keyValueIdentity(entry, index)} className="grid gap-1 text-xs font-medium text-slate-600">
-                    {displayValue(entry.key)}
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="truncate">{displayValue(entry.key)}</span>
+                      {keyValueSourceLabel(entry) ? <span className="shrink-0 rounded border bg-slate-50 px-1 py-0.5 text-[10px] font-normal text-slate-500">{keyValueSourceLabel(entry)}</span> : null}
+                    </span>
                     <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, event.target.value)} />
                   </label>
                 );
