@@ -321,9 +321,14 @@ def _analyze_path(
         output: Any
         with _inference_lock:
             output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
+            crop_outputs = _predict_key_value_crop_outputs(image_path, settings)
         text = extract_text(output)
         tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename or path.name)
         key_values = _key_values_from_official_paddle_output(output, image_path=image_path)
+        key_values = _dedupe_key_values([
+            *key_values,
+            *_key_values_from_crop_outputs(crop_outputs),
+        ])
         schema_metadata["official_table_count"] = len(tables)
         if schema_metadata["enabled"]:
             prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
@@ -634,6 +639,35 @@ def _predict_with_optional_paddle_schema_prompt(image_path: Path, settings: Any)
     return _materialize_predict_output(pipeline.predict(str(image_path), **kwargs))
 
 
+def _predict_key_value_crop_outputs(image_path: Path, settings: Any) -> list[dict[str, Any]]:
+    """Run a VL-focused crop pass over the document header/key-value region."""
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = int(image.width), int(image.height)
+            if width <= 1 or height <= 1:
+                return []
+            crop_box = (0, 0, width, max(1, int(height * 0.55)))
+            with tempfile.TemporaryDirectory(prefix="docparse_vl_kv_crop_") as tmp:
+                crop_path = Path(tmp) / f"{image_path.stem}-key-values-top.png"
+                image.crop(crop_box).save(crop_path)
+                output = _predict_with_optional_paddle_schema_prompt(crop_path, settings)
+                return [
+                    {
+                        "output": output,
+                        "crop_width": crop_box[2] - crop_box[0],
+                        "crop_height": crop_box[3] - crop_box[1],
+                        "origin_x": crop_box[0],
+                        "origin_y": crop_box[1],
+                        "full_width": width,
+                        "full_height": height,
+                    }
+                ]
+    except Exception as exc:
+        logger.info("vl_key_value_crop_pass_failed: %s", exc)
+        return []
+
+
 def _materialize_predict_output(output: Any) -> Any:
     """Preserve PaddleOCRVL generator results for multiple downstream readers.
 
@@ -799,20 +833,61 @@ def _tables_from_official_paddle_output(output: Any, text: str, *, original_file
     return tables
 
 
-def _key_values_from_official_paddle_output(output: Any, *, image_path: Path) -> list[dict[str, Any]]:
-    width, height = _image_size(image_path)
+def _key_values_from_crop_outputs(crop_outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    key_values: list[dict[str, Any]] = []
+    for crop in crop_outputs:
+        key_values.extend(
+            _key_values_from_official_paddle_output(
+                crop.get("output"),
+                width=int(crop.get("crop_width") or 1),
+                height=int(crop.get("crop_height") or 1),
+                origin_x=float(crop.get("origin_x") or 0),
+                origin_y=float(crop.get("origin_y") or 0),
+                full_width=int(crop.get("full_width") or crop.get("crop_width") or 1),
+                full_height=int(crop.get("full_height") or crop.get("crop_height") or 1),
+            )
+        )
+    return _dedupe_key_values(key_values)
+
+
+def _key_values_from_official_paddle_output(
+    output: Any,
+    *,
+    image_path: Path | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+    full_width: int | None = None,
+    full_height: int | None = None,
+) -> list[dict[str, Any]]:
+    if image_path is not None and (width is None or height is None):
+        width, height = _image_size(image_path)
+    width = max(1, int(width or 1))
+    height = max(1, int(height or 1))
+    full_width = max(1, int(full_width or width))
+    full_height = max(1, int(full_height or height))
     key_values: list[dict[str, Any]] = []
     for block in _official_parsing_blocks(output):
         label = str(block.get("block_label") or "").casefold()
-        if label == "table":
-            continue
-        text = _clean_cell(str(block.get("block_content") or ""))
+        text = str(block.get("block_content") or "")
         if not text:
             continue
-        bbox = _normalize_official_block_bbox(block, width=width, height=height)
-        for key, value, start, end in _parse_official_key_value_text(text):
-            item_bbox = _slice_normalized_bbox_by_span(text, bbox, start, end)
-            key_bbox, value_bbox = _split_normalized_key_value_bbox(text[start:end], key, item_bbox)
+        bbox = _normalize_official_block_bbox(
+            block,
+            width=width,
+            height=height,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            full_width=full_width,
+            full_height=full_height,
+        )
+        entries = (
+            _key_value_entries_from_official_table_block(text, bbox)
+            if label == "table"
+            else _key_value_entries_from_official_text_block(text, bbox)
+        )
+        for key, value, item_bbox, key_bbox, value_bbox in entries:
             item = {
                 "key": key,
                 "value": value,
@@ -835,10 +910,93 @@ def _image_size(image_path: Path) -> tuple[int, int]:
         return 1, 1
 
 
+def _key_value_entries_from_official_text_block(
+    text: str,
+    bbox: list[float] | None,
+) -> list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]]:
+    raw_lines = [line.strip() for line in str(text or "").splitlines()]
+    lines = [line for line in raw_lines if line]
+    if not lines:
+        cleaned = _clean_cell(str(text or ""))
+        lines = [cleaned] if cleaned else []
+    section: str | None = None
+    entries: list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]] = []
+    value_line_count = max(1, len(lines))
+    for index, line in enumerate(lines):
+        next_section = _official_section_from_text(line)
+        if next_section:
+            section = next_section
+            continue
+        line_bbox = _slice_normalized_bbox_by_line(bbox, index, value_line_count)
+        for key, value, start, end in _parse_official_key_value_text(line):
+            full_key = _sectioned_official_key(section, key)
+            item_bbox = _slice_normalized_bbox_by_span(line, line_bbox, start, end)
+            key_bbox, value_bbox = _split_normalized_key_value_bbox(line[start:end], key, item_bbox)
+            entries.append((full_key, value, item_bbox, key_bbox, value_bbox))
+    return entries
+
+
+def _key_value_entries_from_official_table_block(
+    html_table: str,
+    bbox: list[float] | None,
+) -> list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]]:
+    rows = _parse_html_table_rows(html_table)
+    if not _looks_like_key_value_table(rows):
+        return []
+    section: str | None = None
+    entries: list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None]] = []
+    value_rows = [row for row in rows if row and _clean_cell(row[0])]
+    row_count = max(1, len(value_rows))
+    for index, row in enumerate(value_rows):
+        line = _clean_cell(row[0])
+        if not line:
+            continue
+        next_section = _official_section_from_text(line)
+        if next_section:
+            section = next_section
+            continue
+        row_bbox = _slice_normalized_bbox_by_line(bbox, index, row_count)
+        for key, value, start, end in _parse_official_key_value_text(line):
+            full_key = _sectioned_official_key(section, key)
+            item_bbox = _slice_normalized_bbox_by_span(line, row_bbox, start, end)
+            key_bbox, value_bbox = _split_normalized_key_value_bbox(line[start:end], key, item_bbox)
+            entries.append((full_key, value, item_bbox, key_bbox, value_bbox))
+    return entries
+
+
+def _looks_like_key_value_table(rows: list[list[str]]) -> bool:
+    if not rows:
+        return False
+    non_empty_rows = [[_clean_cell(cell) or "" for cell in row] for row in rows if any(_clean_cell(cell) for cell in row)]
+    if not non_empty_rows:
+        return False
+    if max(len(row) for row in non_empty_rows) > 2:
+        return False
+    joined = "\n".join(" ".join(row) for row in non_empty_rows)
+    if re.search(r"No|품목|수량|단가|금액|규격", joined, flags=re.IGNORECASE):
+        return False
+    return any(_official_section_from_text(row[0]) for row in non_empty_rows) or any(":" in row[0] or "：" in row[0] for row in non_empty_rows)
+
+
+def _official_section_from_text(text: str) -> str | None:
+    normalized = re.sub(r"\s+", "", str(text or "")).strip(":：")
+    if normalized in {"공급자", "공급처"}:
+        return "공급자"
+    if normalized in {"공급받는자", "궁급받는자", "공급받는자정보", "고객사"}:
+        return "공급받는자"
+    return None
+
+
+def _sectioned_official_key(section: str | None, key: str) -> str:
+    if section and key in {"상호", "사업자번호", "담당", "대표자", "주소"}:
+        return f"{section} {key}"
+    return key
+
+
 def _parse_official_key_value_text(text: str) -> list[tuple[str, str, int, int]]:
     known_label_pattern = (
         r"문서\s*번호|샘플\s*번호|사업자\s*번호|작성일|발행일|견적일|유효\s*기간|"
-        r"납기일|요청일|담당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|예상\s*합계|"
+        r"납기일|요청일|담당|당당|상호|공급자|공급받는자|궁급받는자|입고창고|출고창고|요청부서|예상\s*합계|"
         r"합계\s*금액|총\s*합계|TOTAL(?:\s+[A-Z]+)?"
     )
     items: list[tuple[str, str, int, int]] = []
@@ -861,7 +1019,17 @@ def _parse_official_key_value_text(text: str) -> list[tuple[str, str, int, int]]
 
 
 def _clean_official_key(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+    key = re.sub(r"\s+", " ", str(value or "")).strip()
+    aliases = {
+        "문서 번호": "문서번호",
+        "샘플 번호": "샘플번호",
+        "사업자 번호": "사업자번호",
+        "유효 기간": "유효기간",
+        "예상 합계": "예상 합계",
+        "당당": "담당",
+    }
+    compact = re.sub(r"\s+", "", key)
+    return aliases.get(key) or aliases.get(compact) or key
 
 
 def _valid_official_key_value(key: str, value: str) -> bool:
@@ -874,12 +1042,28 @@ def _valid_official_key_value(key: str, value: str) -> bool:
     return True
 
 
-def _normalize_official_block_bbox(block: dict[str, Any], *, width: int, height: int) -> list[float] | None:
+def _normalize_official_block_bbox(
+    block: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+    full_width: int | None = None,
+    full_height: int | None = None,
+) -> list[float] | None:
+    full_width = max(1, int(full_width or width))
+    full_height = max(1, int(full_height or height))
     bbox = block.get("block_bbox")
     if isinstance(bbox, list) and len(bbox) >= 4:
         try:
             x1, y1, x2, y2 = [float(value) for value in bbox[:4]]
-            return _clamp_normalized_bbox([x1 / width, y1 / height, x2 / width, y2 / height])
+            return _clamp_normalized_bbox([
+                (origin_x + x1) / full_width,
+                (origin_y + y1) / full_height,
+                (origin_x + x2) / full_width,
+                (origin_y + y2) / full_height,
+            ])
         except (TypeError, ValueError):
             pass
     points = block.get("block_polygon_points")
@@ -890,7 +1074,12 @@ def _normalize_official_block_bbox(block: dict[str, Any], *, width: int, height:
         except (TypeError, ValueError):
             return None
         if xs and ys:
-            return _clamp_normalized_bbox([min(xs) / width, min(ys) / height, max(xs) / width, max(ys) / height])
+            return _clamp_normalized_bbox([
+                (origin_x + min(xs)) / full_width,
+                (origin_y + min(ys)) / full_height,
+                (origin_x + max(xs)) / full_width,
+                (origin_y + max(ys)) / full_height,
+            ])
     return None
 
 
@@ -906,6 +1095,20 @@ def _slice_normalized_bbox_by_span(text: str, bbox: list[float] | None, start: i
         bbox[1],
         bbox[0] + width * span_end,
         bbox[3],
+    ])
+
+
+def _slice_normalized_bbox_by_line(bbox: list[float] | None, index: int, count: int) -> list[float] | None:
+    if not bbox:
+        return None
+    count = max(1, count)
+    index = max(0, min(count - 1, index))
+    height = bbox[3] - bbox[1]
+    return _clamp_normalized_bbox([
+        bbox[0],
+        bbox[1] + height * (index / count),
+        bbox[2],
+        bbox[1] + height * ((index + 1) / count),
     ])
 
 

@@ -536,6 +536,65 @@ def test_vl_worker_structures_incoming_inspection_rows_with_received_quantity_on
     assert rows[2]["received_quantity"] == 20
 
 
+def test_vl_worker_key_values_from_official_crop_blocks():
+    output = [
+        {
+            "json": {
+                "res": {
+                    "parsing_res_list": [
+                        {
+                            "block_label": "table",
+                            "block_content": (
+                                "<table>"
+                                "<tr><td>공급자</td></tr>"
+                                "<tr><td>상호: (주)미래테크</td></tr>"
+                                "<tr><td>사업자번호: 123-45-67890</td></tr>"
+                                "<tr><td>당당: 김선영 / 회계팀</td></tr>"
+                                "</table>"
+                            ),
+                            "block_bbox": [100, 100, 300, 220],
+                        },
+                        {
+                            "block_label": "text",
+                            "block_content": "공급받는자\n상호: (주)시흥대야점\n작성일: 2026.06.07\n유효기간: 견적일로부터 14일",
+                            "block_bbox": [400, 100, 700, 220],
+                        },
+                        {
+                            "block_label": "table",
+                            "block_content": (
+                                "<table><tr><td>No</td><td>품목명</td><td>금액</td></tr>"
+                                "<tr><td>1</td><td>HDPE 포장필름</td><td>1,120,000</td></tr></table>"
+                            ),
+                            "block_bbox": [100, 240, 700, 420],
+                        },
+                    ]
+                }
+            }
+        }
+    ]
+
+    values = vl_worker_server._key_values_from_official_paddle_output(
+        output,
+        width=800,
+        height=500,
+        origin_x=0,
+        origin_y=200,
+        full_width=1000,
+        full_height=1400,
+    )
+
+    by_key = {item["key"]: item for item in values}
+    assert by_key["공급자 상호"]["value"] == "(주)미래테크"
+    assert by_key["공급자 사업자번호"]["value"] == "123-45-67890"
+    assert by_key["공급자 담당"]["value"] == "김선영 / 회계팀"
+    assert by_key["공급받는자 상호"]["value"] == "(주)시흥대야점"
+    assert by_key["작성일"]["value"] == "2026.06.07"
+    assert by_key["유효기간"]["value"] == "견적일로부터 14일"
+    assert "품목명" not in by_key
+    assert all(item["source"] == "vl_direct_key_value_bbox" for item in values)
+    assert all(item.get("bbox") and item.get("key_bbox") and item.get("value_bbox") for item in values)
+
+
 def test_vl_worker_analyze_upload_prefers_schema_prompt_json_tables(monkeypatch, tmp_path: Path):
     calls: list[dict] = []
     fake_pipeline = _FakePipeline()
