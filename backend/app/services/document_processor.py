@@ -931,37 +931,21 @@ class DocumentProcessor:
             "elapsed_ms": 0,
         }
         header_supplement: str | None = None
-        raw_text_document_number = self.parser._extract_document_number(text)
-        structured_document_number = self._vl_structured_document_number(metadata)
         document_profile = self.parser._manufacturing_profile(text)
-        if raw_text_document_number:
-            header_supplement_metadata["skipped_reason"] = "raw_text_document_number_found"
-        elif structured_document_number:
-            header_supplement_metadata["skipped_reason"] = "structured_candidate_document_number_found"
-            header_supplement_metadata["document_number_source"] = "vl_structured_candidate"
+        if document_profile in {"purchase_memo", "pos_daily_settlement", "receipt"}:
+            header_supplement_metadata["skipped_reason"] = "document_type_policy_document_number_optional"
+            header_supplement_metadata["document_profile"] = document_profile
+        elif not quality_page_images:
+            header_supplement_metadata["skipped_reason"] = "no_page_image_available"
         else:
-            ai_header_decision = self.ai_parsed_document_builder.should_skip_header_ocr(
-                raw_text=text,
-                document_type_hint=document_profile,
-            )
-            header_supplement_metadata["policy_decision"] = ai_header_decision
-            if ai_header_decision.get("skip"):
-                header_supplement_metadata["skipped_reason"] = str(ai_header_decision.get("reason") or "ai_parsed_document_policy_skip")
-                header_supplement_metadata["document_number_source"] = "ai_parsed_document_candidate" if ai_header_decision.get("candidate_count") else None
-            elif document_profile in {"purchase_memo", "pos_daily_settlement", "receipt"}:
-                header_supplement_metadata["skipped_reason"] = f"{document_profile}_document_number_optional"
-                header_supplement_metadata["document_profile"] = document_profile
-            elif not quality_page_images:
-                header_supplement_metadata["skipped_reason"] = "no_page_image_available"
-            else:
-                header_supplement_metadata["reason"] = "document_number_missing_in_vl_text_and_structured_candidate"
-                header_supplement_metadata["ocr_scope"] = "visible_header_only"
-                header_supplement_metadata["fallback_full_page_used"] = False
-                header_supplement, ocr_detail = self._vl_visual_header_ocr_supplement(text, quality_page_images)
-                header_supplement_metadata.update(ocr_detail)
-                header_supplement_metadata["used"] = bool(header_supplement)
-                if not header_supplement:
-                    header_supplement_metadata["skipped_reason"] = "ocr_supplement_no_document_number_found"
+            header_supplement_metadata["reason"] = "raw_key_value_header_bbox_supplement"
+            header_supplement_metadata["ocr_scope"] = "visible_header_only"
+            header_supplement_metadata["fallback_full_page_used"] = False
+            header_supplement, ocr_detail = self._vl_visual_header_ocr_supplement(text, quality_page_images)
+            header_supplement_metadata.update(ocr_detail)
+            header_supplement_metadata["used"] = bool(header_supplement)
+            if not header_supplement:
+                header_supplement_metadata["skipped_reason"] = "ocr_supplement_no_header_key_values_found"
         header_supplement_metadata.setdefault("ocr_scope", "none")
         header_supplement_metadata.setdefault("fallback_full_page_used", False)
         header_supplement_metadata["elapsed_ms"] = int(round((time.perf_counter() - header_supplement_started) * 1000))
@@ -981,6 +965,7 @@ class DocumentProcessor:
                 "type": "visual_header_ocr_supplement",
                 "provider": "paddleocr_ppocrv4",
                 "content": header_supplement[:4000],
+                "line_candidates": header_supplement_metadata.get("line_candidates") or [],
                 "scope": "visible_header_only",
                 "parser_integrated": True,
                 "confirmed_promotion": False,
@@ -1088,8 +1073,6 @@ class DocumentProcessor:
         }
         if not page_images:
             return None, detail
-        if self.parser._extract_document_number(vl_text):
-            return None, detail
         image_path = page_images[0]
         if not image_path.exists():
             return None, detail
@@ -1102,12 +1085,11 @@ class DocumentProcessor:
                 detail["last_error"] = str(exc)
                 continue
             lines = [line.strip() for line in str(result.text or "").splitlines() if line.strip()]
+            detail["line_candidates"] = getattr(result, "line_candidates", []) or []
             header_lines = self._visible_header_lines_only(lines)
             if not header_lines:
                 continue
             header_text = "\n".join(header_lines)
-            if not self.parser._extract_document_number(header_text):
-                continue
             return header_text, detail
         return None, detail
 
@@ -1133,7 +1115,7 @@ class DocumentProcessor:
     def _visible_header_lines_only(self, lines: list[str]) -> list[str]:
         header: list[str] = []
         for line in lines[:40]:
-            if re.search(r"(품목명|description|vendor\s+sku|unit\s+price|amount|공급가액|세액|합계|total\s+usd)", line, flags=re.IGNORECASE):
+            if re.search(r"(품목명|description|vendor\s+sku|unit\s+price|amount|공급가액|세액|total\s+usd)", line, flags=re.IGNORECASE):
                 break
             header.append(line)
         useful: list[str] = []
@@ -1144,7 +1126,7 @@ class DocumentProcessor:
                 keep_next -= 1
                 continue
             if re.search(
-                r"(문서번호|발행일|작성일|invoice\s*(?:no|number)|document\s*(?:no|number)|vendor|customer|공급업체|고객사|currency|통화)",
+                r"(문서번호|샘플번호|발행일|작성일|견적일|유효기간|invoice\s*(?:no|number)|document\s*(?:no|number)|vendor|customer|공급자|공급받는자|공급업체|고객사|사업자번호|상호|담당|currency|통화)",
                 line,
                 flags=re.IGNORECASE,
             ):

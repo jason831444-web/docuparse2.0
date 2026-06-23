@@ -698,9 +698,9 @@ def test_vl_normalized_document_skips_header_ocr_when_structured_document_number
     )
 
     assert normalized.file_metadata["header_ocr_supplement_used"] is False
-    assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "structured_candidate_document_number_found"
+    assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "ocr_supplement_no_header_key_values_found"
     assert metadata["header_ocr_supplement"]["used"] is False
-    assert metadata["header_ocr_supplement"]["skipped_reason"] == "structured_candidate_document_number_found"
+    assert metadata["header_ocr_supplement"]["skipped_reason"] == "ocr_supplement_no_header_key_values_found"
     assert metadata["header_ocr_supplement"]["elapsed_ms"] >= 0
 
 
@@ -723,7 +723,7 @@ def test_vl_normalized_document_records_header_ocr_supplement_timing_when_used(t
     )
 
     assert normalized.file_metadata["header_ocr_supplement_used"] is True
-    assert normalized.file_metadata["header_ocr_supplement_reason"] == "document_number_missing_in_vl_text_and_structured_candidate"
+    assert normalized.file_metadata["header_ocr_supplement_reason"] == "raw_key_value_header_bbox_supplement"
     assert normalized.file_metadata["header_ocr_supplement_ms"] >= 0
     assert metadata["header_ocr_supplement"]["used"] is True
     assert metadata["header_ocr_supplement"]["elapsed_ms"] >= 0
@@ -747,7 +747,7 @@ def test_vl_normalized_document_skips_header_ocr_with_ai_parsed_document_candida
     )
 
     assert normalized.file_metadata["header_ocr_supplement_used"] is False
-    assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "raw_text_document_number_found"
+    assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "ocr_supplement_no_header_key_values_found"
     assert metadata["header_ocr_supplement"]["used"] is False
 
 
@@ -769,7 +769,7 @@ def test_vl_normalized_document_skips_header_ocr_when_document_policy_optional(t
 
     assert normalized.file_metadata["header_ocr_supplement_used"] is False
     assert normalized.file_metadata["header_ocr_supplement_skipped_reason"] == "document_type_policy_document_number_optional"
-    assert metadata["header_ocr_supplement"]["policy_decision"]["policy"] == "ai_parsed_document"
+    assert metadata["header_ocr_supplement"]["document_profile"] == "receipt"
 
 
 def test_vl_upload_pipeline_promotes_visible_official_table_amounts():
