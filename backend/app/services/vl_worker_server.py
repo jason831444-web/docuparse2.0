@@ -567,23 +567,12 @@ def _full_page_vl_variants(image_path: Path, settings: Any) -> list[dict[str, An
     }
     if not _is_readable_image(image_path):
         return [original]
-    output_dir = Path(getattr(settings, "upload_dir", image_path.parent)) / "vl_full_page_variants"
-    preprocessor = ImagePreprocessor()
-    candidates = [
-        original,
-        preprocessor.prepare_light_page_vl_input(image_path, output_dir, avoid_page_crop=True),
-        preprocessor.prepare_standard_vl_input(image_path, output_dir),
-        preprocessor.prepare_contrast_only_vl_input(image_path, output_dir),
-    ]
-    variants: list[dict[str, Any]] = []
-    seen_paths: set[str] = set()
-    for candidate in candidates:
-        candidate_path = str(candidate.get("processed_path") or candidate.get("path") or "")
-        if not candidate_path or candidate_path in seen_paths or not Path(candidate_path).exists():
-            continue
-        seen_paths.add(candidate_path)
-        variants.append(candidate)
-    return variants or [original]
+    output_dir = Path(getattr(settings, "upload_dir", image_path.parent)) / "vl_page_crop_inputs"
+    candidate = ImagePreprocessor().prepare_document_page_crop_vl_input(image_path, output_dir)
+    candidate_path = str(candidate.get("processed_path") or candidate.get("path") or "")
+    if candidate_path and Path(candidate_path).exists():
+        return [candidate]
+    return [original]
 
 
 def _is_readable_image(image_path: Path) -> bool:

@@ -346,6 +346,82 @@ class ImagePreprocessor:
                 "metadata": metadata,
             }
 
+    def prepare_document_page_crop_vl_input(self, image_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
+        """Create a primary VL input by isolating the visible paper only.
+
+        This is a page-level crop/perspective correction, not a field/table
+        crop. It intentionally avoids contrast, denoise, sharpen, and
+        binarization so text fidelity stays close to the original photo.
+        """
+
+        path = Path(image_path)
+        if path.suffix.casefold() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+            return {
+                "variant_name": "original_file",
+                "original_path": str(path),
+                "processed_path": None,
+                "operations": ["page_crop_skipped_non_image"],
+                "warnings": [],
+                "metadata": {
+                    "page_crop_applied": False,
+                    "page_crop_confidence": 0.0,
+                    "skipped_reasons": ["non_image_input"],
+                },
+            }
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        operations: list[str] = ["document_page_crop_candidate", "no_text_enhancement"]
+        warnings: list[str] = [
+            "original_file_not_overwritten",
+            "page_level_crop_only_no_table_or_field_crop",
+            "no_contrast_denoise_sharpen_or_binarization_applied",
+        ]
+        skipped_reasons: list[str] = []
+        metadata: dict[str, Any] = {
+            "page_crop_applied": False,
+            "page_crop_confidence": 0.0,
+            "skipped_reasons": skipped_reasons,
+        }
+        try:
+            with Image.open(path) as opened:
+                image = opened.convert("RGB")
+            rectified, crop_info = self._light_page_rectify_full_page(image)
+            confidence = float(crop_info.get("confidence") or 0.0)
+            metadata["page_crop_confidence"] = round(confidence, 4)
+            metadata["page_crop_reason"] = crop_info.get("reason")
+            if rectified is None:
+                skipped_reasons.append(crop_info.get("reason") or "page_outline_confidence_too_low")
+                operations.append("page_crop_skipped_original_full_page_used")
+                processed = image
+                variant_name = "original_full_page"
+            else:
+                processed = rectified
+                variant_name = "document_page_crop"
+                metadata["page_crop_applied"] = True
+                metadata["page_crop_padding_ratio"] = crop_info.get("padding_ratio")
+                operations.append("high_confidence_page_level_perspective_crop_with_padding")
+            processed_path = output / f"{path.stem}-vl-page-crop.png"
+            processed.save(processed_path)
+            return {
+                "variant_name": variant_name,
+                "original_path": str(path),
+                "processed_path": str(processed_path),
+                "operations": operations,
+                "warnings": warnings,
+                "metadata": metadata,
+            }
+        except Exception as exc:
+            skipped_reasons.append("page_crop_preprocess_exception")
+            return {
+                "variant_name": "page_crop_unavailable",
+                "original_path": str(path),
+                "processed_path": None,
+                "operations": operations,
+                "warnings": warnings + ["vl_page_crop_preprocess_failed"],
+                "error": str(exc),
+                "metadata": metadata,
+            }
+
     def _perspective_rectify_full_page(self, image: Image.Image) -> Image.Image | None:
         try:
             import cv2

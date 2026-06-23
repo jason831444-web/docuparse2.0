@@ -230,3 +230,26 @@ def test_light_page_vl_input_skips_page_crop_when_hidden_risk(tmp_path):
     assert variant["metadata"]["page_crop_applied"] is False
     assert "hidden_or_cropped_column_risk_skip_page_crop" in variant["metadata"]["skipped_reasons"]
     assert "hidden_cropped_guardrail_no_page_crop_or_perspective" in variant["warnings"]
+
+
+def test_document_page_crop_vl_input_uses_page_outline_without_text_enhancement(tmp_path):
+    image = Image.new("RGB", (900, 1300), (58, 55, 52))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(130, 95), (785, 135), (810, 1170), (105, 1135)], fill=(238, 238, 234))
+    draw.text((220, 210), "견적서", fill=(45, 45, 45))
+    draw.text((220, 430), "문서번호: DOC-003", fill=(55, 55, 55))
+    source = tmp_path / "quotation-photo.jpg"
+    image.save(source)
+    before_bytes = source.read_bytes()
+
+    variant = ImagePreprocessor().prepare_document_page_crop_vl_input(source, tmp_path / "variants")
+
+    assert source.read_bytes() == before_bytes
+    assert variant["variant_name"] in {"document_page_crop", "original_full_page"}
+    assert variant["processed_path"]
+    assert Path(variant["processed_path"]).exists()
+    operations = set(variant["operations"])
+    assert "document_page_crop_candidate" in operations
+    assert "no_text_enhancement" in operations
+    assert not any("contrast" in operation or "sharpen" in operation or "denoise" in operation for operation in operations)
+    assert "page_level_crop_only_no_table_or_field_crop" in variant["warnings"]
