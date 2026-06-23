@@ -386,7 +386,7 @@ def test_raw_extraction_ocr_key_values_keep_line_bboxes():
 
     values = {item["key"]: item for item in snapshot["key_values"]}
     assert values["문서번호"]["value"] == "DOC-003"
-    assert values["문서번호"]["bbox_source"] == "ocr_line_candidate"
+    assert values["문서번호"]["bbox_source"] == "ocr_row_candidate"
     assert "normalized_bbox" in values["문서번호"]
     assert "key_bbox" in values["문서번호"]
     assert "value_bbox" in values["문서번호"]

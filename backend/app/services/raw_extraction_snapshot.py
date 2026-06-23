@@ -51,6 +51,7 @@ class RawExtractionSnapshotService:
             return
         scale_x = max([self._candidate_coord(candidate, "x_max") or 0 for candidate in line_candidates] + [1.0])
         scale_y = max([self._candidate_coord(candidate, "y_max") or 0 for candidate in line_candidates] + [1.0])
+        self._add_ocr_row_key_values(line_candidates, key_values, scale_x=scale_x, scale_y=scale_y)
         section: str | None = None
         for candidate in line_candidates:
             if not isinstance(candidate, dict):
@@ -76,6 +77,43 @@ class RawExtractionSnapshotService:
                     key_bbox=key_bbox,
                     value_bbox=value_bbox,
                     bbox_source="ocr_line_candidate",
+                )
+
+    def _add_ocr_row_key_values(
+        self,
+        line_candidates: list[dict[str, Any]],
+        key_values: list[dict[str, Any]],
+        *,
+        scale_x: float,
+        scale_y: float,
+    ) -> None:
+        section: str | None = None
+        for row in self._ocr_line_candidate_rows(line_candidates):
+            row_text = " ".join(str(item.get("text") or "").strip() for item in row if str(item.get("text") or "").strip())
+            if not row_text:
+                continue
+            section = self._key_value_section_from_line(row_text) or section
+            parsed_items = self._parse_key_value_line(row_text)
+            if not parsed_items:
+                continue
+            bbox = self._row_candidate_bbox(row, scale_x=scale_x, scale_y=scale_y)
+            page_index = next((item.get("page_index") or item.get("page") for item in row if item.get("page_index") or item.get("page")), None)
+            confidence_numbers = [value for value in (self._numeric_value(item.get("confidence")) for item in row) if value is not None]
+            confidence = round(sum(confidence_numbers) / len(confidence_numbers), 4) if confidence_numbers else None
+            for key, value, start, end in parsed_items:
+                item_bbox = self._slice_bbox_by_text_span(row_text, bbox, start, end)
+                key_bbox, value_bbox = self._split_key_value_bbox(row_text[start:end], key, item_bbox)
+                self._append_key_value(
+                    key_values,
+                    self._sectioned_key(section, key),
+                    value,
+                    "ocr_line_bbox",
+                    confidence=confidence,
+                    bbox=item_bbox,
+                    page_index=page_index,
+                    key_bbox=key_bbox,
+                    value_bbox=value_bbox,
+                    bbox_source="ocr_row_candidate",
                 )
 
     def _parse_key_value_line(self, text: str) -> list[tuple[str, str, int, int]]:
@@ -108,17 +146,27 @@ class RawExtractionSnapshotService:
 
     def _known_key_label_pattern(self) -> str:
         return (
-            r"문서\s*번호|샘플\s*번호|사업자\s*번호|작성일|발행일|견적일|유효\s*기간|"
-            r"납기일|요청일|담당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|예상\s*합계"
+            r"문서\s*번호|샘플\s*번호|팸플\s*번호|사업자\s*번호|사엽자\s*변호|작성일|발행일|견적일|유효\s*기간|"
+            r"납기일|요청일|담당|당당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|예상\s*합계"
         )
 
     def _clean_raw_key(self, value: str) -> str:
         value = re.sub(r"\s+", " ", str(value or "")).strip()
         value = re.sub(r"^(?:[-*•·]+\s*)+", "", value).strip()
-        return value
+        aliases = {
+            "팸플번호": "샘플번호",
+            "샘플 번호": "샘플번호",
+            "문서 번호": "문서번호",
+            "사엽자변호": "사업자번호",
+            "사업자 번호": "사업자번호",
+            "당당": "담당",
+        }
+        compact = re.sub(r"\s+", "", value)
+        return aliases.get(value) or aliases.get(compact) or value
 
     def _clean_raw_value(self, value: str) -> str:
         value = re.sub(r"\s+", " ", str(value or "")).strip()
+        value = re.sub(r"([A-Z]{2,})\s*-\s*([0-9])", r"\1-\2", value)
         return value.strip(" |")
 
     def _is_valid_raw_key_value(self, key: str, value: str) -> bool:
@@ -410,6 +458,50 @@ class RawExtractionSnapshotService:
             max(0.0, min(1.0, x2 / divisor_x)),
             max(0.0, min(1.0, y2 / divisor_y)),
         ]
+
+    def _ocr_line_candidate_rows(self, candidates: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        positioned = [
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, dict)
+            and self._candidate_coord(candidate, "y_min") is not None
+            and self._candidate_coord(candidate, "y_max") is not None
+        ]
+        positioned.sort(key=lambda item: ((self._candidate_coord(item, "y_min") or 0) + (self._candidate_coord(item, "y_max") or 0)) / 2)
+        rows: list[list[dict[str, Any]]] = []
+        for candidate in positioned:
+            center = ((self._candidate_coord(candidate, "y_min") or 0) + (self._candidate_coord(candidate, "y_max") or 0)) / 2
+            target = None
+            for row in rows:
+                row_center = sum(((self._candidate_coord(item, "y_min") or 0) + (self._candidate_coord(item, "y_max") or 0)) / 2 for item in row) / len(row)
+                if abs(row_center - center) <= 12:
+                    target = row
+                    break
+            if target is None:
+                rows.append([candidate])
+            else:
+                target.append(candidate)
+        for row in rows:
+            row.sort(key=lambda item: self._candidate_coord(item, "x_min") or 0)
+        return rows
+
+    def _row_candidate_bbox(self, row: list[dict[str, Any]], *, scale_x: float, scale_y: float) -> list[float] | None:
+        bboxes = [self._line_candidate_bbox(item, scale_x=scale_x, scale_y=scale_y) for item in row]
+        bboxes = [bbox for bbox in bboxes if bbox]
+        if not bboxes:
+            return None
+        return [
+            min(bbox[0] for bbox in bboxes),
+            min(bbox[1] for bbox in bboxes),
+            max(bbox[2] for bbox in bboxes),
+            max(bbox[3] for bbox in bboxes),
+        ]
+
+    def _numeric_value(self, value: object) -> float | None:
+        try:
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
 
     def _split_key_value_bbox(self, text: str, key: str, bbox: list[float] | None) -> tuple[list[float] | None, list[float] | None]:
         if not bbox:
