@@ -64,6 +64,8 @@ class RawExtractionSnapshotService:
             bbox = self._line_candidate_bbox(candidate, scale_x=scale_x, scale_y=scale_y)
             for key, value, start, end in parsed_items:
                 full_key = self._sectioned_key(section, key)
+                if self._has_existing_key_value_key(key_values, full_key, source="ocr_line_bbox"):
+                    continue
                 item_bbox = self._slice_bbox_by_text_span(text, bbox, start, end)
                 key_bbox, value_bbox = self._split_key_value_bbox(text[start:end], key, item_bbox)
                 self._append_key_value(
@@ -89,20 +91,9 @@ class RawExtractionSnapshotService:
     ) -> None:
         section: str | None = None
         for row in self._ocr_line_candidate_rows(line_candidates):
-            row_text = " ".join(str(item.get("text") or "").strip() for item in row if str(item.get("text") or "").strip())
-            if not row_text:
-                continue
-            section = self._key_value_section_from_line(row_text) or section
-            parsed_items = self._parse_key_value_line(row_text)
-            if not parsed_items:
-                continue
-            bbox = self._row_candidate_bbox(row, scale_x=scale_x, scale_y=scale_y)
-            page_index = next((item.get("page_index") or item.get("page") for item in row if item.get("page_index") or item.get("page")), None)
-            confidence_numbers = [value for value in (self._numeric_value(item.get("confidence")) for item in row) if value is not None]
-            confidence = round(sum(confidence_numbers) / len(confidence_numbers), 4) if confidence_numbers else None
-            for key, value, start, end in parsed_items:
-                item_bbox = self._slice_bbox_by_text_span(row_text, bbox, start, end)
-                key_bbox, value_bbox = self._split_key_value_bbox(row_text[start:end], key, item_bbox)
+            section = self._row_section_hint(row) or section
+            for parsed in self._parse_ocr_candidate_row(row, scale_x=scale_x, scale_y=scale_y):
+                key, value, item_bbox, key_bbox, value_bbox, confidence, page_index = parsed
                 self._append_key_value(
                     key_values,
                     self._sectioned_key(section, key),
@@ -115,6 +106,75 @@ class RawExtractionSnapshotService:
                     value_bbox=value_bbox,
                     bbox_source="ocr_row_candidate",
                 )
+
+    def _parse_ocr_candidate_row(
+        self,
+        row: list[dict[str, Any]],
+        *,
+        scale_x: float,
+        scale_y: float,
+    ) -> list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None, float | None, object]]:
+        tokens = [item for item in row if str(item.get("text") or "").strip()]
+        parsed: list[tuple[str, str, list[float] | None, list[float] | None, list[float] | None, float | None, object]] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            text = str(token.get("text") or "").strip()
+            next_index = index + 1
+            key: str | None = None
+            value_parts: list[str] = []
+            key_candidates = [token]
+            value_candidates: list[dict[str, Any]] = []
+
+            split = re.match(r"^\s*([^:：]{1,30})\s*[:：]\s*(.*)$", text)
+            if split and self._is_known_raw_key(split.group(1)):
+                if re.search(rf"\s(?:{self._known_key_label_pattern()})\s*[:：]", split.group(2), flags=re.IGNORECASE):
+                    index += 1
+                    continue
+                key = self._clean_raw_key(split.group(1))
+                if split.group(2).strip():
+                    value_parts.append(split.group(2).strip())
+                    value_candidates.append(token)
+            elif self._is_known_raw_key(text):
+                key = self._clean_raw_key(text)
+            elif self._looks_like_expected_total_key(tokens, index):
+                key = "예상 합계"
+                key_candidates = tokens[index : index + 2]
+                next_index = index + 2
+
+            if not key:
+                index += 1
+                continue
+
+            while next_index < len(tokens):
+                next_token = tokens[next_index]
+                next_text = str(next_token.get("text") or "").strip()
+                if not next_text:
+                    next_index += 1
+                    continue
+                if self._key_value_section_from_line(next_text) or self._is_known_raw_key_token(next_text):
+                    break
+                if value_candidates and self._candidate_gap(value_candidates[-1], next_token) > 90:
+                    break
+                if not value_candidates and self._candidate_gap(key_candidates[-1], next_token) > 90:
+                    break
+                if not self._should_attach_value_token(key, value_parts, next_text):
+                    break
+                value_parts.append(next_text)
+                value_candidates.append(next_token)
+                next_index += 1
+
+            value = self._clean_raw_value(" ".join(value_parts))
+            if self._is_valid_raw_key_value(key, value):
+                item_candidates = key_candidates + value_candidates
+                item_bbox = self._row_candidate_bbox(item_candidates, scale_x=scale_x, scale_y=scale_y)
+                key_bbox = self._row_candidate_bbox(key_candidates, scale_x=scale_x, scale_y=scale_y)
+                value_bbox = self._row_candidate_bbox(value_candidates, scale_x=scale_x, scale_y=scale_y)
+                confidence = self._average_candidate_confidence(item_candidates)
+                page_index = next((item.get("page_index") or item.get("page") for item in item_candidates if item.get("page_index") or item.get("page")), None)
+                parsed.append((key, value, item_bbox, key_bbox, value_bbox, confidence, page_index))
+            index = max(next_index, index + 1)
+        return parsed
 
     def _parse_key_value_line(self, text: str) -> list[tuple[str, str, int, int]]:
         if not text or len(text) > 160:
@@ -195,6 +255,58 @@ class RawExtractionSnapshotService:
         if section and key in {"상호", "사업자번호", "담당", "대표자", "주소"}:
             return f"{section} {key}"
         return key
+
+    def _is_known_raw_key(self, text: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(text or "")).strip(":：")
+        known = {
+            "문서번호",
+            "샘플번호",
+            "팸플번호",
+            "사업자번호",
+            "사엽자변호",
+            "작성일",
+            "발행일",
+            "견적일",
+            "유효기간",
+            "납기일",
+            "요청일",
+            "담당",
+            "당당",
+            "상호",
+            "입고창고",
+            "출고창고",
+            "요청부서",
+            "예상합계",
+        }
+        return normalized in known
+
+    def _is_known_raw_key_token(self, text: str) -> bool:
+        stripped = str(text or "").strip()
+        split = re.match(r"^\s*([^:：]{1,30})\s*[:：]", stripped)
+        return self._is_known_raw_key(split.group(1) if split else stripped)
+
+    def _looks_like_expected_total_key(self, tokens: list[dict[str, Any]], index: int) -> bool:
+        current = re.sub(r"\s+", "", str(tokens[index].get("text") or ""))
+        next_text = re.sub(r"\s+", "", str(tokens[index + 1].get("text") or "")) if index + 1 < len(tokens) else ""
+        return current == "예상" and next_text == "합계"
+
+    def _should_attach_value_token(self, key: str, value_parts: list[str], text: str) -> bool:
+        normalized_key = re.sub(r"\s+", "", key)
+        normalized_text = str(text or "").strip()
+        if normalized_key == "문서번호":
+            candidate = self._clean_raw_value(" ".join([*value_parts, normalized_text]))
+            return bool(re.fullmatch(r"[A-Za-z]{1,10}(?:-\d{1,10})?|-?\d{1,10}", candidate))
+        if normalized_key in {"작성일", "발행일", "견적일", "납기일", "요청일"}:
+            return not value_parts and bool(re.fullmatch(r"\d{4}[./-]?\d{2}[./-]?\d{2}", normalized_text))
+        if normalized_key in {"샘플번호", "팸플번호"}:
+            return not value_parts and bool(re.fullmatch(r"[A-Za-z0-9-]{1,20}", normalized_text))
+        if normalized_key in {"사업자번호", "사엽자변호"}:
+            return not value_parts and bool(re.fullmatch(r"\d{3}-?\d{2}-?\d{5}", normalized_text))
+        if normalized_key == "예상합계":
+            return not value_parts and bool(re.fullmatch(r"[0-9][0-9,]*(?:\.[0-9]+)?", normalized_text))
+        if len(value_parts) >= 3:
+            return False
+        return True
 
     def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]]) -> None:
         section: str | None = None
@@ -387,6 +499,16 @@ class RawExtractionSnapshotService:
     def _key_value_identity(self, item: dict[str, Any]) -> str:
         return "|".join(str(item.get(key) or "") for key in ("key", "source", "role", "section"))
 
+    def _has_existing_key_value_key(self, key_values: list[dict[str, Any]], key: str, *, source: str | None = None) -> bool:
+        normalized = re.sub(r"\s+", " ", str(key or "")).strip().casefold()
+        for item in key_values:
+            if source and item.get("source") != source:
+                continue
+            item_key = re.sub(r"\s+", " ", str(item.get("key") or "")).strip().casefold()
+            if item_key == normalized:
+                return True
+        return False
+
     def _append_key_value(
         self,
         key_values: list[dict[str, Any]],
@@ -474,7 +596,7 @@ class RawExtractionSnapshotService:
             target = None
             for row in rows:
                 row_center = sum(((self._candidate_coord(item, "y_min") or 0) + (self._candidate_coord(item, "y_max") or 0)) / 2 for item in row) / len(row)
-                if abs(row_center - center) <= 12:
+                if abs(row_center - center) <= 8:
                     target = row
                     break
             if target is None:
@@ -496,6 +618,24 @@ class RawExtractionSnapshotService:
             max(bbox[2] for bbox in bboxes),
             max(bbox[3] for bbox in bboxes),
         ]
+
+    def _row_section_hint(self, row: list[dict[str, Any]]) -> str | None:
+        for item in row:
+            section = self._key_value_section_from_line(str(item.get("text") or ""))
+            if section:
+                return section
+        return None
+
+    def _candidate_gap(self, left: dict[str, Any], right: dict[str, Any]) -> float:
+        left_x = self._candidate_coord(left, "x_max")
+        right_x = self._candidate_coord(right, "x_min")
+        if left_x is None or right_x is None:
+            return 0.0
+        return right_x - left_x
+
+    def _average_candidate_confidence(self, candidates: list[dict[str, Any]]) -> float | None:
+        confidence_numbers = [value for value in (self._numeric_value(item.get("confidence")) for item in candidates) if value is not None]
+        return round(sum(confidence_numbers) / len(confidence_numbers), 4) if confidence_numbers else None
 
     def _numeric_value(self, value: object) -> float | None:
         try:

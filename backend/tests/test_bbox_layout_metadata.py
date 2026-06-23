@@ -386,9 +386,39 @@ def test_raw_extraction_ocr_key_values_keep_line_bboxes():
 
     values = {item["key"]: item for item in snapshot["key_values"]}
     assert values["문서번호"]["value"] == "DOC-003"
-    assert values["문서번호"]["bbox_source"] == "ocr_row_candidate"
+    assert values["문서번호"]["bbox_source"] == "ocr_line_candidate"
     assert "normalized_bbox" in values["문서번호"]
     assert "key_bbox" in values["문서번호"]
     assert "value_bbox" in values["문서번호"]
     assert values["샘플번호"]["value"] == "003"
     assert values["공급자 상호"]["value"] == "(주)미래테크"
+
+
+def test_raw_extraction_ocr_row_key_values_merge_nearby_value_tokens():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        raw_text="",
+    )
+
+    snapshot = RawExtractionSnapshotService().build(
+        document,
+        source="processing_pipeline",
+        line_candidates=[
+            {"text": "문서번호:DOC", "x_min": 100, "y_min": 100, "x_max": 190, "y_max": 120, "confidence": 0.9},
+            {"text": "-003", "x_min": 192, "y_min": 99, "x_max": 230, "y_max": 119, "confidence": 0.9},
+            {"text": "Quotation", "x_min": 420, "y_min": 101, "x_max": 500, "y_max": 121, "confidence": 0.9},
+            {"text": "작성일", "x_min": 500, "y_min": 150, "x_max": 550, "y_max": 170, "confidence": 0.9},
+            {"text": "20260607", "x_min": 552, "y_min": 149, "x_max": 630, "y_max": 169, "confidence": 0.9},
+            {"text": "상호:", "x_min": 100, "y_min": 200, "x_max": 150, "y_max": 220, "confidence": 0.9},
+            {"text": "(주)미래테크", "x_min": 152, "y_min": 199, "x_max": 260, "y_max": 219, "confidence": 0.9},
+            {"text": "금액", "x_min": 500, "y_min": 201, "x_max": 540, "y_max": 221, "confidence": 0.9},
+        ],
+    )
+
+    values = {item["key"]: item for item in snapshot["key_values"]}
+    assert values["문서번호"]["value"] == "DOC-003"
+    assert values["문서번호"]["bbox_source"] == "ocr_row_candidate"
+    assert values["작성일"]["value"] == "20260607"
+    assert values["상호"]["value"] == "(주)미래테크"
