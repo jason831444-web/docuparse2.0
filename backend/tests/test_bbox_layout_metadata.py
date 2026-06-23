@@ -262,3 +262,40 @@ def test_raw_extraction_prefers_direct_vl_key_value_bbox_over_ocr_line_bbox():
     assert matches[0]["normalized_bbox"] == [0.1, 0.1, 0.3, 0.13]
     assert matches[0]["key_bbox"] == [0.1, 0.1, 0.18, 0.13]
     assert matches[0]["value_bbox"] == [0.19, 0.1, 0.3, 0.13]
+
+
+def test_raw_extraction_table_preserves_raw_columns_for_raw_rows():
+    document = Document(
+        original_filename="quote.pdf",
+        stored_file_path="/tmp/quote.pdf",
+        mime_type="application/pdf",
+        line_items=[{"item_name": "정규화 품목", "quantity": 99}],
+        workflow_metadata={
+            "vl_candidates": [
+                {
+                    "tables": [
+                        {
+                            "table_type": "line_items",
+                            "source": "paddleocrvl_official_table_html",
+                            "raw_columns": ["No", "품목명", "규격/코드", "수량"],
+                            "raw_rows": [["1", "HDPE 포장필름", "FILM-HDPE", "20"]],
+                            "rows": [
+                                {
+                                    "no": 1,
+                                    "item_name": "HDPE 포장필름",
+                                    "document_item_code": "FILM-HDPE",
+                                    "quantity": 20,
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        },
+    )
+
+    snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+
+    assert snapshot["tables"][0]["columns"] == ["No", "품목명", "규격/코드", "수량"]
+    assert snapshot["tables"][0]["rows"] == [{"No": "1", "품목명": "HDPE 포장필름", "규격/코드": "FILM-HDPE", "수량": "20"}]
+    assert snapshot["tables"][0]["raw_rows"] == [["1", "HDPE 포장필름", "FILM-HDPE", "20"]]

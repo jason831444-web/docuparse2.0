@@ -25,7 +25,9 @@ class RawExtractionSnapshotService:
     ) -> dict[str, Any]:
         metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
         key_values: list[dict[str, Any]] = []
-        tables = self._reviewed_line_item_tables(document) or self._raw_tables(metadata)
+        raw_tables = self._raw_tables(metadata)
+        reviewed_tables = self._reviewed_line_item_tables(document)
+        tables = reviewed_tables or raw_tables if source in {"manual_update", "confirmed_review"} else raw_tables or reviewed_tables
         existing_key_values = self._existing_key_values(metadata)
         if reviewed_key_values is not None:
             key_values = self._reviewed_key_values(existing_key_values, reviewed_key_values)
@@ -210,13 +212,20 @@ class RawExtractionSnapshotService:
                 if key in seen:
                     continue
                 seen.add(key)
-                tables.append({
+                table_record = {
                     "table_type": table.get("table_type") or "table",
                     "source": table.get("source") or "unknown",
                     "columns": columns,
                     "rows": raw_rows,
                     "row_count": len(raw_rows),
-                })
+                }
+                raw_columns = table.get("raw_columns") if isinstance(table.get("raw_columns"), list) else []
+                source_raw_rows = table.get("raw_rows") if isinstance(table.get("raw_rows"), list) else []
+                if raw_columns:
+                    table_record["raw_columns"] = [self._json_value(value) for value in raw_columns]
+                if source_raw_rows:
+                    table_record["raw_rows"] = [self._json_value(value) for value in source_raw_rows]
+                tables.append(table_record)
         return tables
 
     def _reviewed_line_item_tables(self, document: Document) -> list[dict[str, Any]]:
@@ -265,13 +274,19 @@ class RawExtractionSnapshotService:
     def _table_rows(self, table: dict[str, Any]) -> list[dict[str, Any]]:
         rows = table.get("rows") if isinstance(table.get("rows"), list) else []
         raw_rows = table.get("raw_rows") if isinstance(table.get("raw_rows"), list) else []
+        raw_columns = table.get("raw_columns") if isinstance(table.get("raw_columns"), list) else []
+        columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+        source_columns = [str(column) for column in raw_columns or columns if str(column).strip()]
         normalized: list[dict[str, Any]] = []
         if raw_rows:
             for row in raw_rows:
                 if isinstance(row, dict):
                     normalized.append({str(key): self._json_value(value) for key, value in row.items()})
                 elif isinstance(row, list):
-                    normalized.append({str(index + 1): self._json_value(value) for index, value in enumerate(row)})
+                    normalized.append({
+                        source_columns[index] if index < len(source_columns) else str(index + 1): self._json_value(value)
+                        for index, value in enumerate(row)
+                    })
         if normalized:
             return normalized
         for row in rows:

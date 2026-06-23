@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkflowPanel } from "@/components/workflow-panel";
 import { api, documentFileUrl } from "@/lib/api";
-import { cleanLineItemValue, cleanLineItems, lineItemFieldLabel, numericLineItemFields } from "@/lib/line-items";
+import { cleanLineItemValue, cleanLineItems, numericLineItemFields } from "@/lib/line-items";
 import { isLiveProcessingStatus, useDocumentsChanged } from "@/lib/realtime";
 import { blockingReviewIssues, businessColumnLabel, businessFieldDate, documentDisplayTitle, documentFieldLabels, documentProfileLabel, documentReviewMetadata, documentSubtypeLabel, documentSummaryDetailed, documentTaxonomy, extractionMethodLabel, formatDateTime, getDocumentScheduleDate, getErpReadinessStatus, getErpReadinessSummary, groupedReviewIssues, informationalReviewIssues, layoutDebugMetadata, layoutProfileLabel, primaryCategoryLabel, profileLabelForDocument, reviewIssueAmountLines, reviewIssueDescription, reviewIssueProgressCounts, reviewIssueSummary, reviewIssueSummaryItems, taxonomyPolicyLines, titleCaseLabel } from "@/lib/utils";
 import type { AiParsedDocument, AiParsedField, AiParsedSection, AiParsedTableRow, DocumentListResponse, DocumentRecord, DocumentUpdate, ExportTemplateRecord, FolderSummary, ManufacturingLineItem, PosSettlementSummary, ReviewCandidate } from "@/types/document";
@@ -314,6 +314,19 @@ function officialTableEntries(document: DocumentRecord): Array<Record<string, un
   });
 }
 
+function rawExtractionTableEntries(document: DocumentRecord): Array<Record<string, unknown>> {
+  const metadata = readRecord(document.workflow_metadata);
+  const rawExtraction = readRecord(metadata.raw_extraction);
+  return Array.isArray(rawExtraction.tables)
+    ? rawExtraction.tables.map((table) => readRecord(table)).filter((table) => Array.isArray(table.rows))
+    : [];
+}
+
+function rawEditableTableEntries(document: DocumentRecord): Array<Record<string, unknown>> {
+  const rawTables = rawExtractionTableEntries(document);
+  return rawTables.length ? rawTables : officialTableEntries(document);
+}
+
 function officialTableRowCount(table: Record<string, unknown>): number {
   if (typeof table.row_count === "number") return table.row_count;
   return Array.isArray(table.rows) ? table.rows.length : 0;
@@ -399,7 +412,7 @@ function rawTableFieldForColumn(column: string): string {
 }
 
 function rawLineItemsFromOfficialTables(document: DocumentRecord): ManufacturingLineItem[] {
-  const table = officialTableEntries(document)[0];
+  const table = rawEditableTableEntries(document)[0];
   if (!table) return [];
   const rows = rawOfficialTableRows(table);
   const columns = rawOfficialTableColumns(table, rows);
@@ -416,7 +429,7 @@ function rawLineItemsFromOfficialTables(document: DocumentRecord): Manufacturing
 }
 
 function rawEditorColumns(document: DocumentRecord, items: ManufacturingLineItem[]): string[] {
-  const table = officialTableEntries(document)[0];
+  const table = rawEditableTableEntries(document)[0];
   if (table) {
     const rows = rawOfficialTableRows(table);
     const columns = rawOfficialTableColumns(table, rows);
@@ -634,7 +647,7 @@ function EditableRawExtractedTable({
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   {columns.map((column) => (
-                    <th key={column} className="whitespace-nowrap border-b px-2 py-2 font-medium">{lineItemFieldLabel(rawTableFieldForColumn(column))}</th>
+                    <th key={column} className="whitespace-nowrap border-b px-2 py-2 font-medium">{column}</th>
                   ))}
                   <th className="w-16 whitespace-nowrap border-b px-2 py-2 text-right font-medium">삭제</th>
                 </tr>
