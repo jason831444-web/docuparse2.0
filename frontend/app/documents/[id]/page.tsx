@@ -318,7 +318,7 @@ function rawExtractionTableEntries(document: DocumentRecord): Array<Record<strin
   const metadata = readRecord(document.workflow_metadata);
   const rawExtraction = readRecord(metadata.raw_extraction);
   return Array.isArray(rawExtraction.tables)
-    ? rawExtraction.tables.map((table) => readRecord(table)).filter((table) => Array.isArray(table.rows))
+    ? rawExtraction.tables.map((table) => readRecord(table)).filter((table) => Array.isArray(table.rows) && table.source !== "user_reviewed_line_items")
     : [];
 }
 
