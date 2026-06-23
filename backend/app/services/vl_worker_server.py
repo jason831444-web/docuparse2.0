@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, UploadFile
+from PIL import Image
 from pydantic import BaseModel
 import requests
 
@@ -322,6 +323,7 @@ def _analyze_path(
             output = _predict_with_optional_paddle_schema_prompt(image_path, settings)
         text = extract_text(output)
         tables = _tables_from_official_paddle_output(output, text, original_filename=original_filename or path.name)
+        key_values = _key_values_from_official_paddle_output(output, image_path=image_path)
         schema_metadata["official_table_count"] = len(tables)
         if schema_metadata["enabled"]:
             prompt_payload, prompt_metadata = _run_schema_prompt_inference(image_path, settings)
@@ -382,6 +384,14 @@ def _analyze_path(
                 schema_payload,
                 source=schema_metadata.get("key_value_source") or schema_metadata.get("table_source") or "vl_schema_prompt",
             )
+        if schema_payload and key_values:
+            key_values = _dedupe_key_values([
+                *key_values,
+                *_key_values_from_schema_payload(
+                    schema_payload,
+                    source=schema_metadata.get("key_value_source") or schema_metadata.get("table_source") or "vl_schema_prompt",
+                ),
+            ])
         validation = validate_output_text(text, [])
         official_table_available = bool(tables)
         key_value_available = bool(key_values)
@@ -787,6 +797,143 @@ def _tables_from_official_paddle_output(output: Any, text: str, *, original_file
         if isinstance(quality, dict):
             quality["table_count"] = table_count
     return tables
+
+
+def _key_values_from_official_paddle_output(output: Any, *, image_path: Path) -> list[dict[str, Any]]:
+    width, height = _image_size(image_path)
+    key_values: list[dict[str, Any]] = []
+    for block in _official_parsing_blocks(output):
+        label = str(block.get("block_label") or "").casefold()
+        if label == "table":
+            continue
+        text = _clean_cell(str(block.get("block_content") or ""))
+        if not text:
+            continue
+        bbox = _normalize_official_block_bbox(block, width=width, height=height)
+        for key, value, start, end in _parse_official_key_value_text(text):
+            item_bbox = _slice_normalized_bbox_by_span(text, bbox, start, end)
+            key_bbox, value_bbox = _split_normalized_key_value_bbox(text[start:end], key, item_bbox)
+            item = {
+                "key": key,
+                "value": value,
+                "source": "vl_direct_key_value_bbox",
+                "vl_source": "paddleocrvl_official_text_block",
+                "bbox": item_bbox,
+                "key_bbox": key_bbox,
+                "value_bbox": value_bbox,
+                "page_index": 0,
+            }
+            key_values.append({field: field_value for field, field_value in item.items() if field_value not in (None, "", [])})
+    return _dedupe_key_values(key_values)
+
+
+def _image_size(image_path: Path) -> tuple[int, int]:
+    try:
+        with Image.open(image_path) as image:
+            return max(1, int(image.width)), max(1, int(image.height))
+    except Exception:
+        return 1, 1
+
+
+def _parse_official_key_value_text(text: str) -> list[tuple[str, str, int, int]]:
+    known_label_pattern = (
+        r"문서\s*번호|샘플\s*번호|사업자\s*번호|작성일|발행일|견적일|유효\s*기간|"
+        r"납기일|요청일|담당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|예상\s*합계|"
+        r"합계\s*금액|총\s*합계|TOTAL(?:\s+[A-Z]+)?"
+    )
+    items: list[tuple[str, str, int, int]] = []
+    colon_matches = list(re.finditer(rf"(?:(?<=^)|(?<=\s))({known_label_pattern})\s*[:：]\s*", text, flags=re.IGNORECASE))
+    for index, match in enumerate(colon_matches):
+        value_start = match.end()
+        value_end = colon_matches[index + 1].start() if index + 1 < len(colon_matches) else len(text)
+        key = _clean_official_key(match.group(1))
+        value = _clean_cell(text[value_start:value_end])
+        if _valid_official_key_value(key, value):
+            items.append((key, value, match.start(), value_end))
+    if items:
+        return items
+    match = re.match(rf"^\s*({known_label_pattern})\s+(.{{1,80}}?)\s*$", text, flags=re.IGNORECASE)
+    if not match:
+        return []
+    key = _clean_official_key(match.group(1))
+    value = _clean_cell(match.group(2))
+    return [(key, value, match.start(1), match.end(2))] if _valid_official_key_value(key, value) else []
+
+
+def _clean_official_key(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _valid_official_key_value(key: str, value: str) -> bool:
+    if not key or not value:
+        return False
+    if len(key) > 40 or len(value) > 120:
+        return False
+    if key in {"문서유형", "제목", "통화"}:
+        return False
+    return True
+
+
+def _normalize_official_block_bbox(block: dict[str, Any], *, width: int, height: int) -> list[float] | None:
+    bbox = block.get("block_bbox")
+    if isinstance(bbox, list) and len(bbox) >= 4:
+        try:
+            x1, y1, x2, y2 = [float(value) for value in bbox[:4]]
+            return _clamp_normalized_bbox([x1 / width, y1 / height, x2 / width, y2 / height])
+        except (TypeError, ValueError):
+            pass
+    points = block.get("block_polygon_points")
+    if isinstance(points, list) and points:
+        try:
+            xs = [float(point[0]) for point in points if isinstance(point, (list, tuple)) and len(point) >= 2]
+            ys = [float(point[1]) for point in points if isinstance(point, (list, tuple)) and len(point) >= 2]
+        except (TypeError, ValueError):
+            return None
+        if xs and ys:
+            return _clamp_normalized_bbox([min(xs) / width, min(ys) / height, max(xs) / width, max(ys) / height])
+    return None
+
+
+def _slice_normalized_bbox_by_span(text: str, bbox: list[float] | None, start: int, end: int) -> list[float] | None:
+    if not bbox:
+        return None
+    length = max(len(text), 1)
+    span_start = max(0.0, min(1.0, start / length))
+    span_end = max(span_start, min(1.0, end / length))
+    width = bbox[2] - bbox[0]
+    return _clamp_normalized_bbox([
+        bbox[0] + width * span_start,
+        bbox[1],
+        bbox[0] + width * span_end,
+        bbox[3],
+    ])
+
+
+def _split_normalized_key_value_bbox(text: str, key: str, bbox: list[float] | None) -> tuple[list[float] | None, list[float] | None]:
+    if not bbox:
+        return None, None
+    separator_index = max(text.find(":"), text.find("："))
+    if separator_index < 0:
+        separator_index = len(key)
+    denominator = max(len(text), 1)
+    split = bbox[0] + (bbox[2] - bbox[0]) * min(0.85, max(0.15, (separator_index + 1) / denominator))
+    return _clamp_normalized_bbox([bbox[0], bbox[1], split, bbox[3]]), _clamp_normalized_bbox([split, bbox[1], bbox[2], bbox[3]])
+
+
+def _clamp_normalized_bbox(bbox: list[float]) -> list[float]:
+    return [round(max(0.0, min(1.0, float(value))), 6) for value in bbox]
+
+
+def _dedupe_key_values(key_values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for item in key_values:
+        identity = (str(item.get("key") or "").casefold(), str(item.get("value") or ""))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(item)
+    return result
 
 
 def _official_table_quality(

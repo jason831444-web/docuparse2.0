@@ -400,6 +400,7 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
         ),
     )
     monkeypatch.setattr(vl_worker_server, "_get_pipeline", lambda: fake_pipeline)
+    monkeypatch.setattr(vl_worker_server, "_image_size", lambda image_path: (2074, 2878))
     monkeypatch.setattr(
         vl_worker_server,
         "validate_output_text",
@@ -416,8 +417,16 @@ def test_vl_worker_analyze_upload_returns_structured_inspection_tables(monkeypat
     payload = response.json()
     assert payload["ok"] is True
     assert payload["structured_schema"]["version"] == "docparse_vl_table_schema_v1"
+    assert "key_values" in payload["structured_schema"]["response_fields"]
     assert payload["schema_prompt"]["transport"] == "paddleocrvl_predict_official_result"
     assert payload["schema_prompt"]["prompt_bypassed"] is True
+    assert payload["key_values"][0]["key"] == "문서번호"
+    assert payload["key_values"][0]["value"] == "DOC-001"
+    assert payload["key_values"][0]["source"] == "vl_direct_key_value_bbox"
+    assert payload["key_values"][0]["vl_source"] == "paddleocrvl_official_text_block"
+    assert payload["key_values"][0]["bbox"]
+    assert payload["key_values"][0]["key_bbox"]
+    assert payload["key_values"][0]["value_bbox"]
     assert payload["tables"][0]["table_type"] == "incoming_inspection"
     assert payload["tables"][0]["source"] == "paddleocrvl_official_table_html"
     assert payload["tables"][0]["review_required"] is True
