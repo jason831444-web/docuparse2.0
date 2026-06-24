@@ -403,6 +403,36 @@ def test_raw_extraction_prefers_vl_raw_text_key_values_before_ocr_fallback():
     assert values["유효기간"]["source"] == "vl_raw_text_key_value"
 
 
+def test_raw_extraction_builds_vl_raw_text_key_values_from_split_lines():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "공급받는자",
+                "공급자",
+                "상호:",
+                "주시흥대야점",
+                "작성일",
+                "20260607",
+                "상호:주미래테크",
+            ]
+        ),
+    )
+
+    snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {item["key"]: item for item in snapshot["key_values"]}
+
+    assert values["공급받는자 상호"]["value"] == "주시흥대야점"
+    assert values["공급받는자 상호"]["source"] == "vl_raw_text_key_value"
+    assert values["작성일"]["value"] == "20260607"
+    assert values["작성일"]["source"] == "vl_raw_text_key_value"
+    assert values["공급자 상호"]["value"] == "주미래테크"
+    assert values["공급자 상호"]["source"] == "vl_raw_text_key_value"
+
+
 def test_raw_extraction_ocr_key_values_keep_line_bboxes():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",

@@ -311,11 +311,9 @@ class RawExtractionSnapshotService:
         return True
 
     def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]], *, source: str = RAW_TEXT_KEY_VALUE_SOURCE) -> None:
+        lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
         section: str | None = None
-        for raw_line in str(raw_text or "").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
+        for line in lines:
             section = self._key_value_section_from_line(line) or section
             for key, value, _start, _end in self._parse_key_value_line(line):
                 full_key = self._sectioned_key(section, key)
@@ -328,6 +326,7 @@ class RawExtractionSnapshotService:
                     source,
                     section=section,
                 )
+        self._add_raw_text_split_line_key_values(lines, key_values, source=source)
 
     def _raw_text_key_value_source(self, document: Document) -> str:
         method = str(getattr(document, "extraction_method", "") or "").casefold()
@@ -336,6 +335,51 @@ class RawExtractionSnapshotService:
         if "vl" in method or "paddle" in method or vl_metadata:
             return VL_RAW_TEXT_KEY_VALUE_SOURCE
         return RAW_TEXT_KEY_VALUE_SOURCE
+
+    def _add_raw_text_split_line_key_values(self, lines: list[str], key_values: list[dict[str, Any]], *, source: str) -> None:
+        section: str | None = None
+        pending_sections: list[str] = []
+        for index, line in enumerate(lines):
+            line_section = self._key_value_section_from_line(line)
+            if line_section:
+                section = line_section
+                pending_sections.append(line_section)
+                continue
+            key = self._raw_text_split_line_key(line)
+            if not key:
+                continue
+            value = self._raw_text_split_line_value(lines, index + 1)
+            if not value or not self._is_valid_raw_key_value(key, value):
+                continue
+            target_section = section
+            if key in {"상호", "사업자번호", "담당", "대표자", "주소"} and pending_sections:
+                target_section = pending_sections.pop(0)
+            full_key = self._sectioned_key(target_section, key)
+            if self._has_existing_key_value_key(key_values, full_key):
+                continue
+            self._append_key_value(
+                key_values,
+                full_key,
+                value,
+                source,
+                section=target_section,
+            )
+
+    def _raw_text_split_line_key(self, line: str) -> str | None:
+        split = re.match(r"^\s*([^:：]{1,30})\s*[:：]\s*$", line)
+        candidate = split.group(1) if split else line
+        return self._clean_raw_key(candidate) if self._is_known_raw_key(candidate) else None
+
+    def _raw_text_split_line_value(self, lines: list[str], start_index: int) -> str | None:
+        for next_line in lines[start_index : start_index + 3]:
+            if self._key_value_section_from_line(next_line) or self._raw_text_split_line_key(next_line):
+                return None
+            if self._parse_key_value_line(next_line):
+                return None
+            value = self._clean_raw_value(next_line)
+            if value:
+                return value
+        return None
 
     def _add_vl_direct_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
         for candidate in self._vl_candidates(metadata):
