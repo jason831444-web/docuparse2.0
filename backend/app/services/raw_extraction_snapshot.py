@@ -9,6 +9,7 @@ from app.models.document import Document
 
 
 VL_KEY_VALUE_SOURCE = "vl_key_value"
+VL_RAW_TEXT_KEY_VALUE_SOURCE = "vl_raw_text_key_value"
 OCR_KEY_VALUE_SOURCE = "ocr_key_value"
 RAW_TEXT_KEY_VALUE_SOURCE = "raw_text_key_value"
 
@@ -41,8 +42,9 @@ class RawExtractionSnapshotService:
         else:
             self._add_vl_direct_key_values(metadata, key_values)
             key_values = self._dedupe_key_values(key_values)
+            self._add_raw_text_key_values(document.raw_text, key_values, source=self._raw_text_key_value_source(document))
+            key_values = self._dedupe_key_values(key_values)
             self._add_ocr_line_key_values(line_candidates or [], key_values)
-            self._add_raw_text_key_values(document.raw_text, key_values)
         key_values = self._plain_key_values(self._dedupe_key_values(key_values))
 
         return {
@@ -308,7 +310,7 @@ class RawExtractionSnapshotService:
             return False
         return True
 
-    def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]]) -> None:
+    def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]], *, source: str = RAW_TEXT_KEY_VALUE_SOURCE) -> None:
         section: str | None = None
         for raw_line in str(raw_text or "").splitlines():
             line = raw_line.strip()
@@ -323,9 +325,17 @@ class RawExtractionSnapshotService:
                     key_values,
                     full_key,
                     value,
-                    RAW_TEXT_KEY_VALUE_SOURCE,
+                    source,
                     section=section,
                 )
+
+    def _raw_text_key_value_source(self, document: Document) -> str:
+        method = str(getattr(document, "extraction_method", "") or "").casefold()
+        metadata = document.workflow_metadata if isinstance(document.workflow_metadata, dict) else {}
+        vl_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
+        if "vl" in method or "paddle" in method or vl_metadata:
+            return VL_RAW_TEXT_KEY_VALUE_SOURCE
+        return RAW_TEXT_KEY_VALUE_SOURCE
 
     def _add_vl_direct_key_values(self, metadata: dict[str, Any], key_values: list[dict[str, Any]]) -> None:
         for candidate in self._vl_candidates(metadata):

@@ -340,6 +340,7 @@ def test_raw_extraction_key_values_are_raw_source_values_only():
         original_filename="DOC-003_quotation_uncropped_photo.png",
         stored_file_path="/tmp/DOC-003.png",
         mime_type="image/png",
+        extraction_method="paddleocr_vl",
         document_type=DocumentType.quotation,
         document_number="DOC-003",
         currency="KRW",
@@ -363,17 +364,43 @@ def test_raw_extraction_key_values_are_raw_source_values_only():
     snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
     values = {(item["key"], item["value"], item["source"]) for item in snapshot["key_values"]}
 
-    assert ("문서번호", "DOC-003", "raw_text_key_value") in values
-    assert ("샘플번호", "003", "raw_text_key_value") in values
-    assert ("공급자 상호", "(주)미래테크", "raw_text_key_value") in values
-    assert ("공급자 사업자번호", "123-45-67890", "raw_text_key_value") in values
-    assert ("공급자 담당", "김선영 / 회계팀", "raw_text_key_value") in values
-    assert ("공급받는자 상호", "(주)시흥대야점", "raw_text_key_value") in values
-    assert ("작성일", "2026.06.07", "raw_text_key_value") in values
-    assert ("유효기간", "견적일로부터 14일", "raw_text_key_value") in values
-    assert ("예상 합계", "1,639,000", "raw_text_key_value") in values
+    assert ("문서번호", "DOC-003", "vl_raw_text_key_value") in values
+    assert ("샘플번호", "003", "vl_raw_text_key_value") in values
+    assert ("공급자 상호", "(주)미래테크", "vl_raw_text_key_value") in values
+    assert ("공급자 사업자번호", "123-45-67890", "vl_raw_text_key_value") in values
+    assert ("공급자 담당", "김선영 / 회계팀", "vl_raw_text_key_value") in values
+    assert ("공급받는자 상호", "(주)시흥대야점", "vl_raw_text_key_value") in values
+    assert ("작성일", "2026.06.07", "vl_raw_text_key_value") in values
+    assert ("유효기간", "견적일로부터 14일", "vl_raw_text_key_value") in values
+    assert ("예상 합계", "1,639,000", "vl_raw_text_key_value") in values
     assert all(item["source"] not in {"confirmed_document_field", "vl_structured_document"} for item in snapshot["key_values"])
     assert all("normalized_bbox" not in item and "bbox_source" not in item for item in snapshot["key_values"])
+
+
+def test_raw_extraction_prefers_vl_raw_text_key_values_before_ocr_fallback():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        extraction_method="paddleocr_vl",
+        raw_text="공급받는자\n상호: (주)시흥대야점\n유효기간: 견적일로부터 14일",
+    )
+
+    snapshot = RawExtractionSnapshotService().build(
+        document,
+        source="processing_pipeline",
+        line_candidates=[
+            {"text": "공급받는자", "x_min": 100, "y_min": 100, "x_max": 180, "y_max": 120},
+            {"text": "상호: 주시홍대야점", "x_min": 100, "y_min": 130, "x_max": 260, "y_max": 150},
+            {"text": "유효기간: 건격일로부터14일", "x_min": 100, "y_min": 160, "x_max": 300, "y_max": 180},
+        ],
+    )
+
+    values = {item["key"]: item for item in snapshot["key_values"]}
+    assert values["공급받는자 상호"]["value"] == "(주)시흥대야점"
+    assert values["공급받는자 상호"]["source"] == "vl_raw_text_key_value"
+    assert values["유효기간"]["value"] == "견적일로부터 14일"
+    assert values["유효기간"]["source"] == "vl_raw_text_key_value"
 
 
 def test_raw_extraction_ocr_key_values_keep_line_bboxes():
