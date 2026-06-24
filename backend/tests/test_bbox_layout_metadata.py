@@ -464,6 +464,40 @@ def test_raw_extraction_joins_raw_text_identifier_continuation_lines():
     assert "section" not in values["샘플번호"]
 
 
+def test_raw_extraction_reviewed_key_values_can_rename_keys():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="문서번호: DOC-003",
+        workflow_metadata={
+            "raw_extraction": {
+                "key_values": [
+                    {"key": "문서번호", "value": "DOC-003", "source": "vl_raw_text_key_value"}
+                ]
+            }
+        },
+    )
+
+    snapshot = RawExtractionSnapshotService().build(
+        document,
+        source="manual_update",
+        reviewed_key_values=[
+            {
+                "_review_identity": "문서번호|vl_raw_text_key_value||",
+                "key": "견적번호",
+                "value": "QT-003",
+                "source": "vl_raw_text_key_value",
+            }
+        ],
+    )
+
+    assert snapshot["key_values"] == [
+        {"key": "견적번호", "value": "QT-003", "source": "vl_raw_text_key_value", "reviewed": True}
+    ]
+
+
 def test_raw_extraction_does_not_build_key_values_from_ocr_lines_without_raw_text():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",

@@ -541,7 +541,7 @@ class RawExtractionSnapshotService:
     def _reviewed_key_values(self, existing: list[dict[str, Any]], reviewed: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not existing:
             return []
-        reviewed_by_id = {self._key_value_identity(item): item for item in reviewed if isinstance(item, dict)}
+        reviewed_by_id = {self._reviewed_key_value_identity(item): item for item in reviewed if isinstance(item, dict)}
         result: list[dict[str, Any]] = []
         for item in existing:
             identity = self._key_value_identity(item)
@@ -550,10 +550,17 @@ class RawExtractionSnapshotService:
                 result.append(dict(item))
                 continue
             next_item = dict(item)
+            replacement_key = replacement.get("key")
+            if replacement_key not in (None, ""):
+                next_item["key"] = str(replacement_key)
             next_item["value"] = self._json_value(replacement.get("value"))
             next_item["reviewed"] = True
             result.append(next_item)
         return result
+
+    def _reviewed_key_value_identity(self, item: dict[str, Any]) -> str:
+        explicit = item.get("_review_identity") or item.get("review_identity")
+        return str(explicit) if explicit not in (None, "") else self._key_value_identity(item)
 
     def _key_value_identity(self, item: dict[str, Any]) -> str:
         return "|".join(str(item.get(key) or "") for key in ("key", "source", "role", "section"))
