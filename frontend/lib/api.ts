@@ -14,7 +14,14 @@ import type {
   ExportTemplateSourceField,
   FolderSummary,
   CreateItemAliasPayload,
+  CreateDomainDictionaryAliasPayload,
+  CreateDomainDictionaryEntryPayload,
+  CreateDomainDictionaryFeedbackPayload,
   CreateItemMasterPayload,
+  DomainDictionaryAliasRecord,
+  DomainDictionaryEntryRecord,
+  DomainDictionaryListResponse,
+  DomainDictionaryStats,
   ItemAliasRecord,
   ItemMasterListResponse,
   ItemMasterRecord,
@@ -23,6 +30,8 @@ import type {
   MonthlyReport,
   ProviderHealth,
   UpdateItemAliasPayload,
+  UpdateDomainDictionaryAliasPayload,
+  UpdateDomainDictionaryEntryPayload,
   UpdateItemMasterPayload,
 } from "@/types/document";
 
@@ -192,6 +201,29 @@ export const api = {
       if (!response.ok) throw new Error("별칭을 비활성화하지 못했습니다");
     },
     clear: () => request<{ deleted_items: number; deleted_aliases: number }>("/item-master", { method: "DELETE" }),
+  },
+  domainDictionary: {
+    list: (params: URLSearchParams) => request<DomainDictionaryListResponse>(`/domain-dictionary?${params.toString()}`, { cache: "no-store" }),
+    stats: () => request<DomainDictionaryStats>("/domain-dictionary/stats", { cache: "no-store" }),
+    get: (id: string) => request<DomainDictionaryEntryRecord>(`/domain-dictionary/${id}`, { cache: "no-store" }),
+    create: (payload: CreateDomainDictionaryEntryPayload) =>
+      request<DomainDictionaryEntryRecord>("/domain-dictionary", { method: "POST", body: JSON.stringify(payload) }),
+    update: (id: string, payload: UpdateDomainDictionaryEntryPayload) =>
+      request<DomainDictionaryEntryRecord>(`/domain-dictionary/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    remove: async (id: string) => {
+      const response = await fetch(`${API_BASE}/domain-dictionary/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("사전 항목을 비활성화하지 못했습니다");
+    },
+    createAlias: (entryId: string, payload: CreateDomainDictionaryAliasPayload) =>
+      request<DomainDictionaryAliasRecord>(`/domain-dictionary/${entryId}/aliases`, { method: "POST", body: JSON.stringify(payload) }),
+    updateAlias: (aliasId: string, payload: UpdateDomainDictionaryAliasPayload) =>
+      request<DomainDictionaryAliasRecord>(`/domain-dictionary/aliases/${aliasId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    removeAlias: async (aliasId: string) => {
+      const response = await fetch(`${API_BASE}/domain-dictionary/aliases/${aliasId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("사전 별칭을 비활성화하지 못했습니다");
+    },
+    feedback: (payload: CreateDomainDictionaryFeedbackPayload) =>
+      request<{ status: string }>("/domain-dictionary/feedback", { method: "POST", body: JSON.stringify(payload) }),
   }
 };
 

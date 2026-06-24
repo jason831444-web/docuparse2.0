@@ -163,3 +163,52 @@ class ItemAlias(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     item_master: Mapped[ItemMaster] = relationship("ItemMaster", back_populates="alias_records")
+
+
+class DomainDictionaryEntry(Base):
+    __tablename__ = "domain_dictionary_entries"
+    __table_args__ = (UniqueConstraint("dictionary_type", "canonical_value", name="uq_domain_dictionary_entries_type_value"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dictionary_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    canonical_value: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    normalized_value: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    field: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(80), default="manual", nullable=False, index=True)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    aliases: Mapped[list["DomainDictionaryAlias"]] = relationship("DomainDictionaryAlias", back_populates="entry", cascade="all, delete-orphan")
+
+
+class DomainDictionaryAlias(Base):
+    __tablename__ = "domain_dictionary_aliases"
+    __table_args__ = (UniqueConstraint("entry_id", "alias_value", name="uq_domain_dictionary_aliases_entry_value"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entry_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("domain_dictionary_entries.id", ondelete="CASCADE"), nullable=False, index=True)
+    alias_value: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    normalized_alias_value: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(80), default="manual", nullable=False, index=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    entry: Mapped[DomainDictionaryEntry] = relationship("DomainDictionaryEntry", back_populates="aliases")
+
+
+class DomainDictionarySuggestionFeedback(Base):
+    __tablename__ = "domain_dictionary_suggestion_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    target: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    field: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    original_value: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    suggested_value: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    feedback_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

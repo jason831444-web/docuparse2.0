@@ -478,6 +478,14 @@ function dictionarySuggestions(document: DocumentRecord): Array<Record<string, u
     : [];
 }
 
+function tableDictionarySuggestions(document: DocumentRecord): Array<Record<string, unknown>> {
+  const metadata = readRecord(document.workflow_metadata);
+  const dictionary = readRecord(metadata.dictionary_suggestions);
+  return Array.isArray(dictionary.suggestions)
+    ? dictionary.suggestions.map((item) => readRecord(item)).filter((item) => item.target === "raw_table_cell" && item.suggested_value)
+    : [];
+}
+
 function keyValueBackendIdentity(entry: Record<string, unknown>): string {
   return [entry.key, entry.source, entry.role, entry.section].map((value) => String(value ?? "")).join("|");
 }
@@ -487,11 +495,13 @@ function keyValueIdentity(entry: Record<string, unknown>, index: number): string
 }
 
 function RawKeyValueEditor({
+  documentId,
   entries,
   suggestions,
   saving,
   onChange,
 }: {
+  documentId: string;
   entries: Array<Record<string, unknown>>;
   suggestions: Array<Record<string, unknown>>;
   saving: boolean;
@@ -535,16 +545,31 @@ function RawKeyValueEditor({
                     const field = suggestion.field === "key" ? "key" : "value";
                     const confidence = Number(suggestion.confidence);
                     return (
-                      <button
-                        key={`${field}-${suggestion.suggested_value}-${suggestionIndex}`}
-                        type="button"
-                        disabled={saving}
-                        onClick={() => onChange(index, field, String(suggestion.suggested_value ?? ""))}
-                        className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-left text-[11px] text-amber-950 transition hover:bg-amber-100 disabled:opacity-60"
-                      >
-                        <span className="font-semibold">추천 {field === "key" ? "Key" : "Value"}:</span> {displayValue(suggestion.suggested_value)}
-                        {Number.isFinite(confidence) ? <span className="ml-1 text-amber-700">{Math.round(confidence * 100)}%</span> : null}
-                      </button>
+                      <div key={`${field}-${suggestion.suggested_value}-${suggestionIndex}`} className="grid gap-1 rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-950">
+                        <button
+                          type="button"
+                          disabled={saving}
+                          onClick={() => {
+                            onChange(index, field, String(suggestion.suggested_value ?? ""));
+                            void recordDictionaryFeedback(documentId, suggestion, "accepted");
+                          }}
+                          className="text-left transition hover:text-amber-800 disabled:opacity-60"
+                        >
+                          <span className="font-semibold">추천 {field === "key" ? "Key" : "Value"}:</span> {displayValue(suggestion.suggested_value)}
+                          {Number.isFinite(confidence) ? <span className="ml-1 text-amber-700">{Math.round(confidence * 100)}%</span> : null}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={saving}
+                          onClick={() => {
+                            void recordDictionaryFeedback(documentId, suggestion, "rejected");
+                            toast.success("이 추천을 거절로 기록했습니다");
+                          }}
+                          className="w-fit rounded border border-amber-200 bg-white px-1.5 py-0.5 text-[10px] text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+                        >
+                          거절
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -555,6 +580,26 @@ function RawKeyValueEditor({
       </div>
     </div>
   );
+}
+
+async function recordDictionaryFeedback(documentId: string, suggestion: Record<string, unknown>, action: "accepted" | "rejected" | "ignored") {
+  try {
+    await api.domainDictionary.feedback({
+      document_id: documentId,
+      target: String(suggestion.target ?? "raw_key_value"),
+      field: suggestion.field ? String(suggestion.field) : null,
+      original_value: String(suggestion.original_value ?? ""),
+      suggested_value: String(suggestion.suggested_value ?? ""),
+      action,
+      metadata: {
+        source: suggestion.source ?? null,
+        dictionary_type: suggestion.dictionary_type ?? null,
+        confidence: suggestion.confidence ?? null,
+      },
+    });
+  } catch {
+    // Feedback is advisory; editing the review form should not fail because logging failed.
+  }
 }
 
 function classificationCandidates(document: DocumentRecord): Array<Record<string, unknown>> {
@@ -587,6 +632,7 @@ function ClassificationCandidatePanel({ document }: { document: DocumentRecord }
 function EditableRawExtractedTable({
   document,
   items,
+  suggestions,
   saving,
   onChange,
   onDelete,
@@ -594,12 +640,22 @@ function EditableRawExtractedTable({
 }: {
   document: DocumentRecord;
   items: ManufacturingLineItem[];
+  suggestions: Array<Record<string, unknown>>;
   saving: boolean;
   onChange: (index: number, field: string, value: string) => void;
   onDelete: (index: number) => void;
   onAdd: () => void;
 }) {
   const columns = rawEditorColumns(document, items);
+  const suggestionsByCell = suggestions.reduce<Record<string, Array<Record<string, unknown>>>>((acc, suggestion) => {
+    const rowIndex = Number(suggestion.row_index);
+    const column = String(suggestion.column ?? "");
+    if (Number.isInteger(rowIndex) && rowIndex >= 0 && column) {
+      const key = `${rowIndex}|${rawTableFieldForColumn(column)}`;
+      acc[key] = [...(acc[key] || []), suggestion];
+    }
+    return acc;
+  }, {});
   return (
     <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -632,8 +688,9 @@ function EditableRawExtractedTable({
                   <tr key={rowIndex} className="border-b last:border-0">
                     {columns.map((column) => {
                       const field = rawTableFieldForColumn(column);
+                      const cellSuggestions = suggestionsByCell[`${rowIndex}|${field}`] || [];
                       return (
-                        <td key={column} className="min-w-[120px] px-2 py-2">
+                        <td key={column} className="min-w-[120px] px-2 py-2 align-top">
                           <Input
                             value={String((item as Record<string, unknown>)[field] ?? "")}
                             onChange={(event) => onChange(rowIndex, field, event.target.value)}
@@ -641,6 +698,36 @@ function EditableRawExtractedTable({
                             inputMode={numericLineItemFields.has(field) ? "decimal" : undefined}
                             disabled={saving}
                           />
+                          {cellSuggestions.length ? (
+                            <div className="mt-1 grid gap-1">
+                              {cellSuggestions.map((suggestion, index) => (
+                                <div key={`${field}-${suggestion.suggested_value}-${index}`} className="rounded border border-amber-200 bg-amber-50 p-1 text-[10px] text-amber-950">
+                                  <button
+                                    type="button"
+                                    disabled={saving}
+                                    onClick={() => {
+                                      onChange(rowIndex, field, String(suggestion.suggested_value ?? ""));
+                                      void recordDictionaryFeedback(document.id, suggestion, "accepted");
+                                    }}
+                                    className="block text-left transition hover:text-amber-800 disabled:opacity-60"
+                                  >
+                                    추천: {displayValue(suggestion.suggested_value)}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={saving}
+                                    onClick={() => {
+                                      void recordDictionaryFeedback(document.id, suggestion, "rejected");
+                                      toast.success("이 추천을 거절로 기록했습니다");
+                                    }}
+                                    className="mt-1 rounded border border-amber-200 bg-white px-1 text-[10px] text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+                                  >
+                                    거절
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
                         </td>
                       );
                     })}
@@ -1772,6 +1859,7 @@ export default function DocumentDetailPage() {
   const watchedLineItems = form.watch("line_items") ?? [];
   const reviewedKeyValues = (form.watch("reviewed_key_values") as Array<Record<string, unknown>> | undefined) ?? [];
   const keyValueSuggestions = document ? dictionarySuggestions(document) : [];
+  const rawTableSuggestions = document ? tableDictionarySuggestions(document) : [];
 
   const categoryInterpretation = useMemo(
     () => (document?.workflow_metadata?.category_interpretation ?? document?.ingestion_metadata?.category_interpretation ?? null) as Record<string, unknown> | null,
@@ -2204,10 +2292,11 @@ export default function DocumentDetailPage() {
                     <p className="mt-1 text-xs text-muted-foreground">추출된 표를 그대로 확인하고 필요한 셀만 수정하세요.</p>
                   </div>
                 </div>
-                <RawKeyValueEditor entries={reviewedKeyValues} suggestions={keyValueSuggestions} saving={saving} onChange={updateReviewedKeyValue} />
+                <RawKeyValueEditor documentId={document.id} entries={reviewedKeyValues} suggestions={keyValueSuggestions} saving={saving} onChange={updateReviewedKeyValue} />
                 <EditableRawExtractedTable
                   document={document}
                   items={lineItems}
+                  suggestions={rawTableSuggestions}
                   saving={saving}
                   onChange={updateLineItem}
                   onDelete={removeLineItem}

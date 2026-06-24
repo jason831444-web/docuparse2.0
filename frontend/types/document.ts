@@ -467,6 +467,80 @@ export interface ItemMasterUploadResult {
   errors: string[];
 }
 
+export interface DomainDictionaryAliasRecord {
+  id: string;
+  entry_id: string;
+  alias_value: string;
+  normalized_alias_value: string | null;
+  source: string;
+  confidence: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DomainDictionaryEntryRecord {
+  id: string;
+  dictionary_type: string;
+  canonical_value: string;
+  normalized_value: string | null;
+  field: string | null;
+  source: string;
+  memo: string | null;
+  active: boolean;
+  aliases: DomainDictionaryAliasRecord[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DomainDictionaryListResponse {
+  items: DomainDictionaryEntryRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface DomainDictionaryStats {
+  total_entries: number;
+  active_entries: number;
+  inactive_entries: number;
+  alias_count: number;
+  by_type: Record<string, number>;
+  feedback_count: number;
+  rejected_count: number;
+}
+
+export interface CreateDomainDictionaryEntryPayload {
+  dictionary_type: string;
+  canonical_value: string;
+  field?: string | null;
+  source?: string;
+  memo?: string | null;
+  active?: boolean;
+  aliases?: string[];
+}
+
+export type UpdateDomainDictionaryEntryPayload = Partial<Omit<CreateDomainDictionaryEntryPayload, "dictionary_type" | "aliases">>;
+
+export interface CreateDomainDictionaryAliasPayload {
+  alias_value: string;
+  source?: string;
+  confidence?: string | number | null;
+  active?: boolean;
+}
+
+export type UpdateDomainDictionaryAliasPayload = Partial<CreateDomainDictionaryAliasPayload>;
+
+export interface CreateDomainDictionaryFeedbackPayload {
+  document_id?: string | null;
+  target: string;
+  field?: string | null;
+  original_value: string;
+  suggested_value: string;
+  action: "accepted" | "rejected" | "ignored";
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface CreateItemMasterPayload {
   internal_item_code: string;
   item_name: string;

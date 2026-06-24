@@ -9,7 +9,15 @@ from typing import Any, Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.document import Document, ItemAlias, ItemMaster, ProcessingStatus
+from app.models.document import (
+    Document,
+    DomainDictionaryAlias,
+    DomainDictionaryEntry,
+    DomainDictionarySuggestionFeedback,
+    ItemAlias,
+    ItemMaster,
+    ProcessingStatus,
+)
 from app.services.item_master_matcher import normalize_item_text
 
 
@@ -51,7 +59,8 @@ class DomainDictionarySuggestionService:
 
     def suggestions_for_document(self, db: Session, document: Document, raw: dict[str, Any]) -> dict[str, Any]:
         entries = self._dictionary_entries(db, exclude_document_id=str(document.id) if document.id else None)
-        suggestions = self._suggestions_from_raw(raw, entries)
+        rejected = self._rejected_pairs(db)
+        suggestions = [item for item in self._suggestions_from_raw(raw, entries) if not self._is_rejected(item, rejected)]
         summary: dict[str, Any] = {
             "entry_count": len(entries),
             "suggestion_count": len(suggestions),
@@ -71,9 +80,19 @@ class DomainDictionarySuggestionService:
         entries.extend(self._label_entries())
         if not hasattr(db, "scalars"):
             return self._dedupe_entries(entries)
+        entries.extend(self._manual_domain_entries(db))
         entries.extend(self._item_master_entries(db))
         entries.extend(self._confirmed_document_entries(db, exclude_document_id=exclude_document_id))
         return self._dedupe_entries(entries)
+
+    def normalize_for_type(self, dictionary_type: str, value: object) -> str:
+        if dictionary_type == "field_label":
+            return self._normalize_label(value)
+        if dictionary_type == "party":
+            return self._normalize_party(value)
+        if dictionary_type == "item":
+            return normalize_item_text(value)
+        return self._normalize_value(value)
 
     def _label_entries(self) -> list[DictionaryEntry]:
         entries: list[DictionaryEntry] = []
@@ -99,6 +118,38 @@ class DomainDictionarySuggestionService:
                 entries.append(DictionaryEntry("item", alias.item_master.item_name, normalize_item_text(alias.alias_name), "item_alias", field="item_name", evidence=alias.alias_name))
             if alias.alias_spec:
                 entries.append(DictionaryEntry("spec", alias.alias_spec, self._normalize_value(alias.alias_spec), "item_alias", field="spec", evidence=alias.alias_name))
+        return entries
+
+    def _manual_domain_entries(self, db: Session) -> list[DictionaryEntry]:
+        entries: list[DictionaryEntry] = []
+        manual_entries = db.scalars(select(DomainDictionaryEntry).where(DomainDictionaryEntry.active.is_(True)).limit(5000)).all()
+        for item in manual_entries:
+            normalized = item.normalized_value or self.normalize_for_type(item.dictionary_type, item.canonical_value)
+            entries.append(
+                DictionaryEntry(
+                    item.dictionary_type,
+                    item.canonical_value,
+                    normalized,
+                    item.source or "manual_domain_dictionary",
+                    field=item.field,
+                    evidence=str(item.id),
+                )
+            )
+        aliases = db.scalars(select(DomainDictionaryAlias).join(DomainDictionaryEntry).where(DomainDictionaryAlias.active.is_(True), DomainDictionaryEntry.active.is_(True)).limit(10000)).all()
+        for alias in aliases:
+            entry = alias.entry
+            if not entry:
+                continue
+            entries.append(
+                DictionaryEntry(
+                    entry.dictionary_type,
+                    entry.canonical_value,
+                    alias.normalized_alias_value or self.normalize_for_type(entry.dictionary_type, alias.alias_value),
+                    alias.source or "manual_domain_alias",
+                    field=entry.field,
+                    evidence=alias.alias_value,
+                )
+            )
         return entries
 
     def _confirmed_document_entries(self, db: Session, *, exclude_document_id: str | None = None) -> list[DictionaryEntry]:
@@ -261,6 +312,31 @@ class DomainDictionarySuggestionService:
             key = str(value)
             counts[key] = counts.get(key, 0) + 1
         return counts
+
+    def _rejected_pairs(self, db: Session) -> set[tuple[str, str, str]]:
+        if not hasattr(db, "scalars"):
+            return set()
+        rows = db.scalars(
+            select(DomainDictionarySuggestionFeedback)
+            .where(DomainDictionarySuggestionFeedback.action == "rejected")
+            .order_by(DomainDictionarySuggestionFeedback.created_at.desc())
+            .limit(5000)
+        ).all()
+        return {
+            (
+                self._normalize_value(row.target),
+                self._normalize_value(row.original_value),
+                self._normalize_value(row.suggested_value),
+            )
+            for row in rows
+        }
+
+    def _is_rejected(self, suggestion: dict[str, Any], rejected: set[tuple[str, str, str]]) -> bool:
+        return (
+            self._normalize_value(suggestion.get("target")),
+            self._normalize_value(suggestion.get("original_value")),
+            self._normalize_value(suggestion.get("suggested_value")),
+        ) in rejected
 
     def _normalize_label(self, value: object) -> str:
         return re.sub(r"[\s:/._·\-]+", "", str(value or "").strip().lower())

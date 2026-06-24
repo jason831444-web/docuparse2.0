@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FileSpreadsheet } from "lucide-react";
+import { BookOpen, FileSpreadsheet } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +28,25 @@ export default function SettingsPage() {
         <p className="mt-2 text-muted-foreground">문서 목록과 검토 업무의 기본 표시 방식을 설정합니다.</p>
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>도메인 사전</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg border bg-white p-4">
+              <BookOpen className="mt-1 size-5 text-primary" />
+              <div>
+                <p className="font-semibold">라벨/거래처/품목 별칭 관리</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  사람이 확정한 데이터와 함께 검토 추천에 사용할 제조업 도메인 사전을 관리합니다.
+                </p>
+              </div>
+            </div>
+            <Button asChild>
+              <Link href="/settings/domain-dictionary">도메인 사전 관리</Link>
+            </Button>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>출력 템플릿</CardTitle>

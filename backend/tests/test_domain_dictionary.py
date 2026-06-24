@@ -48,3 +48,27 @@ def test_domain_dictionary_suggests_item_values_without_mutating_raw(monkeypatch
     assert raw["key_values"][0]["value"] == "PCB Conector 12P"
     assert any(item["target"] == "raw_key_value" and item["suggested_value"] == "PCB Connector 12P" for item in suggestions)
     assert any(item["target"] == "raw_table_cell" and item["suggested_value"] == "PCB Connector 12P" for item in suggestions)
+
+
+def test_domain_dictionary_rejected_feedback_suppresses_same_suggestion(monkeypatch):
+    service = DomainDictionarySuggestionService()
+    entries = [
+        DictionaryEntry("field_label", "샘플번호", service._normalize_label("생플변호"), "manufacturing_label_dictionary"),
+    ]
+    monkeypatch.setattr(service, "_dictionary_entries", lambda db, exclude_document_id=None: entries)
+    monkeypatch.setattr(
+        service,
+        "_rejected_pairs",
+        lambda db: {
+            (
+                service._normalize_value("raw_key_value"),
+                service._normalize_value("생플변호"),
+                service._normalize_value("샘플번호"),
+            )
+        },
+    )
+    raw = {"key_values": [{"key": "생플변호", "value": "003", "source": "vl_raw_text_key_value"}]}
+
+    result = service.suggestions_for_document(None, Document(original_filename="a.png", stored_file_path="/tmp/a.png", mime_type="image/png"), raw)  # type: ignore[arg-type]
+
+    assert result["suggestions"] == []
