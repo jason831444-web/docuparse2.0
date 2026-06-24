@@ -325,6 +325,8 @@ class SemanticMappingService:
             return "tax_amount"
         if normalized_key in {"예상합계", "견적합계"}:
             return "estimated_total"
+        if normalized_key in {"크레딧합계", "크레뒷합계", "반품합계", "조정합계", "차감합계"}:
+            return "document_total"
         if normalized_key in {"결제합계", "실판매금액", "순판매금액"}:
             return {
                 "결제합계": "payment_total",
@@ -506,18 +508,64 @@ class SemanticMappingService:
     def _normalize_business_value(self, value: object) -> object:
         if isinstance(value, str):
             stripped = value.strip()
+            normalized_date = self._normalize_date_text(stripped)
+            if normalized_date:
+                return normalized_date
             numeric = self._decimal_from_text(stripped)
             return str(numeric) if numeric is not None and re.search(r"\d", stripped) and not re.search(r"[A-Za-z가-힣]", stripped.replace(",", "")) else stripped
         return self._string_value(value)
 
     def _decimal_from_text(self, value: str) -> Decimal | None:
         cleaned = re.sub(r"[^0-9.\-]", "", value)
+        if "," not in value and re.fullmatch(r"-?\d{1,3}\.\d{3}", cleaned):
+            cleaned = cleaned.replace(".", "")
         if not cleaned or cleaned in {"-", "."}:
             return None
         try:
             return Decimal(cleaned)
         except InvalidOperation:
             return None
+
+    def _normalize_date_text(self, value: str) -> str | None:
+        if not re.fullmatch(r"\d{8}", value.strip()):
+            return None
+        compact = re.sub(r"[^0-9]", "", value)
+        if len(compact) != 8 or not compact.startswith("20"):
+            return None
+        year = int(compact[:4])
+        month_text = compact[4:6]
+        day_text = compact[6:8]
+        candidates: list[tuple[int, int]] = []
+        for month in self._date_component_candidates(month_text, 1, 12):
+            for day in self._date_component_candidates(day_text, 1, 31):
+                if self._valid_date(year, month, day):
+                    candidates.append((month, day))
+        if not candidates:
+            return None
+        month, day = candidates[0]
+        return f"{year:04d}-{month:02d}-{day:02d}"
+
+    def _date_component_candidates(self, text: str, minimum: int, maximum: int) -> list[int]:
+        value = int(text)
+        candidates: list[int] = []
+        if minimum <= value <= maximum:
+            candidates.append(value)
+        replacements = {"8": "0", "9": "0", "6": "0", "5": "0"}
+        for index, char in enumerate(text):
+            if char not in replacements:
+                continue
+            candidate_text = f"{text[:index]}{replacements[char]}{text[index + 1:]}"
+            candidate = int(candidate_text)
+            if minimum <= candidate <= maximum and candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    def _valid_date(self, year: int, month: int, day: int) -> bool:
+        try:
+            datetime(year, month, day)
+        except ValueError:
+            return False
+        return True
 
     def _string_value(self, value: object) -> object:
         if isinstance(value, (datetime, Decimal)):

@@ -702,6 +702,137 @@ def test_semantic_mapping_filters_header_and_summary_rows_from_line_items():
     ]
 
 
+def test_raw_key_values_prefer_later_better_party_block_and_credit_total():
+    document = Document(
+        original_filename="DOC-028_return_credit_uncropped_photo.pdf",
+        stored_file_path="/tmp/DOC-028.pdf",
+        mime_type="application/pdf",
+        document_type=DocumentType.general_document,
+        category="return_credit",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "공급받는자",
+                "공급자",
+                "상호상광유동",
+                "상호주세진푸드",
+                "작성일:20260604",
+                "원문서:INV-2026-05-128",
+                "공급자",
+                "상호: (주)세진푸드",
+                "공급받는자",
+                "상호: (주)삼광유통",
+                "크레뒷합계",
+                "-93680",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {item["key"]: item["value"] for item in raw["key_values"]}
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert values["공급자 상호"] == "(주)세진푸드"
+    assert values["공급받는자 상호"] == "(주)삼광유통"
+    assert values["크레딧합계"] == "-93680"
+    assert fields["vendor_name"] == "(주)세진푸드"
+    assert fields["customer_name"] == "(주)삼광유통"
+    assert fields["document_total"] == "-93680"
+    assert fields["reference_number"] == "INV-2026-05-128"
+    assert fields["issue_date"] == "2026-06-04"
+
+
+def test_raw_key_values_use_pending_and_trailing_party_sections():
+    document = Document(
+        original_filename="DOC-043_quotation_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-043.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.quotation,
+        category="quotation",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "공급자",
+                "상호주동진전자",
+                "상호:",
+                "주시중대야검",
+                "공급자",
+                "상호: (주)동진전자",
+                "사업자번호: 123-45-67890",
+                "담당: 김선영 / 회계팀 공급받는자",
+                "상호: (주)시흥대야점",
+                "작성일: 2026.06.17",
+                "예상합계 943.679",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {item["key"]: item["value"] for item in raw["key_values"]}
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert values["공급자 상호"] == "(주)동진전자"
+    assert values["공급받는자 상호"] == "(주)시흥대야점"
+    assert values["공급자 담당"] == "김선영 / 회계팀"
+    assert fields["vendor_name"] == "(주)동진전자"
+    assert fields["customer_name"] == "(주)시흥대야점"
+    assert fields["document_total"] == "943679"
+
+
+def test_semantic_mapping_repairs_krw_thousands_dot_and_ocr_date_digits():
+    document = Document(
+        original_filename="DOC-043_quotation_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-043.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.quotation,
+        category="quotation",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "문서번호:DOC-043",
+                "작성일:20260692",
+                "예상합계 943.679",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert fields["issue_date"] == "2026-06-02"
+    assert fields["estimated_total"] == "943679"
+    assert fields["document_total"] == "943679"
+
+
+def test_semantic_mapping_repairs_invalid_ocr_month_digit():
+    document = Document(
+        original_filename="DOC-062_receipt_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-062.png",
+        mime_type="image/png",
+        document_type=DocumentType.receipt,
+        category="receipt",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "영수증번호:DOC-062",
+                "일자:",
+                "20268625",
+                "합계 216877",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert fields["issue_date"] == "2026-06-25"
+    assert fields["document_total"] == "216877"
+
+
 def test_raw_extraction_reviewed_key_values_can_rename_keys():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",

@@ -195,7 +195,9 @@ class RawExtractionSnapshotService:
         if not match:
             match = re.match(r"^\s*([가-힣A-Za-z0-9/().\s]{1,30})\s{2,}(.{1,80})\s*$", text)
         if not match:
-            match = re.match(r"^\s*(예상\s*합계|합계\s*금액|총\s*합계|TOTAL(?:\s+[A-Z]+)?)\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", text, flags=re.IGNORECASE)
+            match = re.match(r"^\s*(예상\s*합계|합계\s*금액|총\s*합계|크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|TOTAL(?:\s+[A-Z]+)?)\s+(-?[0-9][0-9,]*(?:\.[0-9]+)?)\s*$", text, flags=re.IGNORECASE)
+        if not match:
+            match = self._glued_key_value_match(text)
         if not match:
             return []
         key = self._clean_raw_key(match.group(1))
@@ -204,10 +206,11 @@ class RawExtractionSnapshotService:
 
     def _known_key_label_pattern(self) -> str:
         return (
-            r"문서\s*번호|샘플\s*번호|팸플\s*번호|참조\s*번호|관련\s*문서\s*번호|원\s*문서|"
-            r"사업자\s*번호|사엽자\s*변호|작성일|발행일|견적일|유효\s*기간|"
+            r"문서\s*번호|문시\s*빈호|운서\s*번호|샘플\s*번호|팸플\s*번호|생플\s*번호|생플\s*변호|생품\s*번호|생표\s*변호|생물\s*변호|참조\s*번호|관련\s*문서\s*번호|원\s*문서|"
+            r"사업자\s*번호|사엽자\s*변호|작성일|작성임|발행일|견적일|유효\s*기간|"
             r"납기일|요청일|일자|매장|담당|당당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|"
-            r"예상\s*합계|총\s*합계|합계\s*금액|합계|실판매\s*금액|순판매\s*금액|과세\s*합계|공급\s*가액|"
+            r"예상\s*합계|총\s*합계|합계\s*금액|합계|크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|"
+            r"실판매\s*금액|순판매\s*금액|과세\s*합계|공급\s*가액|"
             r"부가\s*세|세액|V\.?\s*A\.?\s*T|VAT|"
             r"결제\s*합계|현금\s*합계|카드\s*합계|온라인\s*결제|주문\s*횟수|매장\s*판매|매장\s*판애|"
             r"배달\s*판매|배달\s*판마|평균\s*단가"
@@ -218,12 +221,20 @@ class RawExtractionSnapshotService:
         value = re.sub(r"^(?:[-*•·]+\s*)+", "", value).strip()
         aliases = {
             "팸플번호": "샘플번호",
+            "생플번호": "샘플번호",
+            "생플변호": "샘플번호",
+            "생품번호": "샘플번호",
+            "생표변호": "샘플번호",
+            "생물변호": "샘플번호",
             "샘플 번호": "샘플번호",
             "문서 번호": "문서번호",
+            "문시빈호": "문서번호",
+            "운서번호": "문서번호",
             "참조 번호": "참조번호",
             "관련 문서 번호": "관련문서번호",
             "원 문서": "원문서",
             "사엽자변호": "사업자번호",
+            "작성임": "작성일",
             "사업자 번호": "사업자번호",
             "당당": "담당",
             "실판매 금액": "실판매금액",
@@ -233,6 +244,12 @@ class RawExtractionSnapshotService:
             "부가 세": "부가세",
             "총 합계": "총합계",
             "합계 금액": "합계금액",
+            "크레딧 합계": "크레딧합계",
+            "크레뒷 합계": "크레딧합계",
+            "크레뒷합계": "크레딧합계",
+            "반품 합계": "반품합계",
+            "조정 합계": "조정합계",
+            "차감 합계": "차감합계",
             "결제 합계": "결제합계",
             "현금 합계": "현금합계",
             "카드 합계": "카드합계",
@@ -269,11 +286,26 @@ class RawExtractionSnapshotService:
 
     def _key_value_section_from_line(self, text: str) -> str | None:
         normalized = re.sub(r"\s+", "", str(text or ""))
-        if normalized in {"공급자", "공급처"}:
+        if normalized in {"공급자", "공급처", "공급지"}:
             return "공급자"
-        if normalized in {"공급받는자", "공급받는자정보", "고객사"}:
+        if normalized in {"공급받는자", "공급받는자정보", "공급반는지", "고객사"}:
             return "공급받는자"
         return None
+
+    def _trailing_section_from_value(self, value: str) -> tuple[str, str | None]:
+        text = str(value or "").strip()
+        for marker, section in (
+            ("공급받는자", "공급받는자"),
+            ("공급받는자 정보", "공급받는자"),
+            ("고객사", "공급받는자"),
+            ("공급자", "공급자"),
+            ("공급처", "공급자"),
+        ):
+            if text.endswith(marker):
+                cleaned = text[: -len(marker)].strip()
+                if cleaned:
+                    return cleaned, section
+        return text, None
 
     def _sectioned_key(self, section: str | None, key: str) -> str:
         key = str(key or "").strip()
@@ -287,12 +319,20 @@ class RawExtractionSnapshotService:
             "문서번호",
             "샘플번호",
             "팸플번호",
+            "생플번호",
+            "생플변호",
+            "생품번호",
+            "생표변호",
+            "생물변호",
             "참조번호",
             "관련문서번호",
             "원문서",
+            "문시빈호",
+            "운서번호",
             "사업자번호",
             "사엽자변호",
             "작성일",
+            "작성임",
             "발행일",
             "견적일",
             "유효기간",
@@ -310,6 +350,11 @@ class RawExtractionSnapshotService:
             "총합계",
             "합계금액",
             "합계",
+            "크레딧합계",
+            "크레뒷합계",
+            "반품합계",
+            "조정합계",
+            "차감합계",
             "실판매금액",
             "순판매금액",
             "과세합계",
@@ -375,23 +420,66 @@ class RawExtractionSnapshotService:
             return False
         return True
 
+    def _glued_key_value_match(self, text: str) -> re.Match[str] | None:
+        labels = (
+            "문서번호",
+            "샘플번호",
+            "생플번호",
+            "생플변호",
+            "참조번호",
+            "관련문서번호",
+            "원문서",
+            "작성일",
+            "발행일",
+            "견적일",
+            "납기일",
+            "요청일",
+            "일자",
+            "상호",
+            "담당",
+            "합계금액",
+            "총합계",
+            "크레딧합계",
+            "크레뒷합계",
+            "반품합계",
+            "조정합계",
+            "차감합계",
+        )
+        pattern = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
+        return re.match(rf"^\s*({pattern})\s*(?![:：])(.{{2,80}})\s*$", text, flags=re.IGNORECASE)
+
     def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]], *, source: str = RAW_TEXT_KEY_VALUE_SOURCE) -> None:
         lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
         section: str | None = None
+        pending_sections: list[str] = []
         for index, raw_line in enumerate(lines):
             line = self._raw_text_line_with_continuation(lines, index)
-            section = self._key_value_section_from_line(line) or section
+            line_section = self._key_value_section_from_line(line)
+            if line_section:
+                section = line_section
+                pending_sections.append(line_section)
             for key, value, _start, _end in self._parse_key_value_line(line):
-                full_key = self._sectioned_key(section, key)
+                value, next_section = self._trailing_section_from_value(value)
+                target_section = section
+                if key in {"상호", "사업자번호", "담당", "대표자", "주소"} and pending_sections and not re.search(r"[:：]", line):
+                    target_section = pending_sections.pop(0)
+                full_key = self._sectioned_key(target_section, key)
                 if self._has_existing_key_value_key(key_values, full_key):
+                    self._replace_existing_key_value_if_better(key_values, full_key, value, source, section=target_section if full_key != key else None)
+                    if next_section:
+                        section = next_section
+                        pending_sections.append(next_section)
                     continue
                 self._append_key_value(
                     key_values,
                     full_key,
                     value,
                     source,
-                    section=section if full_key != key else None,
+                    section=target_section if full_key != key else None,
                 )
+                if next_section:
+                    section = next_section
+                    pending_sections.append(next_section)
         self._add_raw_text_split_line_key_values(lines, key_values, source=source)
 
     def _raw_text_key_value_source(self, document: Document) -> str:
@@ -422,6 +510,7 @@ class RawExtractionSnapshotService:
                 target_section = pending_sections.pop(0)
             full_key = self._sectioned_key(target_section, key)
             if self._has_existing_key_value_key(key_values, full_key):
+                self._replace_existing_key_value_if_better(key_values, full_key, value, source, section=target_section if full_key != key else None)
                 continue
             self._append_key_value(
                 key_values,
@@ -673,6 +762,47 @@ class RawExtractionSnapshotService:
         normalized_key_bbox = self._normalize_bbox(key_bbox)
         normalized_value_bbox = self._normalize_bbox(value_bbox)
         key_values.append(item)
+
+    def _replace_existing_key_value_if_better(
+        self,
+        key_values: list[dict[str, Any]],
+        key: str,
+        value: object,
+        source: str,
+        *,
+        section: str | None = None,
+    ) -> None:
+        if value in (None, ""):
+            return
+        normalized = re.sub(r"\s+", " ", str(key or "")).strip().casefold()
+        new_value = self._json_value(value)
+        for item in key_values:
+            item_key = re.sub(r"\s+", " ", str(item.get("key") or "")).strip().casefold()
+            if item_key != normalized:
+                continue
+            old_value = item.get("value")
+            if self._key_value_replacement_score(key, new_value) >= self._key_value_replacement_score(key, old_value):
+                item["value"] = new_value
+                item["source"] = source
+                if section:
+                    item["section"] = section
+            return
+
+    def _key_value_replacement_score(self, key: object, value: object) -> int:
+        text = str(value or "").strip()
+        if not text:
+            return -100
+        score = min(len(text), 40)
+        normalized_key = re.sub(r"\s+", "", str(key or ""))
+        if normalized_key.endswith("상호"):
+            score += 5
+            if "(주)" in text or text.startswith("주"):
+                score += 4
+            if re.search(r"(사업자|담당|번호|작성일|품목|합계)", text):
+                score -= 10
+        if re.search(r"[A-Za-z가-힣]", text) and re.search(r"\d", text):
+            score -= 2
+        return score
 
     def _candidate_coord(self, candidate: dict[str, Any], key: str) -> float | None:
         try:
