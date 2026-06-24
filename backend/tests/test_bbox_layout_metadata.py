@@ -632,6 +632,76 @@ def test_semantic_mapping_does_not_use_party_business_number_as_party_name():
     assert fields["document_total"] == "11964040"
 
 
+def test_semantic_mapping_separates_sample_document_and_reference_numbers():
+    document = Document(
+        original_filename="DOC-001_purchase_order_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-001.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.purchase_order,
+        category="purchase_order",
+        document_number="DOC-001",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "발주서",
+                "문서번호: PO-2026-0001",
+                "샘플번호: 001",
+                "참조번호: RFQ-2026-0042",
+                "발행일: 2026.06.12",
+                "납기일: 2026.06.30",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert fields["sample_id"] == "001"
+    assert fields["document_number"] == "PO-2026-0001"
+    assert fields["reference_number"] == "RFQ-2026-0042"
+    assert fields["issue_date"] == "2026.06.12"
+    assert fields["due_date"] == "2026.06.30"
+
+
+def test_semantic_mapping_filters_header_and_summary_rows_from_line_items():
+    document = Document(
+        original_filename="DOC-050_transaction_statement_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-050.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.transaction_statement,
+        category="transaction_statement",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="거래명세서\n문서번호: TS-2026-0050",
+    )
+    raw = {
+        "key_values": [{"key": "문서번호", "value": "TS-2026-0050", "source": "vl_raw_text_key_value"}],
+        "tables": [
+            {
+                "columns": ["No", "품목명", "품목코드", "수량", "단위", "단가", "금액"],
+                "rows": [
+                    {"No": "No", "품목명": "품목명", "품목코드": "품목코드", "수량": "수량", "단위": "단위", "단가": "단가", "금액": "금액"},
+                    {"No": "1", "품목명": "POS 영수증 용지", "품목코드": "POS-PAPER", "수량": "300", "단위": "BOX", "단가": "33,000", "금액": "9,900,000"},
+                    {"No": "", "품목명": "총합계", "품목코드": "", "수량": "", "단위": "", "단가": "", "금액": "11,964,040"},
+                ],
+            }
+        ],
+    }
+
+    mapping = SemanticMappingService().map_raw(document, raw)
+    assert mapping["line_items"] == [
+        {
+            "line_number": "1",
+            "item_name": "POS 영수증 용지",
+            "item_code": "POS-PAPER",
+            "quantity": "300",
+            "unit": "BOX",
+            "unit_price": "33000",
+            "line_total": "9900000",
+        }
+    ]
+
+
 def test_raw_extraction_reviewed_key_values_can_rename_keys():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",

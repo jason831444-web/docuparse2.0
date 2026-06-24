@@ -25,6 +25,8 @@ class SemanticMappingService:
 
     FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "document_number": ("문서번호", "document no", "doc no", "invoice no"),
+        "sample_id": ("샘플번호", "sample no", "sample id"),
+        "reference_number": ("참조번호", "관련문서번호", "관련 문서번호", "원문서", "원 문서", "reference no", "reference number"),
         "vendor_name": ("공급자", "공급처", "공급업체", "seller", "vendor"),
         "customer_name": ("공급받는자", "고객사", "buyer", "customer"),
         "issue_date": ("발행일", "작성일", "거래일자", "invoice date", "견적일", "일자", "요청일"),
@@ -60,7 +62,7 @@ class SemanticMappingService:
 
     TABLE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "line_number": ("no", "번호"),
-        "item_name": ("품목명", "description", "품명", "item"),
+        "item_name": ("품목명", "description", "품명", "품목", "item"),
         "item_code": ("품목코드", "규격/코드", "내부코드", "hs/code", "lot/code"),
         "spec": ("규격", "spec"),
         "lot_no": ("lot no", "lot/code"),
@@ -72,7 +74,7 @@ class SemanticMappingService:
         "line_total": ("금액", "합계금액", "amount"),
         "inspection_result": ("판정", "검사판정"),
         "inspection_item": ("검사항목",),
-        "note": ("비고", "이동사유"),
+        "note": ("비고", "이동사유", "이동시유"),
     }
 
     def __init__(self) -> None:
@@ -162,6 +164,7 @@ class SemanticMappingService:
     def _base_fields(self, document: Document) -> dict[str, Any]:
         fields = {
             "document_number": document.document_number,
+            "sample_id": self._sample_id_from_filename(document.original_filename),
             "vendor_name": document.vendor_name or document.merchant_name,
             "customer_name": document.customer_name,
             "issue_date": self._string_value(document.issue_date or document.extracted_date),
@@ -205,6 +208,9 @@ class SemanticMappingService:
     def _normalize_semantic_fields(self, fields: dict[str, Any], key_values: list[Any], category: str) -> dict[str, Any]:
         fields = dict(fields)
         raw_fields = self._raw_field_candidates(key_values)
+        for target in ("sample_id", "document_number", "reference_number"):
+            if raw_fields.get(target):
+                fields[target] = raw_fields[target]
         for target in ("vendor_name", "customer_name"):
             if raw_fields.get(target):
                 fields[target] = raw_fields[target]
@@ -260,6 +266,9 @@ class SemanticMappingService:
             if raw_value in (None, ""):
                 continue
             normalized_key = self._normalize_label(raw_key)
+            if target_value := self._identifier_field_from_key(normalized_key):
+                fields[target_value] = self._normalize_identifier_value(raw_value)
+                continue
             normalized_value = self._normalize_business_value(raw_value)
             if self._is_party_name_key("vendor_name", raw_key):
                 fields["vendor_name"] = normalized_value
@@ -275,6 +284,18 @@ class SemanticMappingService:
             if date_field:
                 fields[date_field] = normalized_value
         return fields
+
+    def _identifier_field_from_key(self, normalized_key: str) -> str | None:
+        if normalized_key in {"샘플번호", "sampleid", "sampleno"}:
+            return "sample_id"
+        if normalized_key in {"문서번호", "documentno", "docno", "invoiceno"}:
+            return "document_number"
+        if normalized_key in {"참조번호", "관련문서번호", "원문서", "reference", "referenceno", "referencenumber"}:
+            return "reference_number"
+        return None
+
+    def _normalize_identifier_value(self, value: object) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()
 
     def _is_party_name_key(self, target: str, raw_key: object) -> bool:
         normalized = self._normalize_label(raw_key)
@@ -349,16 +370,82 @@ class SemanticMappingService:
                         mapped[target] = self._normalize_business_value(value)
                 if not mapped:
                     continue
-                if mapped.get("item_name") or mapped.get("item_code") or mapped.get("quantity"):
+                if self._is_semantic_line_item(mapped, row):
                     items.append(mapped)
         return items
+
+    def _is_semantic_line_item(self, mapped: dict[str, Any], raw_row: dict[str, Any]) -> bool:
+        if self._is_header_like_row(mapped, raw_row):
+            return False
+        if self._is_summary_like_row(mapped, raw_row):
+            return False
+        meaningful = {key for key, value in mapped.items() if value not in (None, "")}
+        if meaningful <= {"line_number"}:
+            return False
+        return bool(
+            mapped.get("item_name")
+            or mapped.get("item_code")
+            or (mapped.get("quantity") and (mapped.get("unit") or mapped.get("unit_price") or mapped.get("line_total") or mapped.get("supply_amount")))
+        )
+
+    def _is_header_like_row(self, mapped: dict[str, Any], raw_row: dict[str, Any]) -> bool:
+        raw_text = self._row_text(raw_row)
+        if not raw_text:
+            return False
+        header_terms = {
+            "no",
+            "번호",
+            "품목",
+            "품목명",
+            "품명",
+            "description",
+            "규격",
+            "규격코드",
+            "품목코드",
+            "수량",
+            "단위",
+            "단가",
+            "금액",
+            "공급가액",
+            "세액",
+            "합계",
+            "비고",
+        }
+        tokens = {self._normalize_label(part) for part in re.split(r"[\s|,/]+", raw_text) if part.strip()}
+        compact = self._normalize_label(raw_text)
+        normalized_terms = {self._normalize_label(term) for term in header_terms}
+        if tokens and tokens <= normalized_terms:
+            return True
+        return compact in normalized_terms or compact in {"no품목명규격코드수량단위단가금액", "no품목내부코드수량단위이동사유"}
+
+    def _is_summary_like_row(self, mapped: dict[str, Any], raw_row: dict[str, Any]) -> bool:
+        raw_text = self._row_text(raw_row)
+        normalized = self._normalize_label(raw_text)
+        if not normalized:
+            return False
+        if re.search(r"(총합계|합계금액|공급가액합계|세액합계|부가세|vat|subtotal|grandtotal|totalamount)", normalized, flags=re.IGNORECASE):
+            return True
+        item_name = self._normalize_label(mapped.get("item_name"))
+        if item_name in {"합계", "총합계", "소계", "공급가액", "세액", "부가세", "vat", "total", "subtotal"}:
+            return True
+        return False
+
+    def _row_text(self, row: dict[str, Any]) -> str:
+        return " ".join(str(value or "") for value in row.values()).strip()
 
     def _table_column_target(self, column: str) -> str | None:
         normalized = self._normalize_label(column)
         for target, aliases in self.TABLE_COLUMN_ALIASES.items():
-            if any(self._normalize_label(alias) == normalized or self._normalize_label(alias) in normalized for alias in aliases):
+            if any(self._normalize_label(alias) == normalized for alias in aliases):
+                return target
+        for target, aliases in self.TABLE_COLUMN_ALIASES.items():
+            if any(self._normalize_label(alias) in normalized for alias in aliases):
                 return target
         return None
+
+    def _sample_id_from_filename(self, filename: object) -> str | None:
+        match = re.search(r"\b(DOC-\d{3,})\b", str(filename or ""), flags=re.IGNORECASE)
+        return match.group(1).upper() if match else None
 
     def _classify_type(self, document: Document, text: str, pre_mapping: dict[str, Any] | None = None) -> tuple[str, str]:
         current_doc_type = getattr(document.document_type, "value", str(document.document_type or "general_document"))
