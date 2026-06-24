@@ -1,6 +1,6 @@
 """seed domain dictionary labels
 
-Revision ID: 0015_seed_domain_dictionary_labels
+Revision ID: 0015_seed_domain_dict
 Revises: 0014_add_domain_dictionary
 Create Date: 2026-06-24 00:00:00.000000
 """
@@ -10,7 +10,7 @@ from typing import Sequence, Union
 from alembic import op
 
 
-revision: str = "0015_seed_domain_dictionary_labels"
+revision: str = "0015_seed_domain_dict"
 down_revision: Union[str, None] = "0014_add_domain_dictionary"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
