@@ -40,11 +40,7 @@ class RawExtractionSnapshotService:
         elif existing_key_values and source in {"manual_update", "confirmed_review"}:
             key_values = existing_key_values
         else:
-            self._add_vl_direct_key_values(metadata, key_values)
-            key_values = self._dedupe_key_values(key_values)
             self._add_raw_text_key_values(document.raw_text, key_values, source=self._raw_text_key_value_source(document))
-            key_values = self._dedupe_key_values(key_values)
-            self._add_ocr_line_key_values(line_candidates or [], key_values)
         key_values = self._plain_key_values(self._dedupe_key_values(key_values))
 
         return {

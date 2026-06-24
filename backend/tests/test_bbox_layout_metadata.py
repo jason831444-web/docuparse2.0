@@ -212,11 +212,13 @@ def test_bbox_layout_metadata_filters_ocr_variant_duplicate_confirmed_items():
     assert metadata["bbox_table_candidates"] == []
 
 
-def test_raw_extraction_prefers_direct_vl_key_value_bbox_over_ocr_line_bbox():
+def test_raw_extraction_key_values_ignore_direct_vl_and_ocr_candidates():
     document = Document(
         original_filename="transfer.pdf",
         stored_file_path="/tmp/transfer.pdf",
         mime_type="application/pdf",
+        extraction_method="paddleocr_vl",
+        raw_text="문서번호: DOC-RAW",
         workflow_metadata={
             "vl_candidates": [
                 {
@@ -255,10 +257,11 @@ def test_raw_extraction_prefers_direct_vl_key_value_bbox_over_ocr_line_bbox():
     matches = [
         item
         for item in snapshot["key_values"]
-        if item.get("key") == "문서번호" and item.get("value") == "DOC-007"
+        if item.get("key") == "문서번호"
     ]
     assert len(matches) == 1
-    assert matches[0]["source"] == "vl_key_value"
+    assert matches[0]["value"] == "DOC-RAW"
+    assert matches[0]["source"] == "vl_raw_text_key_value"
     assert "normalized_bbox" not in matches[0]
     assert "key_bbox" not in matches[0]
     assert "value_bbox" not in matches[0]
@@ -270,6 +273,7 @@ def test_raw_extraction_keeps_plain_key_values_without_bbox_fields():
         original_filename="quote.pdf",
         stored_file_path="/tmp/quote.pdf",
         mime_type="application/pdf",
+        raw_text="유효기간: 견적일로부터 14일",
         workflow_metadata={
             "vl_candidates": [
                 {
@@ -295,7 +299,7 @@ def test_raw_extraction_keeps_plain_key_values_without_bbox_fields():
 
     assert "coverage_summary" not in snapshot
     assert all("normalized_bbox" not in item and "bbox_source" not in item for item in snapshot["key_values"])
-    assert any(item["source"] == "ocr_key_value" and item["key"] == "유효기간" for item in snapshot["key_values"])
+    assert snapshot["key_values"] == [{"key": "유효기간", "value": "견적일로부터 14일", "source": "raw_text_key_value"}]
 
 
 def test_raw_extraction_table_preserves_raw_columns_for_raw_rows():
@@ -377,7 +381,7 @@ def test_raw_extraction_key_values_are_raw_source_values_only():
     assert all("normalized_bbox" not in item and "bbox_source" not in item for item in snapshot["key_values"])
 
 
-def test_raw_extraction_prefers_vl_raw_text_key_values_before_ocr_fallback():
+def test_raw_extraction_uses_only_vl_raw_text_key_values_even_when_ocr_differs():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",
         stored_file_path="/tmp/DOC-003.png",
@@ -433,7 +437,7 @@ def test_raw_extraction_builds_vl_raw_text_key_values_from_split_lines():
     assert values["공급자 상호"]["source"] == "vl_raw_text_key_value"
 
 
-def test_raw_extraction_ocr_key_values_keep_line_bboxes():
+def test_raw_extraction_does_not_build_key_values_from_ocr_lines_without_raw_text():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",
         stored_file_path="/tmp/DOC-003.png",
@@ -475,18 +479,10 @@ def test_raw_extraction_ocr_key_values_keep_line_bboxes():
         ],
     )
 
-    values = {item["key"]: item for item in snapshot["key_values"]}
-    assert values["문서번호"]["value"] == "DOC-003"
-    assert values["문서번호"]["source"] == "ocr_key_value"
-    assert "bbox_source" not in values["문서번호"]
-    assert "normalized_bbox" not in values["문서번호"]
-    assert "key_bbox" not in values["문서번호"]
-    assert "value_bbox" not in values["문서번호"]
-    assert values["샘플번호"]["value"] == "003"
-    assert values["공급자 상호"]["value"] == "(주)미래테크"
+    assert snapshot["key_values"] == []
 
 
-def test_raw_extraction_ocr_row_key_values_merge_nearby_value_tokens():
+def test_raw_extraction_does_not_build_row_key_values_from_ocr_tokens_without_raw_text():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",
         stored_file_path="/tmp/DOC-003.png",
@@ -509,9 +505,4 @@ def test_raw_extraction_ocr_row_key_values_merge_nearby_value_tokens():
         ],
     )
 
-    values = {item["key"]: item for item in snapshot["key_values"]}
-    assert values["문서번호"]["value"] == "DOC-003"
-    assert values["문서번호"]["source"] == "ocr_key_value"
-    assert "bbox_source" not in values["문서번호"]
-    assert values["작성일"]["value"] == "20260607"
-    assert values["상호"]["value"] == "(주)미래테크"
+    assert snapshot["key_values"] == []
