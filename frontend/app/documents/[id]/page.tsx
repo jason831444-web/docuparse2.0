@@ -1124,12 +1124,24 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
   useEffect(() => {
     if (!previewRef.current) return;
     const element = previewRef.current;
-    const observer = new ResizeObserver(([entry]) => {
-      const box = entry.contentRect;
-      setPreviewSize({ width: Math.max(1, box.width), height: Math.max(1, box.height) });
+    let frame = 0;
+    const updatePreviewSize = () => {
+      const next = {
+        width: Math.max(1, Math.floor(element.clientWidth)),
+        height: Math.max(1, Math.floor(element.clientHeight)),
+      };
+      setPreviewSize((current) => (current.width === next.width && current.height === next.height ? current : next));
+    };
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(updatePreviewSize);
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    updatePreviewSize();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, []);
 
   useEffect(() => {
@@ -1237,7 +1249,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         {isImage ? (
           <div
             ref={previewRef}
-            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto overscroll-contain rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
+            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto overscroll-contain rounded-lg border bg-neutral-100 [scrollbar-gutter:stable_both-edges] xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
             onPointerDown={handlePreviewPointerDown}
             onPointerMove={handlePreviewPointerMove}
             onPointerUp={endPreviewDrag}
@@ -1277,7 +1289,7 @@ function OriginalPreviewCard({ document, isImage }: { document: DocumentRecord; 
         ) : isPdf ? (
           <div
             ref={previewRef}
-            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto overscroll-contain rounded-lg border bg-neutral-100 xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
+            className={`relative h-[calc(100vh-12rem)] min-h-[34rem] max-h-[58rem] w-full overflow-auto overscroll-contain rounded-lg border bg-neutral-100 [scrollbar-gutter:stable_both-edges] xl:min-h-0 xl:max-h-none xl:flex-1 ${isDraggingPreview ? "cursor-grabbing" : "cursor-grab"}`}
             onPointerDown={handlePreviewPointerDown}
             onPointerMove={handlePreviewPointerMove}
             onPointerUp={endPreviewDrag}
@@ -1339,6 +1351,10 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function layoutPixel(value: number) {
+  return Math.max(1, Math.round(value));
+}
+
 function imagePreviewLayout({
   naturalSize,
   previewSize,
@@ -1355,12 +1371,12 @@ function imagePreviewLayout({
 
   const baseScale = Math.min(viewportWidth / imageWidth, viewportHeight / imageHeight);
   const scale = Math.max(0.05, baseScale * (zoom / 100));
-  const scaledImageWidth = imageWidth * scale;
-  const scaledImageHeight = imageHeight * scale;
-  const innerWidth = Math.max(viewportWidth, scaledImageWidth);
-  const innerHeight = Math.max(viewportHeight, scaledImageHeight);
-  const left = (innerWidth - scaledImageWidth) / 2;
-  const top = (innerHeight - scaledImageHeight) / 2;
+  const scaledImageWidth = layoutPixel(imageWidth * scale);
+  const scaledImageHeight = layoutPixel(imageHeight * scale);
+  const innerWidth = layoutPixel(Math.max(viewportWidth, scaledImageWidth));
+  const innerHeight = layoutPixel(Math.max(viewportHeight, scaledImageHeight));
+  const left = Math.max(0, Math.round((innerWidth - scaledImageWidth) / 2));
+  const top = Math.max(0, Math.round((innerHeight - scaledImageHeight) / 2));
   const scrollLeft = clampNumber((innerWidth - viewportWidth) / 2, 0, Math.max(0, innerWidth - viewportWidth));
   const scrollTop = clampNumber((innerHeight - viewportHeight) / 2, 0, Math.max(0, innerHeight - viewportHeight));
 
@@ -1380,17 +1396,17 @@ function pdfPreviewLayout({ previewSize, zoom }: { previewSize: PreviewSize; zoo
   const viewportWidth = Math.max(1, previewSize.width);
   const viewportHeight = Math.max(1, previewSize.height);
   const scale = Math.max(0.6, zoom / 100);
-  const pageWidth = viewportWidth * scale;
-  const pageHeight = viewportHeight * scale;
-  const innerWidth = Math.max(viewportWidth, pageWidth);
-  const innerHeight = Math.max(viewportHeight, pageHeight);
+  const pageWidth = layoutPixel(viewportWidth * scale);
+  const pageHeight = layoutPixel(viewportHeight * scale);
+  const innerWidth = layoutPixel(Math.max(viewportWidth, pageWidth));
+  const innerHeight = layoutPixel(Math.max(viewportHeight, pageHeight));
   return {
     innerWidth,
     innerHeight,
     pageWidth,
     pageHeight,
-    left: (innerWidth - pageWidth) / 2,
-    top: (innerHeight - pageHeight) / 2,
+    left: Math.max(0, Math.round((innerWidth - pageWidth) / 2)),
+    top: Math.max(0, Math.round((innerHeight - pageHeight) / 2)),
   };
 }
 
