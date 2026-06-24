@@ -55,9 +55,9 @@ function toForm(document: DocumentRecord): DocumentReviewForm {
     title: document.title ?? "",
     raw_text: document.raw_text ?? "",
     extracted_date: document.extracted_date ?? "",
-    extracted_amount: document.extracted_amount ?? "",
-    subtotal: document.subtotal ?? "",
-    tax: document.tax ?? "",
+    extracted_amount: document.extracted_amount ?? semanticFieldValue(document, ["document_total", "payment_total", "estimated_total", "total_amount"]) ?? "",
+    subtotal: document.subtotal ?? semanticFieldValue(document, ["supply_amount", "subtotal"]) ?? "",
+    tax: document.tax ?? semanticFieldValue(document, ["tax_amount", "vat"]) ?? "",
     currency: document.currency ?? "",
     merchant_name: document.merchant_name ?? "",
     vendor_name: document.vendor_name ?? "",
@@ -116,6 +116,21 @@ function readList(value: unknown): string[] {
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function semanticFieldValue(document: DocumentRecord, keys: string[]): string | null {
+  const metadata = readRecord(document.workflow_metadata);
+  const confirmed = readRecord(metadata.confirmed_semantic_mapping);
+  const raw = readRecord(metadata.raw_semantic_mapping);
+  for (const mapping of [confirmed, raw]) {
+    const fields = readRecord(mapping.fields);
+    for (const key of keys) {
+      const value = fields[key];
+      if (typeof value === "string" && value.trim()) return value;
+      if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    }
+  }
+  return null;
 }
 
 function displayValue(value: unknown): string {
