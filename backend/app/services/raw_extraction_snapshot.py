@@ -309,7 +309,8 @@ class RawExtractionSnapshotService:
     def _add_raw_text_key_values(self, raw_text: object, key_values: list[dict[str, Any]], *, source: str = RAW_TEXT_KEY_VALUE_SOURCE) -> None:
         lines = [line.strip() for line in str(raw_text or "").splitlines() if line.strip()]
         section: str | None = None
-        for line in lines:
+        for index, raw_line in enumerate(lines):
+            line = self._raw_text_line_with_continuation(lines, index)
             section = self._key_value_section_from_line(line) or section
             for key, value, _start, _end in self._parse_key_value_line(line):
                 full_key = self._sectioned_key(section, key)
@@ -320,7 +321,7 @@ class RawExtractionSnapshotService:
                     full_key,
                     value,
                     source,
-                    section=section,
+                    section=section if full_key != key else None,
                 )
         self._add_raw_text_split_line_key_values(lines, key_values, source=source)
 
@@ -358,8 +359,18 @@ class RawExtractionSnapshotService:
                 full_key,
                 value,
                 source,
-                section=target_section,
+                section=target_section if full_key != key else None,
             )
+
+    def _raw_text_line_with_continuation(self, lines: list[str], index: int) -> str:
+        line = lines[index]
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        if re.match(r"^\s*(문서\s*번호|샘플\s*번호|팸플\s*번호)\s*[:：]\s*[A-Za-z]{1,8}\s*$", line, flags=re.IGNORECASE) and re.match(
+            r"^\s*[-_/]?\s*[A-Za-z0-9]{1,12}\s*$",
+            next_line,
+        ):
+            return f"{line}{next_line.strip()}"
+        return line
 
     def _raw_text_split_line_key(self, line: str) -> str | None:
         split = re.match(r"^\s*([^:：]{1,30})\s*[:：]\s*$", line)

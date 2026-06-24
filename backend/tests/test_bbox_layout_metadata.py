@@ -437,6 +437,33 @@ def test_raw_extraction_builds_vl_raw_text_key_values_from_split_lines():
     assert values["공급자 상호"]["source"] == "vl_raw_text_key_value"
 
 
+def test_raw_extraction_joins_raw_text_identifier_continuation_lines():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "문서번호:DOC",
+                "-003",
+                "공급자",
+                "상호:주미래테크",
+                "샘플번호: 003",
+            ]
+        ),
+    )
+
+    snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {item["key"]: item for item in snapshot["key_values"]}
+
+    assert values["문서번호"]["value"] == "DOC-003"
+    assert values["문서번호"]["source"] == "vl_raw_text_key_value"
+    assert "section" not in values["문서번호"]
+    assert values["샘플번호"]["value"] == "003"
+    assert "section" not in values["샘플번호"]
+
+
 def test_raw_extraction_does_not_build_key_values_from_ocr_lines_without_raw_text():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",
