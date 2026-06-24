@@ -470,6 +470,14 @@ function rawKeyValueEntries(document: DocumentRecord): Array<Record<string, unkn
     : [];
 }
 
+function dictionarySuggestions(document: DocumentRecord): Array<Record<string, unknown>> {
+  const metadata = readRecord(document.workflow_metadata);
+  const dictionary = readRecord(metadata.dictionary_suggestions);
+  return Array.isArray(dictionary.suggestions)
+    ? dictionary.suggestions.map((item) => readRecord(item)).filter((item) => item.target === "raw_key_value" && item.suggested_value)
+    : [];
+}
+
 function keyValueBackendIdentity(entry: Record<string, unknown>): string {
   return [entry.key, entry.source, entry.role, entry.section].map((value) => String(value ?? "")).join("|");
 }
@@ -480,14 +488,23 @@ function keyValueIdentity(entry: Record<string, unknown>, index: number): string
 
 function RawKeyValueEditor({
   entries,
+  suggestions,
   saving,
   onChange,
 }: {
   entries: Array<Record<string, unknown>>;
+  suggestions: Array<Record<string, unknown>>;
   saving: boolean;
   onChange: (index: number, field: "key" | "value", value: string) => void;
 }) {
   if (!entries.length) return null;
+  const suggestionsByIndex = suggestions.reduce<Record<number, Array<Record<string, unknown>>>>((acc, suggestion) => {
+    const index = Number(suggestion.index);
+    if (Number.isInteger(index) && index >= 0) {
+      acc[index] = [...(acc[index] || []), suggestion];
+    }
+    return acc;
+  }, {});
   return (
     <div className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -500,18 +517,41 @@ function RawKeyValueEditor({
         </Badge>
       </div>
       <div className="grid gap-3 rounded-md border bg-white p-3 md:grid-cols-2 xl:grid-cols-3">
-        {entries.map((entry, index) => (
-          <div key={keyValueIdentity(entry, index)} className="grid gap-2 rounded-md border border-slate-100 bg-slate-50/60 p-2">
-            <label className="grid gap-1 text-xs font-medium text-slate-600">
-              <span>Key</span>
-              <Input className="h-8 bg-white text-xs" value={displayValue(entry.key) === "-" ? "" : displayValue(entry.key)} disabled={saving} onChange={(event) => onChange(index, "key", event.target.value)} />
-            </label>
-            <label className="grid gap-1 text-xs font-medium text-slate-600">
-              <span>Value</span>
-              <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, "value", event.target.value)} />
-            </label>
-          </div>
-        ))}
+        {entries.map((entry, index) => {
+          const entrySuggestions = suggestionsByIndex[index] || [];
+          return (
+            <div key={keyValueIdentity(entry, index)} className="grid gap-2 rounded-md border border-slate-100 bg-slate-50/60 p-2">
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                <span>Key</span>
+                <Input className="h-8 bg-white text-xs" value={displayValue(entry.key) === "-" ? "" : displayValue(entry.key)} disabled={saving} onChange={(event) => onChange(index, "key", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                <span>Value</span>
+                <Input className="h-8 bg-white text-xs" value={displayValue(entry.value) === "-" ? "" : displayValue(entry.value)} disabled={saving} onChange={(event) => onChange(index, "value", event.target.value)} />
+              </label>
+              {entrySuggestions.length ? (
+                <div className="grid gap-1 border-t border-slate-200 pt-2">
+                  {entrySuggestions.map((suggestion, suggestionIndex) => {
+                    const field = suggestion.field === "key" ? "key" : "value";
+                    const confidence = Number(suggestion.confidence);
+                    return (
+                      <button
+                        key={`${field}-${suggestion.suggested_value}-${suggestionIndex}`}
+                        type="button"
+                        disabled={saving}
+                        onClick={() => onChange(index, field, String(suggestion.suggested_value ?? ""))}
+                        className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-left text-[11px] text-amber-950 transition hover:bg-amber-100 disabled:opacity-60"
+                      >
+                        <span className="font-semibold">추천 {field === "key" ? "Key" : "Value"}:</span> {displayValue(suggestion.suggested_value)}
+                        {Number.isFinite(confidence) ? <span className="ml-1 text-amber-700">{Math.round(confidence * 100)}%</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1731,6 +1771,7 @@ export default function DocumentDetailPage() {
 
   const watchedLineItems = form.watch("line_items") ?? [];
   const reviewedKeyValues = (form.watch("reviewed_key_values") as Array<Record<string, unknown>> | undefined) ?? [];
+  const keyValueSuggestions = document ? dictionarySuggestions(document) : [];
 
   const categoryInterpretation = useMemo(
     () => (document?.workflow_metadata?.category_interpretation ?? document?.ingestion_metadata?.category_interpretation ?? null) as Record<string, unknown> | null,
@@ -2163,7 +2204,7 @@ export default function DocumentDetailPage() {
                     <p className="mt-1 text-xs text-muted-foreground">추출된 표를 그대로 확인하고 필요한 셀만 수정하세요.</p>
                   </div>
                 </div>
-                <RawKeyValueEditor entries={reviewedKeyValues} saving={saving} onChange={updateReviewedKeyValue} />
+                <RawKeyValueEditor entries={reviewedKeyValues} suggestions={keyValueSuggestions} saving={saving} onChange={updateReviewedKeyValue} />
                 <EditableRawExtractedTable
                   document={document}
                   items={lineItems}

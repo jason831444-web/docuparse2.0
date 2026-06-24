@@ -20,6 +20,7 @@ from app.services.category_taxonomy import clean_tags_for_context, normalize_cat
 from app.services.document_router import LightweightDocumentRouter
 from app.services.document_interpretation_service import DocumentInterpretationService
 from app.services.document_taxonomy import DocumentTaxonomyService
+from app.services.domain_dictionary import DomainDictionarySuggestionService
 from app.services.file_ingestion import FileIngestionService, NormalizedDocument
 from app.services.image_preprocessor import ImagePreprocessor
 from app.services.item_master_matcher import ItemMasterMatcher
@@ -67,6 +68,7 @@ class DocumentProcessor:
         self.taxonomy = DocumentTaxonomyService()
         self.workflow_enrichment = DocumentWorkflowEnrichmentService()
         self.item_master_matcher = ItemMasterMatcher()
+        self.domain_dictionary = DomainDictionarySuggestionService()
         self.ai_merger = AIResultMerger()
         self.ai_parsed_document_builder = AiParsedDocumentBuilder()
         self.bbox_table_reconstructor = BBoxTableReconstructor()
@@ -632,6 +634,7 @@ class DocumentProcessor:
             workflow_metadata["raw_extraction"] = raw_extraction
             workflow_metadata["classification_pre_mapping"] = SemanticMappingService().classification_pre_mapping(document, raw_extraction)
             workflow_metadata["raw_semantic_mapping"] = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")
+            workflow_metadata["dictionary_suggestions"] = self.domain_dictionary.suggestions_for_document(db, document, raw_extraction)
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             if parser_only:
                 logger.info("Parser-only processing completed for document %s.", document.id)

@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Annotated
@@ -42,6 +42,7 @@ from app.services.semantic_mapping import SemanticMappingService
 from app.services.storage import get_storage_service
 from app.services.workflow_enrichment import DocumentWorkflowEnrichmentService
 from app.services.document_processor import DocumentProcessor
+from app.services.domain_dictionary import DomainDictionarySuggestionService
 from app.services.review_workflow import approval_error_payload, approve_document, reopen_document, review_metadata, update_issue_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -618,6 +619,7 @@ def update_document(document_id: UUID, payload: DocumentUpdate, db: Session = De
     workflow_metadata["raw_extraction"] = raw_extraction
     workflow_metadata["classification_pre_mapping"] = SemanticMappingService().classification_pre_mapping(document, raw_extraction)
     workflow_metadata["raw_semantic_mapping"] = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")
+    workflow_metadata["dictionary_suggestions"] = DomainDictionarySuggestionService().suggestions_for_document(db, document, raw_extraction)
     document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
     document.tags = clean_tags_for_context(
         document.tags,
@@ -649,6 +651,14 @@ def confirm_document(document_id: UUID, payload: ReviewApprovalRequest | None = 
         db.commit()
         raise HTTPException(status_code=409, detail=approval_error_payload(document, validation))
     SemanticMappingService().apply_to_document(document, approval_note=approval_note)
+    metadata = dict(document.workflow_metadata or {})
+    metadata["domain_dictionary_learning"] = {
+        "version": "domain_dictionary_learning_v1",
+        "source": "confirmed_raw_data",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "confirmed_sources_only": True,
+    }
+    document.workflow_metadata = metadata
     document.workflow_metadata = sanitize_for_postgres(document.workflow_metadata or None)
     document.review_required = False
     document.processing_status = ProcessingStatus.confirmed
