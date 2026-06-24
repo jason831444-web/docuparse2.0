@@ -205,7 +205,10 @@ class RawExtractionSnapshotService:
     def _known_key_label_pattern(self) -> str:
         return (
             r"문서\s*번호|샘플\s*번호|팸플\s*번호|사업자\s*번호|사엽자\s*변호|작성일|발행일|견적일|유효\s*기간|"
-            r"납기일|요청일|담당|당당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|예상\s*합계"
+            r"납기일|요청일|일자|매장|담당|당당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|"
+            r"예상\s*합계|실판매\s*금액|순판매\s*금액|과세\s*합계|공급\s*가액|V\.?\s*A\.?\s*T|VAT|"
+            r"결제\s*합계|현금\s*합계|카드\s*합계|온라인\s*결제|주문\s*횟수|매장\s*판매|매장\s*판애|"
+            r"배달\s*판매|배달\s*판마|평균\s*단가"
         )
 
     def _clean_raw_key(self, value: str) -> str:
@@ -218,6 +221,22 @@ class RawExtractionSnapshotService:
             "사엽자변호": "사업자번호",
             "사업자 번호": "사업자번호",
             "당당": "담당",
+            "실판매 금액": "실판매금액",
+            "순판매 금액": "순판매금액",
+            "과세 합계": "과세합계",
+            "공급 가액": "공급가액",
+            "결제 합계": "결제합계",
+            "현금 합계": "현금합계",
+            "카드 합계": "카드합계",
+            "온라인 결제": "온라인결제",
+            "주문 횟수": "주문횟수",
+            "매장 판매": "매장판매",
+            "매장판애": "매장판매",
+            "배달 판매": "배달판매",
+            "배달판마": "배달판매",
+            "평균 단가": "평균단가",
+            "V.A.T": "VAT",
+            "V A T": "VAT",
         }
         compact = re.sub(r"\s+", "", value)
         return aliases.get(value) or aliases.get(compact) or value
@@ -268,6 +287,8 @@ class RawExtractionSnapshotService:
             "유효기간",
             "납기일",
             "요청일",
+            "일자",
+            "매장",
             "담당",
             "당당",
             "상호",
@@ -275,6 +296,22 @@ class RawExtractionSnapshotService:
             "출고창고",
             "요청부서",
             "예상합계",
+            "실판매금액",
+            "순판매금액",
+            "과세합계",
+            "공급가액",
+            "VAT",
+            "V.A.T",
+            "결제합계",
+            "현금합계",
+            "카드합계",
+            "온라인결제",
+            "주문횟수",
+            "매장판매",
+            "매장판애",
+            "배달판매",
+            "배달판마",
+            "평균단가",
         }
         return normalized in known
 
@@ -294,13 +331,29 @@ class RawExtractionSnapshotService:
         if normalized_key == "문서번호":
             candidate = self._clean_raw_value(" ".join([*value_parts, normalized_text]))
             return bool(re.fullmatch(r"[A-Za-z]{1,10}(?:-\d{1,10})?|-?\d{1,10}", candidate))
-        if normalized_key in {"작성일", "발행일", "견적일", "납기일", "요청일"}:
+        if normalized_key in {"작성일", "발행일", "견적일", "납기일", "요청일", "일자"}:
             return not value_parts and bool(re.fullmatch(r"\d{4}[./-]?\d{2}[./-]?\d{2}", normalized_text))
         if normalized_key in {"샘플번호", "팸플번호"}:
             return not value_parts and bool(re.fullmatch(r"[A-Za-z0-9-]{1,20}", normalized_text))
         if normalized_key in {"사업자번호", "사엽자변호"}:
             return not value_parts and bool(re.fullmatch(r"\d{3}-?\d{2}-?\d{5}", normalized_text))
         if normalized_key == "예상합계":
+            return not value_parts and bool(re.fullmatch(r"[0-9][0-9,]*(?:\.[0-9]+)?", normalized_text))
+        if normalized_key in {
+            "실판매금액",
+            "순판매금액",
+            "과세합계",
+            "공급가액",
+            "VAT",
+            "결제합계",
+            "현금합계",
+            "카드합계",
+            "온라인결제",
+            "주문횟수",
+            "매장판매",
+            "배달판매",
+            "평균단가",
+        }:
             return not value_parts and bool(re.fullmatch(r"[0-9][0-9,]*(?:\.[0-9]+)?", normalized_text))
         if len(value_parts) >= 3:
             return False

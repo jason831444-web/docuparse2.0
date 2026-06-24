@@ -15,6 +15,7 @@ from app.models.document import Document, DocumentType
 from app.services.document_processor import DocumentProcessor
 from app.services.file_ingestion import NormalizedDocument
 from app.services.raw_extraction_snapshot import RawExtractionSnapshotService
+from app.services.semantic_mapping import SemanticMappingService
 
 
 def _candidate(text: str, x_min: float, y_min: float, x_max: float, y_max: float, confidence: float = 0.95):
@@ -462,6 +463,95 @@ def test_raw_extraction_joins_raw_text_identifier_continuation_lines():
     assert "section" not in values["문서번호"]
     assert values["샘플번호"]["value"] == "003"
     assert "section" not in values["샘플번호"]
+
+
+def test_raw_extraction_builds_pos_daily_key_values_from_vl_raw_text_split_lines():
+    document = Document(
+        original_filename="DOC-009_pos_daily_settlement_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-009.png",
+        mime_type="image/png",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "문서번호:DOC-009",
+                "POS",
+                "일일정산",
+                "일자: 20260620",
+                "매장:",
+                "가온푸드",
+                "실판매금액",
+                "1266000",
+                "순판매금액",
+                "1266000",
+                "공급가액",
+                "1150909",
+                "VAT",
+                "115091",
+                "결제합계",
+                "1266000",
+                "매장판애",
+                "15",
+                "배달판마",
+                "12",
+            ]
+        ),
+    )
+
+    snapshot = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {item["key"]: item for item in snapshot["key_values"]}
+
+    assert values["문서번호"]["value"] == "DOC-009"
+    assert values["매장"]["value"] == "가온푸드"
+    assert values["실판매금액"]["value"] == "1266000"
+    assert values["공급가액"]["value"] == "1150909"
+    assert values["VAT"]["value"] == "115091"
+    assert values["결제합계"]["value"] == "1266000"
+    assert values["매장판매"]["value"] == "15"
+    assert values["배달판매"]["value"] == "12"
+    assert all(item["source"] == "vl_raw_text_key_value" for item in snapshot["key_values"])
+
+
+def test_semantic_mapping_uses_pos_payment_total_as_document_total():
+    document = Document(
+        original_filename="DOC-009_pos_daily_settlement_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-009.png",
+        mime_type="image/png",
+        document_type=DocumentType.general_document,
+        category="pos_daily_settlement",
+        document_number="DOC-009",
+        currency="KRW",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "문서번호:DOC-009",
+                "POS 일일정산",
+                "일자: 20260620",
+                "매장:",
+                "가온푸드",
+                "실판매금액",
+                "1266000",
+                "순판매금액",
+                "1266000",
+                "공급가액",
+                "1150909",
+                "VAT",
+                "115091",
+                "결제합계",
+                "1266000",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert mapping["category"] == "pos_daily_settlement"
+    assert fields["payment_total"] == "1266000"
+    assert fields["document_total"] == "1266000"
+    assert fields["supply_amount"] == "1150909"
+    assert fields["vat_amount"] == "115091"
+    assert fields["tax_amount"] == "115091"
 
 
 def test_raw_extraction_reviewed_key_values_can_rename_keys():

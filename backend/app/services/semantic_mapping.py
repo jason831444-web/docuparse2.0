@@ -141,6 +141,7 @@ class SemanticMappingService:
         fields.update(self._fields_from_key_values(raw.get("key_values") or [], self.FIELD_ALIASES))
         if category == "pos_daily_settlement":
             fields.update(self._fields_from_key_values(raw.get("key_values") or [], self.POS_ALIASES))
+            fields = self._normalize_pos_daily_fields(fields)
         line_items = self._line_items_from_tables(raw.get("tables") or [])
         mapping_confidence = self._confidence(fields, line_items)
         return {
@@ -186,6 +187,16 @@ class SemanticMappingService:
                     continue
                 if any(self._normalize_label(candidate) in normalized_key for candidate in candidates):
                     fields[target] = self._normalize_business_value(raw_value)
+        return fields
+
+    def _normalize_pos_daily_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
+        fields = dict(fields)
+        if not fields.get("tax_amount") and fields.get("vat_amount"):
+            fields["tax_amount"] = fields["vat_amount"]
+        for total_key in ("payment_total", "actual_sales_amount", "net_sales_amount"):
+            if fields.get(total_key):
+                fields["document_total"] = fields[total_key]
+                break
         return fields
 
     def _line_items_from_tables(self, tables: list[Any]) -> list[dict[str, Any]]:
