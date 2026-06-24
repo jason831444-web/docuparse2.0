@@ -27,11 +27,11 @@ class SemanticMappingService:
         "document_number": ("문서번호", "document no", "doc no", "invoice no"),
         "vendor_name": ("공급자", "공급처", "공급업체", "seller", "vendor"),
         "customer_name": ("공급받는자", "고객사", "buyer", "customer"),
-        "issue_date": ("발행일", "작성일", "거래일자", "invoice date", "일자", "요청일"),
+        "issue_date": ("발행일", "작성일", "거래일자", "invoice date", "견적일", "일자", "요청일"),
         "due_date": ("납기일", "지급기한", "payment due date", "due date"),
         "supply_amount": ("공급가액", "subtotal", "supply amount"),
         "tax_amount": ("부가세", "세액", "v.a.t", "vat", "tax"),
-        "document_total": ("총합계", "총 합계", "합계금액", "결제합계", "청구금액", "total", "amount due"),
+        "document_total": ("총합계", "총 합계", "합계금액", "결제합계", "청구금액", "결제금액", "합계", "total", "amount due"),
         "estimated_total": ("예상합계", "예상 합계", "견적합계"),
         "currency": ("통화", "currency"),
         "exchange_rate": ("exchange rate", "환율"),
@@ -142,6 +142,7 @@ class SemanticMappingService:
         if category == "pos_daily_settlement":
             fields.update(self._fields_from_key_values(raw.get("key_values") or [], self.POS_ALIASES))
             fields = self._normalize_pos_daily_fields(fields)
+        fields = self._normalize_semantic_fields(fields, raw.get("key_values") or [], category)
         line_items = self._line_items_from_tables(raw.get("tables") or [])
         mapping_confidence = self._confidence(fields, line_items)
         return {
@@ -185,6 +186,8 @@ class SemanticMappingService:
             for target, candidates in aliases.items():
                 if target in fields:
                     continue
+                if target in {"vendor_name", "customer_name"} and not self._is_party_name_key(target, raw_key):
+                    continue
                 if any(self._normalize_label(candidate) in normalized_key for candidate in candidates):
                     fields[target] = self._normalize_business_value(raw_value)
         return fields
@@ -198,6 +201,136 @@ class SemanticMappingService:
                 fields["document_total"] = fields[total_key]
                 break
         return fields
+
+    def _normalize_semantic_fields(self, fields: dict[str, Any], key_values: list[Any], category: str) -> dict[str, Any]:
+        fields = dict(fields)
+        raw_fields = self._raw_field_candidates(key_values)
+        for target in ("vendor_name", "customer_name"):
+            if raw_fields.get(target):
+                fields[target] = raw_fields[target]
+        for target in ("issue_date", "due_date"):
+            if raw_fields.get(target):
+                fields[target] = raw_fields[target]
+        fields = self._normalize_amount_fields(fields, raw_fields, category)
+        return fields
+
+    def _normalize_amount_fields(self, fields: dict[str, Any], raw_fields: dict[str, Any], category: str) -> dict[str, Any]:
+        fields = dict(fields)
+        if raw_fields.get("supply_amount"):
+            fields["supply_amount"] = raw_fields["supply_amount"]
+        if raw_fields.get("tax_amount"):
+            fields["tax_amount"] = raw_fields["tax_amount"]
+
+        total_priority = self._document_total_priority(category)
+        for key in total_priority:
+            if raw_fields.get(key):
+                fields["document_total"] = raw_fields[key]
+                break
+
+        if not fields.get("document_total") and raw_fields.get("estimated_total"):
+            fields["document_total"] = raw_fields["estimated_total"]
+        if not fields.get("document_total"):
+            inferred = self._sum_amounts(fields.get("supply_amount"), fields.get("tax_amount"))
+            if inferred is not None:
+                fields["document_total"] = str(inferred)
+        if fields.get("document_total") and fields.get("supply_amount") and fields.get("tax_amount"):
+            inferred = self._sum_amounts(fields.get("supply_amount"), fields.get("tax_amount"))
+            total = self._decimal_from_text(str(fields.get("document_total")))
+            supply = self._decimal_from_text(str(fields.get("supply_amount")))
+            if inferred is not None and total is not None and supply is not None and total == supply and inferred != supply:
+                fields["document_total"] = str(inferred)
+        return fields
+
+    def _document_total_priority(self, category: str) -> tuple[str, ...]:
+        if category == "pos_daily_settlement":
+            return ("payment_total", "actual_sales_amount", "net_sales_amount", "document_total")
+        if category == "quotation":
+            return ("estimated_total", "document_total")
+        if category == "commercial_invoice":
+            return ("total_usd", "document_total", "krw_converted")
+        return ("document_total", "estimated_total")
+
+    def _raw_field_candidates(self, key_values: list[Any]) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for item in key_values:
+            if not isinstance(item, dict):
+                continue
+            raw_key = str(item.get("key") or "")
+            raw_value = item.get("value")
+            if raw_value in (None, ""):
+                continue
+            normalized_key = self._normalize_label(raw_key)
+            normalized_value = self._normalize_business_value(raw_value)
+            if self._is_party_name_key("vendor_name", raw_key):
+                fields["vendor_name"] = normalized_value
+                continue
+            if self._is_party_name_key("customer_name", raw_key):
+                fields["customer_name"] = normalized_value
+                continue
+            amount_field = self._amount_field_from_key(normalized_key)
+            if amount_field:
+                fields[amount_field] = normalized_value
+                continue
+            date_field = self._date_field_from_key(normalized_key)
+            if date_field:
+                fields[date_field] = normalized_value
+        return fields
+
+    def _is_party_name_key(self, target: str, raw_key: object) -> bool:
+        normalized = self._normalize_label(raw_key)
+        name_signal = any(signal in normalized for signal in ("상호", "업체명", "회사명", "거래처", "고객사", "seller", "vendor", "buyer", "customer"))
+        blocked = any(signal in normalized for signal in ("사업자번호", "담당", "대표자", "주소", "전화", "번호"))
+        if blocked:
+            return False
+        if target == "vendor_name":
+            return (
+                normalized in {"공급자", "공급처", "공급업체", "seller", "vendor"}
+                or ("공급자" in normalized and name_signal)
+                or "seller" in normalized
+                or "vendor" in normalized
+            )
+        return (
+            normalized in {"공급받는자", "고객사", "buyer", "customer"}
+            or ("공급받는자" in normalized and name_signal)
+            or "고객사" in normalized
+            or "buyer" in normalized
+            or "customer" in normalized
+        )
+
+    def _amount_field_from_key(self, normalized_key: str) -> str | None:
+        if normalized_key in {"공급가액", "subtotal", "supplyamount"}:
+            return "supply_amount"
+        if normalized_key in {"세액", "부가세", "vat", "v.a.t", "tax"}:
+            return "tax_amount"
+        if normalized_key in {"예상합계", "견적합계"}:
+            return "estimated_total"
+        if normalized_key in {"결제합계", "실판매금액", "순판매금액"}:
+            return {
+                "결제합계": "payment_total",
+                "실판매금액": "actual_sales_amount",
+                "순판매금액": "net_sales_amount",
+            }[normalized_key]
+        if normalized_key in {"총합계", "합계금액", "합계", "청구금액", "결제금액", "amountdue", "total", "totalamount", "grandtotal", "invoicetotal"}:
+            return "document_total"
+        if normalized_key == "totalusd":
+            return "total_usd"
+        if normalized_key in {"krwconverted", "원화환산"}:
+            return "krw_converted"
+        return None
+
+    def _date_field_from_key(self, normalized_key: str) -> str | None:
+        if normalized_key in {"납기일", "지급기한", "paymentduedate", "duedate"}:
+            return "due_date"
+        if normalized_key in {"발행일", "작성일", "거래일자", "invoicedate", "견적일", "일자", "요청일"}:
+            return "issue_date"
+        return None
+
+    def _sum_amounts(self, left: object, right: object) -> Decimal | None:
+        left_number = self._decimal_from_text(str(left or ""))
+        right_number = self._decimal_from_text(str(right or ""))
+        if left_number is None or right_number is None:
+            return None
+        return left_number + right_number
 
     def _line_items_from_tables(self, tables: list[Any]) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []

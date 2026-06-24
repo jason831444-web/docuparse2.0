@@ -554,6 +554,84 @@ def test_semantic_mapping_uses_pos_payment_total_as_document_total():
     assert fields["tax_amount"] == "115091"
 
 
+def test_semantic_mapping_promotes_quotation_expected_total_and_party_sections():
+    document = Document(
+        original_filename="DOC-003_quotation_uncropped_photo.png",
+        stored_file_path="/tmp/DOC-003.png",
+        mime_type="image/png",
+        document_type=DocumentType.quotation,
+        category="quotation",
+        document_number="DOC-003",
+        extracted_amount=Decimal("1120000"),
+        currency="KRW",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "견 적 서",
+                "문서번호: DOC-003                         샘플번호: 003",
+                "공급자",
+                "상호: (주)미래테크",
+                "사업자번호: 123-45-67890",
+                "담당: 김선영 / 회계팀",
+                "공급받는자",
+                "상호: (주)시흥대야점",
+                "작성일: 2026.06.07",
+                "유효기간: 견적일로부터 14일",
+                "예상 합계 1,639,000",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert fields["vendor_name"] == "(주)미래테크"
+    assert fields["customer_name"] == "(주)시흥대야점"
+    assert fields["issue_date"] == "2026.06.07"
+    assert fields["estimated_total"] == "1639000"
+    assert fields["document_total"] == "1639000"
+
+
+def test_semantic_mapping_does_not_use_party_business_number_as_party_name():
+    document = Document(
+        original_filename="DOC-004_transaction_statement_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-004.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.transaction_statement,
+        category="transaction_statement",
+        vendor_name="잘못된공급자",
+        customer_name="잘못된고객사",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "거래명세서",
+                "공급자",
+                "사업자번호: 123-45-67890",
+                "상호: (주)대성정공",
+                "공급받는자",
+                "사업자번호: 987-65-43210",
+                "상호: (주)시흥대야점",
+                "거래일자: 2026.06.17",
+                "공급가액 10,876,400",
+                "부가세 1,087,640",
+                "총합계 11,964,040",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert fields["vendor_name"] == "(주)대성정공"
+    assert fields["customer_name"] == "(주)시흥대야점"
+    assert fields["issue_date"] == "2026.06.17"
+    assert fields["supply_amount"] == "10876400"
+    assert fields["tax_amount"] == "1087640"
+    assert fields["document_total"] == "11964040"
+
+
 def test_raw_extraction_reviewed_key_values_can_rename_keys():
     document = Document(
         original_filename="DOC-003_quotation_uncropped_photo.png",
