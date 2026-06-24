@@ -123,7 +123,7 @@ function semanticFieldValue(document: DocumentRecord, keys: string[]): string | 
   const confirmed = readRecord(metadata.confirmed_semantic_mapping);
   const raw = readRecord(metadata.raw_semantic_mapping);
   for (const mapping of [confirmed, raw]) {
-    const fields = readRecord(mapping.fields);
+    const fields = { ...mapping, ...readRecord(mapping.fields) };
     for (const key of keys) {
       const value = fields[key];
       if (typeof value === "string" && value.trim()) return value;
