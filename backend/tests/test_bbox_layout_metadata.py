@@ -743,6 +743,68 @@ def test_raw_key_values_prefer_later_better_party_block_and_credit_total():
     assert fields["issue_date"] == "2026-06-04"
 
 
+def test_raw_key_values_assign_same_line_party_sections_in_order():
+    document = Document(
+        original_filename="DOC-015_transaction_statement_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-015.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.transaction_statement,
+        category="transaction_statement",
+        document_number="DOC-015",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "거래명세서",
+                "공급자 공급받는자 상호: (주)가온물류 상호: (주)코리아팩토리 작성일: 2026.06.08",
+                "문서번호: DOC-015",
+                "송합계 6.609.680",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    values = {item["key"]: item["value"] for item in raw["key_values"]}
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert values["공급자 상호"] == "(주)가온물류"
+    assert values["공급받는자 상호"] == "(주)코리아팩토리"
+    assert values["작성일"] == "2026.06.08"
+    assert values["총합계"] == "6.609.680"
+    assert fields["vendor_name"] == "(주)가온물류"
+    assert fields["customer_name"] == "(주)코리아팩토리"
+    assert fields["issue_date"] == "2026.06.08"
+    assert fields["document_total"] == "6609680"
+
+
+def test_semantic_mapping_amount_ocr_aliases_and_multi_number_values():
+    document = Document(
+        original_filename="DOC-065_receipt_uncropped_photo.jpg",
+        stored_file_path="/tmp/DOC-065.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.receipt,
+        category="receipt",
+        extraction_method="paddleocr_vl_1_6_gguf_primary_reader",
+        raw_text="\n".join(
+            [
+                "영수증",
+                "문서번호: DOC-065",
+                "공급기액 35,936",
+                "사물에 3,594",
+                "함계 3,594 39,530",
+            ]
+        ),
+    )
+
+    raw = RawExtractionSnapshotService().build(document, source="processing_pipeline")
+    mapping = SemanticMappingService().map_raw(document, raw)
+    fields = mapping["fields"]
+
+    assert fields["supply_amount"] == "35936"
+    assert fields["tax_amount"] == "3594"
+    assert fields["document_total"] == "39530"
+
+
 def test_raw_key_values_use_pending_and_trailing_party_sections():
     document = Document(
         original_filename="DOC-043_quotation_uncropped_photo.jpg",

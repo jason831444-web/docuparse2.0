@@ -32,6 +32,11 @@ ROOT_LABELS = {
 ALIASES = {
     "repair_service_receipt": "repair_service",
     "receipt": "retail",
+    "tax_invoice": "invoice",
+    "commercial_invoice": "invoice",
+    "incoming_inspection": "inspection_report",
+    "return_credit": "credit_note",
+    "return_credit_note": "credit_note",
     "utilities": "utility_bill",
     "utility": "utility_bill",
     "profile": "profile_record",

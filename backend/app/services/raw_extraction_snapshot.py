@@ -195,7 +195,11 @@ class RawExtractionSnapshotService:
         if not match:
             match = re.match(r"^\s*([가-힣A-Za-z0-9/().\s]{1,30})\s{2,}(.{1,80})\s*$", text)
         if not match:
-            match = re.match(r"^\s*(예상\s*합계|합계\s*금액|총\s*합계|크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|TOTAL(?:\s+[A-Z]+)?)\s+(-?[0-9][0-9,]*(?:\.[0-9]+)?)\s*$", text, flags=re.IGNORECASE)
+            amount_labels = (
+                r"예상\s*합계|합계\s*금액|총\s*합계|송\s*합계|총\s*함계|함계|합개|"
+                r"크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|TOTAL(?:\s+[A-Z]+)?"
+            )
+            match = re.match(rf"^\s*({amount_labels})\s*(-?[0-9][0-9,.]*(?:\s+[0-9][0-9,.]*)?)\s*$", text, flags=re.IGNORECASE)
         if not match:
             match = self._glued_key_value_match(text)
         if not match:
@@ -209,9 +213,9 @@ class RawExtractionSnapshotService:
             r"문서\s*번호|문시\s*빈호|운서\s*번호|샘플\s*번호|팸플\s*번호|생플\s*번호|생플\s*변호|생품\s*번호|생표\s*변호|생물\s*변호|참조\s*번호|관련\s*문서\s*번호|원\s*문서|"
             r"사업자\s*번호|사엽자\s*변호|작성일|작성임|발행일|견적일|유효\s*기간|"
             r"납기일|요청일|일자|매장|담당|당당|상호|공급자|공급받는자|입고창고|출고창고|요청부서|"
-            r"예상\s*합계|총\s*합계|합계\s*금액|합계|크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|"
-            r"실판매\s*금액|순판매\s*금액|과세\s*합계|공급\s*가액|"
-            r"부가\s*세|세액|V\.?\s*A\.?\s*T|VAT|"
+            r"예상\s*합계|총\s*합계|송\s*합계|총\s*함계|합계\s*금액|합계|함계|합개|크레[딧뒷]\s*합계|반품\s*합계|조정\s*합계|차감\s*합계|"
+            r"실판매\s*금액|순판매\s*금액|과세\s*합계|공급\s*가액|공급\s*기액|공급\s*기록|공급\s*가역|궁급\s*가액|"
+            r"부가\s*세|세액|세악|새액|사물에|V\.?\s*A\.?\s*T|VAT|"
             r"결제\s*합계|현금\s*합계|카드\s*합계|온라인\s*결제|주문\s*횟수|매장\s*판매|매장\s*판애|"
             r"배달\s*판매|배달\s*판마|평균\s*단가"
         )
@@ -241,8 +245,21 @@ class RawExtractionSnapshotService:
             "순판매 금액": "순판매금액",
             "과세 합계": "과세합계",
             "공급 가액": "공급가액",
+            "공급기액": "공급가액",
+            "공급기록": "공급가액",
+            "공급가역": "공급가액",
+            "궁급가액": "공급가액",
             "부가 세": "부가세",
+            "세악": "세액",
+            "새액": "세액",
+            "사물에": "세액",
             "총 합계": "총합계",
+            "송합계": "총합계",
+            "송 합계": "총합계",
+            "총함계": "총합계",
+            "총 함계": "총합계",
+            "함계": "합계",
+            "합개": "합계",
             "합계 금액": "합계금액",
             "크레딧 합계": "크레딧합계",
             "크레뒷 합계": "크레딧합계",
@@ -285,12 +302,38 @@ class RawExtractionSnapshotService:
         return True
 
     def _key_value_section_from_line(self, text: str) -> str | None:
-        normalized = re.sub(r"\s+", "", str(text or ""))
-        if normalized in {"공급자", "공급처", "공급지"}:
+        normalized = re.sub(r"\s+", "", str(text or "")).lower()
+        if normalized in {"공급자", "공급처", "공급지", "seller", "vendor"}:
             return "공급자"
-        if normalized in {"공급받는자", "공급받는자정보", "공급반는지", "고객사"}:
+        if normalized in {"공급받는자", "공급받는자정보", "공급반는지", "궁급받는자", "고객사", "buyer", "customer"}:
             return "공급받는자"
         return None
+
+    def _key_value_sections_from_line(self, text: str) -> list[str]:
+        explicit = self._key_value_section_from_line(text)
+        if explicit:
+            return [explicit]
+        normalized = re.sub(r"\s+", "", str(text or "")).lower()
+        markers: list[tuple[int, str]] = []
+        for pattern, section in (
+            (r"공급받는자|공급반는지|궁급받는자|고객사|buyer|customer", "공급받는자"),
+            (r"공급자|공급처|공급지|seller|vendor", "공급자"),
+        ):
+            for match in re.finditer(pattern, normalized, flags=re.IGNORECASE):
+                markers.append((match.start(), section))
+        markers.sort(key=lambda item: item[0])
+        sections: list[str] = []
+        seen_positions: set[int] = set()
+        for position, section in markers:
+            if position in seen_positions:
+                continue
+            sections.append(section)
+            seen_positions.add(position)
+        return sections
+
+    def _line_starts_with_section_marker(self, text: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(text or "")).lower()
+        return bool(re.match(r"^(공급받는자|공급반는지|궁급받는자|고객사|buyer|customer|공급자|공급처|공급지|seller|vendor)", normalized))
 
     def _trailing_section_from_value(self, value: str) -> tuple[str, str | None]:
         text = str(value or "").strip()
@@ -348,8 +391,12 @@ class RawExtractionSnapshotService:
             "요청부서",
             "예상합계",
             "총합계",
+            "송합계",
+            "총함계",
             "합계금액",
             "합계",
+            "함계",
+            "합개",
             "크레딧합계",
             "크레뒷합계",
             "반품합계",
@@ -359,8 +406,15 @@ class RawExtractionSnapshotService:
             "순판매금액",
             "과세합계",
             "공급가액",
+            "공급기액",
+            "공급기록",
+            "공급가역",
+            "궁급가액",
             "부가세",
             "세액",
+            "세악",
+            "새액",
+            "사물에",
             "VAT",
             "V.A.T",
             "결제합계",
@@ -405,7 +459,15 @@ class RawExtractionSnapshotService:
             "순판매금액",
             "과세합계",
             "공급가액",
+            "공급기액",
+            "공급기록",
+            "공급가역",
+            "궁급가액",
             "VAT",
+            "세액",
+            "세악",
+            "새액",
+            "사물에",
             "결제합계",
             "현금합계",
             "카드합계",
@@ -439,6 +501,10 @@ class RawExtractionSnapshotService:
             "담당",
             "합계금액",
             "총합계",
+            "송합계",
+            "총함계",
+            "함계",
+            "합개",
             "크레딧합계",
             "크레뒷합계",
             "반품합계",
@@ -454,14 +520,20 @@ class RawExtractionSnapshotService:
         pending_sections: list[str] = []
         for index, raw_line in enumerate(lines):
             line = self._raw_text_line_with_continuation(lines, index)
-            line_section = self._key_value_section_from_line(line)
-            if line_section:
-                section = line_section
-                pending_sections.append(line_section)
-            for key, value, _start, _end in self._parse_key_value_line(line):
+            parsed_items = self._parse_key_value_line(line)
+            line_sections = self._key_value_sections_from_line(line)
+            if parsed_items and parsed_items[0][2] == 0 and not self._line_starts_with_section_marker(line):
+                line_sections = []
+            if line_sections:
+                section = line_sections[-1]
+                pending_sections.extend(line_sections)
+            party_key_occurrences = len(re.findall(r"(?:상호|사업자\s*번호|사엽자\s*변호|담당|당당|대표자|주소)\s*[:：]?", line))
+            for key, value, _start, _end in parsed_items:
                 value, next_section = self._trailing_section_from_value(value)
                 target_section = section
-                if key in {"상호", "사업자번호", "담당", "대표자", "주소"} and pending_sections and not re.search(r"[:：]", line):
+                if key in {"상호", "사업자번호", "담당", "대표자", "주소"} and pending_sections and (
+                    not re.search(r"[:：]", line) or len(line_sections) > 1 or party_key_occurrences > 1
+                ):
                     target_section = pending_sections.pop(0)
                 full_key = self._sectioned_key(target_section, key)
                 if self._has_existing_key_value_key(key_values, full_key):
@@ -494,10 +566,10 @@ class RawExtractionSnapshotService:
         section: str | None = None
         pending_sections: list[str] = []
         for index, line in enumerate(lines):
-            line_section = self._key_value_section_from_line(line)
-            if line_section:
-                section = line_section
-                pending_sections.append(line_section)
+            line_sections = self._key_value_sections_from_line(line)
+            if line_sections:
+                section = line_sections[-1]
+                pending_sections.extend(line_sections)
                 continue
             key = self._raw_text_split_line_key(line)
             if not key:
@@ -537,7 +609,7 @@ class RawExtractionSnapshotService:
 
     def _raw_text_split_line_value(self, lines: list[str], start_index: int) -> str | None:
         for next_line in lines[start_index : start_index + 3]:
-            if self._key_value_section_from_line(next_line) or self._raw_text_split_line_key(next_line):
+            if self._key_value_sections_from_line(next_line) or self._raw_text_split_line_key(next_line):
                 return None
             if self._parse_key_value_line(next_line):
                 return None

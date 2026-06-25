@@ -17,7 +17,9 @@ class SemanticMappingService:
         ("pos_daily_settlement", "general_document", r"POS\s*일일정산|실판매금액|결제합계|카드합계|온라인결제"),
         ("internal_transfer", "general_document", r"자재\s*이동|내부\s*이동|출고창고|입고창고|이동사유"),
         ("incoming_inspection", "inspection_report", r"입고\s*검사|검사판정|검사항목|Lot/Code|Lot\s*No"),
+        ("tax_invoice", "invoice", r"세금\s*계산서|전자\s*세금\s*계산서|Tax\s*Invoice|승인번호"),
         ("commercial_invoice", "invoice", r"COMMERCIAL\s+INVOICE|Exchange\s*Rate|TOTAL\s*USD|KRW\s*Converted"),
+        ("credit_note", "general_document", r"반품|크레[딧뒷]|Credit\s*(?:Memo|Note)|원문서|차감\s*합계"),
         ("transaction_statement", "transaction_statement", r"거래명세서|Transaction\s*Statement|공급가액|부가세|총합계"),
         ("purchase_order", "purchase_order", r"발주서|Purchase\s*Order|납기일|발주수량"),
         ("quotation", "quotation", r"견적서|Quotation|유효기간|예상\s*합계"),
@@ -258,6 +260,7 @@ class SemanticMappingService:
 
     def _raw_field_candidates(self, key_values: list[Any]) -> dict[str, Any]:
         fields: dict[str, Any] = {}
+        scores: dict[str, int] = {}
         for item in key_values:
             if not isinstance(item, dict):
                 continue
@@ -271,10 +274,10 @@ class SemanticMappingService:
                 continue
             normalized_value = self._normalize_business_value(raw_value)
             if self._is_party_name_key("vendor_name", raw_key):
-                fields["vendor_name"] = normalized_value
+                self._set_scored_candidate(fields, scores, "vendor_name", normalized_value, self._party_candidate_score("vendor_name", raw_key, raw_value))
                 continue
             if self._is_party_name_key("customer_name", raw_key):
-                fields["customer_name"] = normalized_value
+                self._set_scored_candidate(fields, scores, "customer_name", normalized_value, self._party_candidate_score("customer_name", raw_key, raw_value))
                 continue
             amount_field = self._amount_field_from_key(normalized_key)
             if amount_field:
@@ -284,6 +287,13 @@ class SemanticMappingService:
             if date_field:
                 fields[date_field] = normalized_value
         return fields
+
+    def _set_scored_candidate(self, fields: dict[str, Any], scores: dict[str, int], target: str, value: object, score: int) -> None:
+        if score < 0:
+            return
+        if score >= scores.get(target, -1):
+            fields[target] = value
+            scores[target] = score
 
     def _identifier_field_from_key(self, normalized_key: str) -> str | None:
         if normalized_key in {"샘플번호", "sampleid", "sampleno"}:
@@ -318,10 +328,47 @@ class SemanticMappingService:
             or "customer" in normalized
         )
 
+    def _party_candidate_score(self, target: str, raw_key: object, raw_value: object) -> int:
+        normalized_key = self._normalize_label(raw_key)
+        text = re.sub(r"\s+", " ", str(raw_value or "")).strip()
+        if not text:
+            return -100
+        if re.fullmatch(r"\d{3}-?\d{2}-?\d{5}", text):
+            return -100
+        if re.search(r"(작성일|발행일|거래일자|납기일|승인번호|문서번호|샘플번호|합계|금액|품목|수량)", text):
+            return -80
+        if len(text) > 60:
+            return -20
+
+        score = 0
+        if target == "vendor_name":
+            if any(signal in normalized_key for signal in ("공급받는자", "고객사", "buyer", "customer")):
+                return -100
+            if any(signal in normalized_key for signal in ("공급자", "공급처", "seller", "vendor")):
+                score += 40
+        else:
+            if any(signal in normalized_key for signal in ("공급자", "공급처", "seller", "vendor")) and not any(
+                signal in normalized_key for signal in ("공급받는자", "고객사", "buyer", "customer")
+            ):
+                return -100
+            if any(signal in normalized_key for signal in ("공급받는자", "고객사", "buyer", "customer")):
+                score += 40
+        if "상호" in normalized_key or any(signal in normalized_key for signal in ("업체명", "회사명")):
+            score += 20
+        if "(주)" in text or text.startswith("주"):
+            score += 10
+        if re.search(r"[가-힣A-Za-z]", text):
+            score += 5
+        if re.search(r"\d", text):
+            score -= 5
+        if re.search(r"(담당|회계팀|구매팀|품질팀|검사자)", text):
+            score -= 25
+        return score
+
     def _amount_field_from_key(self, normalized_key: str) -> str | None:
-        if normalized_key in {"공급가액", "subtotal", "supplyamount"}:
+        if normalized_key in {"공급가액", "공급기액", "공급기록", "공급가역", "궁급가액", "subtotal", "supplyamount"}:
             return "supply_amount"
-        if normalized_key in {"세액", "부가세", "vat", "v.a.t", "tax"}:
+        if normalized_key in {"세액", "세악", "새액", "사물에", "부가세", "vat", "v.a.t", "tax"}:
             return "tax_amount"
         if normalized_key in {"예상합계", "견적합계"}:
             return "estimated_total"
@@ -333,7 +380,23 @@ class SemanticMappingService:
                 "실판매금액": "actual_sales_amount",
                 "순판매금액": "net_sales_amount",
             }[normalized_key]
-        if normalized_key in {"총합계", "합계금액", "합계", "청구금액", "결제금액", "amountdue", "total", "totalamount", "grandtotal", "invoicetotal"}:
+        if normalized_key in {
+            "총합계",
+            "송합계",
+            "총함계",
+            "합계금액",
+            "합계",
+            "함계",
+            "합개",
+            "총액",
+            "청구금액",
+            "결제금액",
+            "amountdue",
+            "total",
+            "totalamount",
+            "grandtotal",
+            "invoicetotal",
+        }:
             return "document_total"
         if normalized_key == "totalusd":
             return "total_usd"
@@ -516,8 +579,24 @@ class SemanticMappingService:
         return self._string_value(value)
 
     def _decimal_from_text(self, value: str) -> Decimal | None:
+        stripped = str(value or "").strip()
+        if re.fullmatch(r"\d{4}[./-]\d{1,2}[./-]\d{1,2}", stripped):
+            return None
+        compact = re.sub(r"[^0-9.\-]", "", stripped)
+        if "," not in stripped and re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", compact):
+            compact = compact.replace(".", "")
+            try:
+                return Decimal(compact)
+            except InvalidOperation:
+                return None
+        tokens = re.findall(r"-?\d[\d,]*(?:\.\d+)?", stripped)
+        if len(tokens) > 1:
+            for token in reversed(tokens):
+                parsed = self._decimal_from_text(token)
+                if parsed is not None:
+                    return parsed
         cleaned = re.sub(r"[^0-9.\-]", "", value)
-        if "," not in value and re.fullmatch(r"-?\d{1,3}\.\d{3}", cleaned):
+        if "," not in value and re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", cleaned):
             cleaned = cleaned.replace(".", "")
         if not cleaned or cleaned in {"-", "."}:
             return None
