@@ -20,6 +20,22 @@ _taxonomy_service = DocumentTaxonomyService()
 _vl_candidate_gate = VLCandidateValidationGate()
 
 
+def export_blocked_documents(documents: list[Document]) -> list[dict]:
+    blocked: list[dict] = []
+    for document in documents:
+        status = getattr(document.processing_status, "value", str(document.processing_status))
+        if status == "confirmed":
+            continue
+        blocked.append(
+            {
+                "id": str(document.id),
+                "title": document.title or document.original_filename,
+                "processing_status": status,
+            }
+        )
+    return blocked
+
+
 def serialize_document(document: Document) -> dict:
     data = {
         column.name: getattr(document, column.name)

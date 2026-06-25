@@ -115,6 +115,10 @@ def create_domain_dictionary_entry(payload: DomainDictionaryEntryCreate, db: Ses
 
 @router.post("/feedback", status_code=201)
 def create_domain_dictionary_feedback(payload: DomainDictionaryFeedbackCreate, db: Session = Depends(get_db)) -> dict[str, str]:
+    dictionary_type = payload.dictionary_type
+    if not dictionary_type and isinstance(payload.metadata, dict):
+        metadata_type = payload.metadata.get("dictionary_type")
+        dictionary_type = str(metadata_type) if metadata_type not in (None, "") else None
     feedback = DomainDictionarySuggestionFeedback(
         document_id=payload.document_id,
         target=payload.target.strip(),
@@ -122,9 +126,18 @@ def create_domain_dictionary_feedback(payload: DomainDictionaryFeedbackCreate, d
         original_value=payload.original_value.strip(),
         suggested_value=payload.suggested_value.strip(),
         action=payload.action,
-        feedback_metadata=payload.metadata,
+        feedback_metadata={**(payload.metadata or {}), "dictionary_type": dictionary_type},
     )
     db.add(feedback)
+    if payload.action == "accepted":
+        service.learn_from_feedback(
+            db,
+            dictionary_type=dictionary_type,
+            target=payload.target.strip(),
+            field=(payload.field or "").strip() or None,
+            original_value=payload.original_value,
+            suggested_value=payload.suggested_value,
+        )
     db.commit()
     return {"status": "ok"}
 

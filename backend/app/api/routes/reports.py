@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.document import Document
+from app.models.document import Document, ProcessingStatus
 from app.services.monthly_report import MonthlyReportService
 
 
@@ -42,7 +42,7 @@ def monthly_report_export(
 ) -> Response:
     start, end = _resolve_report_range(year=year, month=month, start_date=start_date, end_date=end_date)
     service = MonthlyReportService()
-    report = service.build_for_range(_report_documents(db, start, end), start_date=start, end_date=end, period=period, party_name=party_name)
+    report = service.build_for_range(_report_documents(db, start, end, confirmed_only=True), start_date=start, end_date=end, period=period, party_name=party_name)
     filename = f"docparse-report-{report['start_date']}-{report['end_date']}.{format}"
     if format == "csv":
         return Response(
@@ -78,7 +78,7 @@ def _resolve_report_range(
     return start_date, exclusive_end
 
 
-def _report_documents(db: Session, start: date, end: date) -> list[Document]:
+def _report_documents(db: Session, start: date, end: date, *, confirmed_only: bool = False) -> list[Document]:
     start_dt = datetime.combine(start, time.min)
     end_dt = datetime.combine(end, time.min)
     stmt = (
@@ -92,6 +92,8 @@ def _report_documents(db: Session, start: date, end: date) -> list[Document]:
         )
         .order_by(Document.issue_date, Document.extracted_date, Document.created_at)
     )
+    if confirmed_only:
+        stmt = stmt.where(Document.processing_status == ProcessingStatus.confirmed)
     documents = list(db.scalars(stmt).all())
     service = MonthlyReportService()
     return [document for document in documents if service._belongs_to_range(document, start, end)]

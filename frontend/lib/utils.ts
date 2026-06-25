@@ -921,7 +921,7 @@ export function requiresReviewExportConfirmation(document: {
   review_required?: boolean | null;
   processing_status?: string | null;
 }) {
-  return isReviewActionable(document);
+  return document.processing_status !== "confirmed";
 }
 
 export function reviewIssueDescription(issue: NormalizedReviewIssue) {

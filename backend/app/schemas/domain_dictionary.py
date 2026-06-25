@@ -91,4 +91,5 @@ class DomainDictionaryFeedbackCreate(BaseModel):
     original_value: str = Field(min_length=1, max_length=255)
     suggested_value: str = Field(min_length=1, max_length=255)
     action: str = Field(pattern="^(accepted|rejected|ignored)$")
+    dictionary_type: str | None = Field(default=None, max_length=40)
     metadata: dict | None = None

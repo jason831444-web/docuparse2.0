@@ -145,6 +145,8 @@ export const api = {
     }
   },
   reprocess: (id: string) => request<DocumentRecord>(`/documents/${id}/reprocess`, { method: "POST" }),
+  refreshDictionarySuggestions: (id: string) =>
+    request<DocumentRecord>(`/documents/${id}/dictionary-suggestions/refresh`, { method: "POST" }),
   confirm: (id: string, payload?: { approval_note?: string | null }) =>
     request<DocumentRecord>(`/documents/${id}/confirm`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
   markNeedsReview: (id: string) => request<DocumentRecord>(`/documents/${id}/needs-review`, { method: "POST" }),

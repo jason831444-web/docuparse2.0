@@ -538,6 +538,7 @@ export interface CreateDomainDictionaryFeedbackPayload {
   original_value: string;
   suggested_value: string;
   action: "accepted" | "rejected" | "ignored";
+  dictionary_type?: string | null;
   metadata?: Record<string, unknown> | null;
 }
 

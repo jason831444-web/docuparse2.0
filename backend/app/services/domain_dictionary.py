@@ -42,18 +42,6 @@ class DomainDictionarySuggestionService:
     MAX_DOCUMENTS = 500
     MAX_SUGGESTIONS = 80
 
-    LABEL_CANONICALS: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("샘플번호", ("생플번호", "생플변호", "샘플변호", "팸플번호")),
-        ("사업자번호", ("사엽자번호", "사엽자변호", "사업자변호")),
-        ("담당", ("당당",)),
-        ("매장판매", ("매장판애", "매장판애수")),
-        ("배달판매", ("배달판마", "배당판매")),
-        ("공급가액", ("공금가액", "공급가격")),
-        ("결제합계", ("결재합계",)),
-        ("합계금액", ("합계 금액", "총합계", "총 합계")),
-        ("부가세", ("VAT", "V.A.T", "세액")),
-    )
-
     PARTY_KEY_HINTS = ("공급자", "공급업체", "공급받는자", "고객사", "상호", "매장", "vendor", "customer", "buyer", "seller")
     ITEM_KEY_HINTS = ("품목", "품명", "item", "description")
 
@@ -67,6 +55,7 @@ class DomainDictionarySuggestionService:
             "suggestion_types": self._counts(item.get("dictionary_type") for item in suggestions),
             "auto_applied": False,
             "confirmed_sources_only": True,
+            "dictionary_source": "db",
         }
         return {
             "version": self.VERSION,
@@ -77,7 +66,6 @@ class DomainDictionarySuggestionService:
 
     def _dictionary_entries(self, db: Session, *, exclude_document_id: str | None = None) -> list[DictionaryEntry]:
         entries: list[DictionaryEntry] = []
-        entries.extend(self._label_entries())
         if not hasattr(db, "scalars"):
             return self._dedupe_entries(entries)
         entries.extend(self._manual_domain_entries(db))
@@ -93,14 +81,6 @@ class DomainDictionarySuggestionService:
         if dictionary_type == "item":
             return normalize_item_text(value)
         return self._normalize_value(value)
-
-    def _label_entries(self) -> list[DictionaryEntry]:
-        entries: list[DictionaryEntry] = []
-        for canonical, aliases in self.LABEL_CANONICALS:
-            values = (canonical, *aliases)
-            for value in values:
-                entries.append(DictionaryEntry("field_label", canonical, self._normalize_label(value), "manufacturing_label_dictionary", field="key", evidence=value))
-        return entries
 
     def _item_master_entries(self, db: Session) -> list[DictionaryEntry]:
         entries: list[DictionaryEntry] = []
@@ -236,6 +216,82 @@ class DomainDictionarySuggestionService:
                             "auto_apply": False,
                         })
         return suggestions
+
+    def learn_from_feedback(
+        self,
+        db: Session,
+        *,
+        dictionary_type: str | None,
+        target: str,
+        field: str | None,
+        original_value: str,
+        suggested_value: str,
+    ) -> DomainDictionaryEntry | None:
+        if not hasattr(db, "scalar"):
+            return None
+        original = str(original_value or "").strip()
+        suggested = str(suggested_value or "").strip()
+        if not original or not suggested or self._normalize_value(original) == self._normalize_value(suggested):
+            return None
+        resolved_type = (dictionary_type or "").strip() or self._infer_dictionary_type(target=target, field=field)
+        entry = db.scalar(
+            select(DomainDictionaryEntry).where(
+                DomainDictionaryEntry.dictionary_type == resolved_type,
+                DomainDictionaryEntry.canonical_value == suggested,
+            )
+        )
+        if not entry:
+            entry = DomainDictionaryEntry(
+                dictionary_type=resolved_type,
+                canonical_value=suggested,
+                normalized_value=self.normalize_for_type(resolved_type, suggested),
+                field=(field or "").strip() or None,
+                source="accepted_suggestion",
+                memo="사용자가 추천을 적용해 자동 학습됨",
+                active=True,
+            )
+            db.add(entry)
+            db.flush()
+        else:
+            entry.active = True
+            if field and not entry.field:
+                entry.field = field
+            db.add(entry)
+            db.flush()
+        normalized_alias = self.normalize_for_type(resolved_type, original)
+        existing_alias = db.scalar(
+            select(DomainDictionaryAlias).where(
+                DomainDictionaryAlias.entry_id == entry.id,
+                DomainDictionaryAlias.alias_value == original,
+            )
+        )
+        if existing_alias:
+            existing_alias.active = True
+            existing_alias.normalized_alias_value = normalized_alias
+            existing_alias.source = existing_alias.source or "accepted_suggestion"
+            db.add(existing_alias)
+        else:
+            db.add(
+                DomainDictionaryAlias(
+                    entry_id=entry.id,
+                    alias_value=original,
+                    normalized_alias_value=normalized_alias,
+                    source="accepted_suggestion",
+                    confidence=1,
+                    active=True,
+                )
+            )
+        return entry
+
+    def _infer_dictionary_type(self, *, target: str, field: str | None) -> str:
+        normalized_field = self._normalize_value(field)
+        if target == "raw_table_cell" or normalized_field in {"itemname", "품목명", "item", "description"}:
+            return "item"
+        if normalized_field in {"key", "label"}:
+            return "field_label"
+        if normalized_field in {"value", "vendorname", "customername", "merchantname", "party"}:
+            return "party"
+        return "value"
 
     def _best_label_suggestion(self, key: str, entries: list[DictionaryEntry]) -> _Match | None:
         normalized = self._normalize_label(key)

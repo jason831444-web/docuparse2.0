@@ -33,7 +33,7 @@ from app.schemas.document import (
     ReviewIssueUpdate,
     ReviewReopenRequest,
 )
-from app.services.export import document_read_safety_overrides, document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
+from app.services.export import document_read_safety_overrides, document_to_json, documents_to_csv, documents_to_excel, export_blocked_documents, tax_invoice_to_draft_xml
 from app.services.category_taxonomy import category_path_for, clean_tags_for_context, display_label, normalize_category_value
 from app.services.persistence_safety import sanitize_for_postgres
 from app.services.queue_service import get_document_queue
@@ -494,6 +494,7 @@ def export_csv(
     template_id: UUID | None = None,
 ) -> Response:
     documents = _export_documents(db, document_ids=document_ids, document_type=document_type, category=category)
+    _ensure_confirmed_export_documents(documents)
     template = _export_template(db, template_id)
     return Response(
         documents_to_csv(documents, template=template),
@@ -512,6 +513,7 @@ def export_excel(
     template_id: UUID | None = None,
 ) -> Response:
     documents = _export_documents(db, document_ids=document_ids, document_type=document_type, category=category)
+    _ensure_confirmed_export_documents(documents)
     template = _export_template(db, template_id)
     return Response(
         documents_to_excel(documents, sheet_mode=sheet_mode, template=template),
@@ -668,6 +670,24 @@ def confirm_document(document_id: UUID, payload: ReviewApprovalRequest | None = 
     return _to_read(document)
 
 
+@router.post("/{document_id}/dictionary-suggestions/refresh", response_model=DocumentRead)
+def refresh_document_dictionary_suggestions(document_id: UUID, db: Session = Depends(get_db)) -> DocumentRead:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    metadata = dict(document.workflow_metadata or {}) if isinstance(document.workflow_metadata, dict) else {}
+    raw_extraction = metadata.get("raw_extraction") if isinstance(metadata.get("raw_extraction"), dict) else None
+    if raw_extraction is None:
+        raw_extraction = RawExtractionSnapshotService().build(document, source="suggestion_refresh")
+        metadata["raw_extraction"] = raw_extraction
+    metadata["dictionary_suggestions"] = DomainDictionarySuggestionService().suggestions_for_document(db, document, raw_extraction)
+    document.workflow_metadata = sanitize_for_postgres(metadata or None)
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return _to_read(document)
+
+
 @router.post("/{document_id}/needs-review", response_model=DocumentRead)
 def mark_document_needs_review(document_id: UUID, db: Session = Depends(get_db)) -> DocumentRead:
     document = db.get(Document, document_id)
@@ -756,6 +776,7 @@ def export_document_json(document_id: UUID, db: Session = Depends(get_db)) -> Re
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    _ensure_confirmed_export_documents([document])
     return Response(
         document_to_json(document),
         media_type="application/json",
@@ -768,6 +789,7 @@ def export_tax_invoice_xml(document_id: UUID, db: Session = Depends(get_db)) -> 
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    _ensure_confirmed_export_documents([document])
     try:
         payload = tax_invoice_to_draft_xml(document)
     except ValueError as exc:
@@ -824,6 +846,20 @@ def _export_documents(
     if document_ids and not documents:
         raise HTTPException(status_code=404, detail="No matching documents found.")
     return documents
+
+
+def _ensure_confirmed_export_documents(documents: list[Document]) -> None:
+    blocked = export_blocked_documents(documents)
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "export_requires_confirmed_documents",
+                "message": "확정되지 않은 문서는 내보낼 수 없습니다. 먼저 검토 후 확정하세요.",
+                "blocked_count": len(blocked),
+                "blocked_documents": blocked[:20],
+            },
+        )
 
 
 def _export_template(db: Session, template_id: UUID | None) -> ExportTemplate | None:

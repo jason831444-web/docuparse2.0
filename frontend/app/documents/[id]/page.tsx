@@ -591,6 +591,7 @@ async function recordDictionaryFeedback(documentId: string, suggestion: Record<s
       original_value: String(suggestion.original_value ?? ""),
       suggested_value: String(suggestion.suggested_value ?? ""),
       action,
+      dictionary_type: suggestion.dictionary_type ? String(suggestion.dictionary_type) : null,
       metadata: {
         source: suggestion.source ?? null,
         dictionary_type: suggestion.dictionary_type ?? null,
@@ -1646,6 +1647,7 @@ export default function DocumentDetailPage() {
   const [approvalNote, setApprovalNote] = useState("");
   const [documentNeighbors, setDocumentNeighbors] = useState<DocumentNeighbors>({ previous: null, next: null });
   const rawLineItemsInitializedFor = useRef<string | null>(null);
+  const dictionarySuggestionsRefreshedFor = useRef<string | null>(null);
   const form = useForm<DocumentUpdate & { tags_text: string }>();
 
   const syncDocument = useCallback((item: DocumentRecord) => {
@@ -1680,6 +1682,26 @@ export default function DocumentDetailPage() {
       setLoading(false);
     }
   }, [params.id, syncDocument]);
+
+  const refreshDictionarySuggestions = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent) setSaving(true);
+    try {
+      const item = await api.refreshDictionarySuggestions(params.id);
+      if (!form.formState.isDirty) syncDocument(item);
+      else setDocument(item);
+      if (!silent) toast.success("추천을 새로 계산했습니다");
+    } catch (error) {
+      if (!silent) toast.error(error instanceof Error ? error.message : "추천 새로고침에 실패했습니다");
+    } finally {
+      if (!silent) setSaving(false);
+    }
+  }, [form.formState.isDirty, params.id, syncDocument]);
+
+  useEffect(() => {
+    if (!document || dictionarySuggestionsRefreshedFor.current === document.id) return;
+    dictionarySuggestionsRefreshedFor.current = document.id;
+    void refreshDictionarySuggestions({ silent: true });
+  }, [document?.id, document, refreshDictionarySuggestions]);
 
   useDocumentsChanged(useCallback((detail) => {
     if (!document) return;
@@ -1972,15 +1994,19 @@ export default function DocumentDetailPage() {
               <RefreshCw className="size-4" />
               다시 처리
             </Button>
-            <Button asChild variant="outline">
-              <a href={api.exportJsonUrl(document.id)}>
+            <Button variant="outline" onClick={() => void refreshDictionarySuggestions()} disabled={saving}>
+              <RefreshCw className="size-4" />
+              추천 새로고침
+            </Button>
+            <Button asChild variant="outline" disabled={!isConfirmed}>
+              <a href={isConfirmed ? api.exportJsonUrl(document.id) : undefined} aria-disabled={!isConfirmed}>
                 <Download className="size-4" />
                 JSON으로 내보내기
               </a>
             </Button>
             {document.document_type === "invoice" ? (
-              <Button asChild variant="outline">
-                <a href={api.exportTaxInvoiceXmlUrl(document.id)}>
+              <Button asChild variant="outline" disabled={!isConfirmed}>
+                <a href={isConfirmed ? api.exportTaxInvoiceXmlUrl(document.id) : undefined} aria-disabled={!isConfirmed}>
                   <Download className="size-4" />
                   XML 초안
                 </a>

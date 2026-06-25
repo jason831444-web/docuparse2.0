@@ -8,7 +8,7 @@ from zipfile import ZipFile
 import pytest
 
 from app.models.document import Document, DocumentType, ExportTemplate, ProcessingStatus
-from app.services.export import document_read_safety_overrides, document_to_json, documents_to_csv, documents_to_excel, tax_invoice_to_draft_xml
+from app.services.export import document_read_safety_overrides, document_to_json, documents_to_csv, documents_to_excel, export_blocked_documents, tax_invoice_to_draft_xml
 
 
 def _document(number: str, customer: str, amount: Decimal) -> Document:
@@ -36,6 +36,14 @@ def test_export_uses_only_documents_passed_by_caller():
 
     assert "INV-1" in csv
     assert "INV-2" not in csv
+
+
+def test_export_policy_blocks_unconfirmed_documents():
+    document = _document("INV-1", "네오팩토리", Decimal("100"))
+
+    blocked = export_blocked_documents([document])
+
+    assert blocked == [{"id": str(document.id), "title": "INV-1.pdf", "processing_status": "ready"}]
 
 
 def test_csv_export_applies_custom_template_columns_and_line_rows():

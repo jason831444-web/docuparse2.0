@@ -3,6 +3,16 @@ from app.services.domain_dictionary import DictionaryEntry, DomainDictionarySugg
 from app.services.item_master_matcher import normalize_item_text
 
 
+def test_domain_dictionary_uses_db_as_only_label_source_without_db():
+    service = DomainDictionarySuggestionService()
+    raw = {"key_values": [{"key": "생플변호", "value": "003", "source": "vl_raw_text_key_value"}]}
+
+    result = service.suggestions_for_document(None, Document(original_filename="a.png", stored_file_path="/tmp/a.png", mime_type="image/png"), raw)  # type: ignore[arg-type]
+
+    assert result["suggestions"] == []
+    assert result["summary"]["dictionary_source"] == "db"
+
+
 def test_domain_dictionary_suggests_review_only_key_and_party_value(monkeypatch):
     service = DomainDictionarySuggestionService()
     entries = [
@@ -72,3 +82,41 @@ def test_domain_dictionary_rejected_feedback_suppresses_same_suggestion(monkeypa
     result = service.suggestions_for_document(None, Document(original_filename="a.png", stored_file_path="/tmp/a.png", mime_type="image/png"), raw)  # type: ignore[arg-type]
 
     assert result["suggestions"] == []
+
+
+def test_domain_dictionary_accepted_feedback_creates_entry_and_alias():
+    import uuid
+
+    class FakeDb:
+        def __init__(self):
+            self.added = []
+
+        def scalar(self, _stmt):
+            return None
+
+        def add(self, item):
+            self.added.append(item)
+
+        def flush(self):
+            for item in self.added:
+                if getattr(item, "id", None) is None:
+                    item.id = uuid.uuid4()
+
+    service = DomainDictionarySuggestionService()
+    db = FakeDb()
+
+    entry = service.learn_from_feedback(
+        db,  # type: ignore[arg-type]
+        dictionary_type="field_label",
+        target="raw_key_value",
+        field="key",
+        original_value="생플변호",
+        suggested_value="샘플번호",
+    )
+
+    assert entry is not None
+    assert entry.dictionary_type == "field_label"
+    assert entry.canonical_value == "샘플번호"
+    assert [type(item).__name__ for item in db.added] == ["DomainDictionaryEntry", "DomainDictionaryAlias"]
+    assert db.added[1].alias_value == "생플변호"
+    assert db.added[1].source == "accepted_suggestion"

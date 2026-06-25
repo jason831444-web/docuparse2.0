@@ -270,7 +270,8 @@ function DocumentsContent() {
       return false;
     }
     if (selectedScopeDocuments.some(requiresReviewExportConfirmation)) {
-      return window.confirm("선택한 문서 중 검토 필요 문서가 있습니다. 내보내기 파일에는 review_required와 경고 정보가 포함됩니다. 계속할까요?");
+      toast.error("확정 완료된 문서만 내보낼 수 있습니다. 선택한 문서를 먼저 검토 후 확정하세요.");
+      return false;
     }
     return true;
   }
