@@ -633,7 +633,9 @@ class DocumentProcessor:
             )
             workflow_metadata["raw_extraction"] = raw_extraction
             workflow_metadata["classification_pre_mapping"] = SemanticMappingService().classification_pre_mapping(document, raw_extraction)
-            workflow_metadata["raw_semantic_mapping"] = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")
+            raw_semantic_mapping = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")
+            workflow_metadata["raw_semantic_mapping"] = raw_semantic_mapping
+            self._apply_raw_semantic_mapping_to_review_fields(document, raw_semantic_mapping)
             workflow_metadata["dictionary_suggestions"] = self.domain_dictionary.suggestions_for_document(db, document, raw_extraction)
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             if parser_only:
@@ -2679,10 +2681,62 @@ class DocumentProcessor:
     def _vl_decimal(self, value: Any) -> Decimal | None:
         if value in (None, "", []):
             return None
+        text = str(value).strip()
+        compact = re.sub(r"[^0-9.\-]", "", text)
+        if "," not in text and re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", compact):
+            text = compact.replace(".", "")
+        else:
+            tokens = re.findall(r"-?\d[\d,]*(?:\.\d+)?", text)
+            if len(tokens) > 1:
+                text = tokens[-1]
         try:
-            return Decimal(str(value).replace(",", ""))
+            return Decimal(text.replace(",", ""))
         except Exception:
             return None
+
+    def _apply_raw_semantic_mapping_to_review_fields(self, document: Document, mapping: dict[str, Any]) -> None:
+        fields = mapping.get("fields") if isinstance(mapping, dict) else None
+        if not isinstance(fields, dict):
+            return
+
+        field_sources = dict(document.field_sources or {})
+
+        def text_value(key: str) -> str | None:
+            value = fields.get(key)
+            text = re.sub(r"\s+", " ", str(value or "")).strip()
+            return text or None
+
+        for attr, key in (("vendor_name", "vendor_name"), ("customer_name", "customer_name"), ("currency", "currency")):
+            value = text_value(key)
+            if value:
+                setattr(document, attr, sanitize_for_postgres(value))
+                field_sources[attr] = "raw_semantic_mapping"
+
+        issue_date = self._vl_date(fields.get("issue_date")) or self._parse_ai_candidate_date(fields.get("issue_date"))
+        if issue_date:
+            document.issue_date = issue_date
+            document.extracted_date = issue_date
+            field_sources["issue_date"] = "raw_semantic_mapping"
+            field_sources["extracted_date"] = "raw_semantic_mapping"
+        due_date = self._vl_date(fields.get("due_date")) or self._parse_ai_candidate_date(fields.get("due_date"))
+        if due_date:
+            document.due_date = due_date
+            field_sources["due_date"] = "raw_semantic_mapping"
+
+        amount_fields = (
+            ("subtotal", ("supply_amount", "subtotal")),
+            ("tax", ("tax_amount", "vat")),
+            ("extracted_amount", ("document_total", "payment_total", "estimated_total", "total_usd", "krw_converted")),
+        )
+        for attr, keys in amount_fields:
+            for key in keys:
+                amount = self._vl_decimal(fields.get(key))
+                if amount is not None:
+                    setattr(document, attr, amount)
+                    field_sources[attr] = "raw_semantic_mapping"
+                    break
+
+        document.field_sources = sanitize_for_postgres(field_sources)
 
     def _safe_vl_promoted_line_items(
         self,
