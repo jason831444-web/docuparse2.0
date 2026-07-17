@@ -42,9 +42,17 @@ start_backend() {
     return 1
   fi
   mkdir -p "$LOG_DIR"
+  local vl_worker_port="${VL_WORKER_PORT:-8020}"
   (
     cd "$REPO_DIR/backend"
     DATABASE_URL="${RUNPOD_DATABASE_URL:-postgresql+psycopg://docuparse:docuparse@localhost:5432/docuparse}" \
+      ENABLE_PADDLEOCR_VL_GGUF="${ENABLE_PADDLEOCR_VL_GGUF:-true}" \
+      PADDLEOCR_VL_GGUF_WORKER_URL="${PADDLEOCR_VL_GGUF_WORKER_URL:-http://127.0.0.1:$vl_worker_port}" \
+      PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS="${PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS:-1200}" \
+      PADDLEOCR_VL_GGUF_CONCURRENCY="${PADDLEOCR_VL_GGUF_CONCURRENCY:-1}" \
+      PADDLEOCR_VL_GGUF_PRIMARY_READER_ENABLED="${PADDLEOCR_VL_GGUF_PRIMARY_READER_ENABLED:-true}" \
+      PADDLEOCR_VL_GGUF_UPLOAD_PIPELINE_ENABLED="${PADDLEOCR_VL_GGUF_UPLOAD_PIPELINE_ENABLED:-true}" \
+      PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED="${PADDLEOCR_VL_GGUF_IN_PROCESS_ENABLED:-false}" \
       PYTHONPATH="$REPO_DIR/backend" \
       nohup .venv/bin/uvicorn app.main:app \
         --host 127.0.0.1 \
