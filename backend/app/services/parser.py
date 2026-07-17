@@ -3472,12 +3472,15 @@ class DocumentParser:
         item_code = self._clean_code_value(
             item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
         )
+        raw_item_name = self._clean_value(item.get("item_name"))
+        raw_specification = self._clean_value(item.get("specification"))
+        normalized_specification = self._normalize_specification_value(item.get("specification"))
         normalized = {
             "item_name": self._normalize_item_name_value(item.get("item_name")),
             "item_code": item_code,
             "document_item_code": item_code,
             "source_item_code": item_code,
-            "specification": self._normalize_specification_value(item.get("specification")),
+            "specification": normalized_specification,
             "quantity": item.get("quantity"),
             "unit": self._clean_value(item.get("unit")),
             "unit_price": item.get("unit_price"),
@@ -3486,11 +3489,43 @@ class DocumentParser:
             "line_total": item.get("line_total"),
         }
         normalized = self._split_trailing_material_grade_from_item_name(normalized)
+        if raw_item_name and normalized.get("item_name") and raw_item_name != normalized["item_name"]:
+            self._record_line_item_normalization(
+                normalized,
+                field="item_name",
+                raw_value=raw_item_name,
+                normalized_value=normalized["item_name"],
+                reason="line_item_name_cleanup",
+            )
+        if raw_specification and normalized.get("specification") and raw_specification != normalized["specification"]:
+            self._record_line_item_normalization(
+                normalized,
+                field="specification",
+                raw_value=raw_specification,
+                normalized_value=normalized["specification"],
+                reason="specification_cleanup",
+            )
         item_warnings = list(item.get("validation_warnings") or [])
         if item_warnings:
             normalized["validation_warnings"] = item_warnings
         if isinstance(item.get("_provenance"), dict):
             normalized["_provenance"] = dict(item["_provenance"])
+        for field in [
+            "source_item_name",
+            "raw_item_name",
+            "ocr_normalized_item_name",
+            "raw_item_code",
+            "ocr_normalized_item_code",
+            "raw_document_item_code",
+            "ocr_normalized_document_item_code",
+            "raw_source_item_code",
+            "ocr_normalized_source_item_code",
+            "raw_specification",
+            "ocr_normalized_specification",
+            "normalization_events",
+        ]:
+            if item.get(field) not in (None, "", []):
+                normalized[field] = item[field]
         if not normalized["unit"] and isinstance(normalized["quantity"], str):
             _, unit = self._parse_quantity_and_unit(normalized["quantity"])
             normalized["unit"] = unit
@@ -4200,7 +4235,8 @@ class DocumentParser:
         ]
 
     def _clean_ocr_line_item_artifacts(self, item: dict) -> dict:
-        name = str(item.get("item_name") or "")
+        original_name = self._clean_value(item.get("item_name"))
+        name = str(original_name or "")
         if name:
             # Remove OCR-leaked amount cells that were prepended to the next item name.
             name = re.sub(r"^\s*(?:\d{1,3}\s+)?(?:\d{4,}(?:\.\d+)?\s+){1,3}(?=\S*[A-Za-z가-힣])", "", name).strip()
@@ -4218,22 +4254,66 @@ class DocumentParser:
             if re.search(r"\bBRK-SUS-[O0]?1\b", code_hint, flags=re.IGNORECASE) and re.search(r"(브라젯|브라겟)", name):
                 name = "스테인리스 브라켓" if re.search(r"(스테인리스|스테인레스|스텐|sus)", name, flags=re.IGNORECASE) else re.sub(r"브라[젯겟]", "브라켓", name)
             if name:
-                item["item_name"] = self._normalize_item_name_ocr_confusions(name)
+                normalized_name = self._normalize_item_name_ocr_confusions(name)
+                if original_name and name != original_name:
+                    self._record_line_item_normalization(
+                        item,
+                        field="item_name",
+                        raw_value=original_name,
+                        normalized_value=name,
+                        reason="ocr_line_item_artifact_cleanup",
+                        preserve_source=True,
+                    )
+                if normalized_name != name:
+                    self._record_line_item_normalization(
+                        item,
+                        field="item_name",
+                        raw_value=name,
+                        normalized_value=normalized_name,
+                        reason="ocr_confusion",
+                        preserve_source=True,
+                    )
+                if original_name and normalized_name != original_name and not item.get("raw_item_name"):
+                    item["raw_item_name"] = original_name
+                if original_name and normalized_name != original_name and not item.get("source_item_name"):
+                    item["source_item_name"] = original_name
+                if normalized_name != original_name:
+                    item["ocr_normalized_item_name"] = normalized_name
+                item["item_name"] = normalized_name
         code = item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
         if code:
             normalized_code = self._normalize_document_item_code(str(code))
             for field in ["item_code", "document_item_code", "source_item_code"]:
                 if item.get(field):
+                    raw_code = self._clean_value(item.get(field))
                     item[field] = normalized_code
+                    if raw_code and raw_code != normalized_code:
+                        self._record_line_item_normalization(
+                            item,
+                            field=field,
+                            raw_value=raw_code,
+                            normalized_value=normalized_code,
+                            reason="document_item_code_ocr_confusion",
+                        )
             if item.get("item_name"):
                 prefix = normalized_code.split("-", 1)[0]
                 if re.fullmatch(r"[A-Z]{2,}\d+", prefix, flags=re.IGNORECASE):
+                    before_prefix_repair = str(item["item_name"])
                     item["item_name"] = re.sub(
                         rf"\b{re.escape(prefix[:-1])}\b",
                         prefix,
                         str(item["item_name"]),
                         flags=re.IGNORECASE,
                     )
+                    if before_prefix_repair != item["item_name"]:
+                        self._record_line_item_normalization(
+                            item,
+                            field="item_name",
+                            raw_value=before_prefix_repair,
+                            normalized_value=item["item_name"],
+                            reason="item_code_prefix_repair",
+                            preserve_source=True,
+                        )
         identity = " ".join(str(item.get(field) or "") for field in ["item_name", "specification"])
         code_text = str(item.get("item_code") or "")
         if re.search(r"\b(?:pin|s45c)\b|8\s*x\s*60", identity, flags=re.IGNORECASE) and re.search(r"bolt|BOLT-M8", code_text, flags=re.IGNORECASE):
@@ -4243,6 +4323,40 @@ class DocumentParser:
             if "item_code_name_conflict" not in item["validation_warnings"]:
                 item["validation_warnings"].append("item_code_name_conflict")
         return item
+
+    def _record_line_item_normalization(
+        self,
+        item: dict,
+        *,
+        field: str,
+        raw_value: object,
+        normalized_value: object,
+        reason: str,
+        preserve_source: bool = False,
+    ) -> None:
+        raw = self._clean_value(raw_value)
+        normalized = self._clean_value(normalized_value)
+        if not raw or not normalized or raw == normalized:
+            return
+        raw_key = f"raw_{field}"
+        normalized_key = f"ocr_normalized_{field}"
+        item.setdefault(raw_key, raw)
+        item[normalized_key] = normalized
+        if preserve_source and field == "item_name":
+            item.setdefault("source_item_name", raw)
+        events = item.get("normalization_events")
+        if not isinstance(events, list):
+            events = []
+        event = {
+            "field": field,
+            "raw_value": raw,
+            "normalized_value": normalized,
+            "reason": reason,
+            "method": "rule_based_parser",
+        }
+        if event not in events:
+            events.append(event)
+        item["normalization_events"] = events
 
     def _normalize_item_name_ocr_confusions(self, value: str) -> str:
         text = re.sub(r"\s+", " ", str(value or "")).strip()

@@ -1604,6 +1604,25 @@ def test_vl_ocr_confusions_are_normalized_for_business_identifiers_and_item_name
         "delivery_ocr_confusions.txt",
     )
     assert [item["item_name"] for item in delivery.line_items] == ["SUS 볼트", "평와셔"]
+    assert delivery.line_items[0]["raw_item_name"] == "SUS 불트"
+    assert delivery.line_items[0]["source_item_name"] == "SUS 불트"
+    assert delivery.line_items[0]["ocr_normalized_item_name"] == "SUS 볼트"
+    assert delivery.line_items[1]["raw_item_name"] == "평와서"
+    assert delivery.line_items[1]["source_item_name"] == "평와서"
+    assert delivery.line_items[1]["ocr_normalized_item_name"] == "평와셔"
+    assert {
+        event["reason"]
+        for item in delivery.line_items
+        for event in item.get("normalization_events", [])
+    } == {"ocr_confusion"}
+    code_repaired = parser._clean_ocr_line_item_artifacts({
+        "item_name": "베어링 하우징",
+        "document_item_code": "BRG-H-1OO",
+    })
+    assert code_repaired["document_item_code"] == "BRG-H-100"
+    assert code_repaired["raw_document_item_code"] == "BRG-H-1OO"
+    assert code_repaired["ocr_normalized_document_item_code"] == "BRG-H-100"
+    assert code_repaired["normalization_events"][0]["reason"] == "document_item_code_ocr_confusion"
 
     pos = parser.parse(
         "\n".join([
