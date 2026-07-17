@@ -47,6 +47,8 @@ start_backend() {
     exec 9>&-
     cd "$REPO_DIR/backend"
     DATABASE_URL="${RUNPOD_DATABASE_URL:-postgresql+psycopg://docuparse:docuparse@localhost:5432/docuparse}" \
+      AI_PRIMARY_PROVIDER="${AI_PRIMARY_PROVIDER:-paddleocr_vl_1_6_gguf}" \
+      AI_SECONDARY_PROVIDER="${AI_SECONDARY_PROVIDER:-heuristic_fallback}" \
       ENABLE_PADDLEOCR_VL_GGUF="${ENABLE_PADDLEOCR_VL_GGUF:-true}" \
       PADDLEOCR_VL_GGUF_WORKER_URL="${PADDLEOCR_VL_GGUF_WORKER_URL:-http://127.0.0.1:$vl_worker_port}" \
       PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS="${PADDLEOCR_VL_GGUF_TIMEOUT_SECONDS:-1200}" \
