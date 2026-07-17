@@ -520,7 +520,7 @@ def _sanitize_party_candidate(value: Any) -> str | None:
     text = _clean_scalar_value(value)
     if not text:
         return None
-    text = re.sub(r"^(?:상호|회사명|업체명|거래처명|거래처|납품처|공급자|공급업체|공급받는자|고객사|수신)\s*[:：]?\s*", "", text).strip()
+    text = re.sub(r"^(?:상호|성호|회사명|업체명|거래처명|거래처|납품처|공급자|공급업체|공급받는자|고객사|수신)\s*[:：]?\s*", "", text).strip()
     text = re.sub(r"\s*(?:사업자|등록번호|대표|업태|업종|담당|담당자|주소|전화|이메일|품목|No\b|문서번호|작성일|발행일|견적일|납품일|검사일|거래일|합계|공급가액|세액).*$", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
     text = re.sub(r"\s*(?:\(?주\)?|주식회사)$", "", text).strip()

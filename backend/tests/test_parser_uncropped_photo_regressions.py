@@ -161,3 +161,21 @@ def test_party_ocr_dictionary_corrects_common_truncated_names():
 
     assert parsed.vendor_name == "(주)태광부품"
     assert parsed.customer_name == "(주)삼광유통"
+
+
+def test_party_ocr_label_variants_and_names_are_normalized():
+    raw = """
+    발주서
+    공급자
+    성호: (주)가운물류
+    공급받는자
+    성호: (주)시흥대아컴
+    문서번호:DOC-006
+    No 품목명 품목코드 수량 단위 단가 공급가액
+    1 AL6061 환봉 AL6061-10 20 KG 7,200 144,000
+    """
+
+    parsed = DocumentParser().parse(raw, "DOC-006_purchase_order_uncropped_photo.jpg")
+
+    assert parsed.vendor_name == "(주)가온물류"
+    assert parsed.customer_name == "(주)시흥대야점"

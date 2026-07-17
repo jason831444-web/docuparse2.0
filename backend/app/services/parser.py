@@ -164,6 +164,7 @@ PARTY_OCR_CORRECTIONS = {
     "비주세움건설": "세움건설",
     "세옹건설": "세움건설",
     "세용건설": "세움건설",
+    "가운물류": "가온물류",
     "형무금속": "현무금속",
     "청우궁속": "청우금속",
     "신우경멸": "신우정밀",
@@ -943,7 +944,7 @@ class DocumentParser:
         if not parts:
             parts = [str(line or "")]
         for pos, part in enumerate(parts):
-            matches = list(re.finditer(r"(?:상\s*호|회사명|업체명|거래처명)\s*[:：]?\s*(?P<value>.*)", part, flags=re.IGNORECASE))
+            matches = list(re.finditer(r"(?:상\s*호|성\s*호|회사명|업체명|거래처명)\s*[:：]?\s*(?P<value>.*)", part, flags=re.IGNORECASE))
             if matches:
                 for match in matches:
                     value = match.group("value").strip()
@@ -1101,7 +1102,7 @@ class DocumentParser:
             text,
             flags=re.IGNORECASE,
         )
-        text = re.sub(r"^(?:상\s*호|회사명|업체명|거래처명)\s*[:：]?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^(?:상\s*호|성\s*호|회사명|업체명|거래처명)\s*[:：]?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^\(?주\)?(?=[가-힣A-Za-z])", "(주)", text)
         return re.sub(r"\s+", " ", text).strip(" -:：|")
 

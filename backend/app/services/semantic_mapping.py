@@ -309,7 +309,7 @@ class SemanticMappingService:
 
     def _is_party_name_key(self, target: str, raw_key: object) -> bool:
         normalized = self._normalize_label(raw_key)
-        name_signal = any(signal in normalized for signal in ("상호", "업체명", "회사명", "거래처", "고객사", "seller", "vendor", "buyer", "customer"))
+        name_signal = any(signal in normalized for signal in ("상호", "성호", "업체명", "회사명", "거래처", "고객사", "seller", "vendor", "buyer", "customer"))
         blocked = any(signal in normalized for signal in ("사업자번호", "담당", "대표자", "주소", "전화", "번호"))
         if blocked:
             return False

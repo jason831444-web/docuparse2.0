@@ -528,6 +528,32 @@ def test_party_sanitizer_blocks_business_number_ocr_noise():
     assert document.merchant_name is None
 
 
+def test_final_safety_removes_implausible_small_document_total_against_line_totals():
+    document = _document(
+        document_type=DocumentType.purchase_order,
+        extracted_amount=Decimal("199"),
+        subtotal=Decimal("181"),
+        tax=Decimal("18"),
+        currency="USD",
+        line_items=[
+            {"item_name": "고추장 소스", "line_total": 27600},
+            {"item_name": "POS 용지", "line_total": 3960000},
+            {"item_name": "Cable Harness", "line_total": 92500},
+        ],
+    )
+
+    issues = _processor(FakeVLWorker())._apply_final_business_safety_overrides(
+        document,
+        "발주서\nNo 품목명 수량 단가 금액\n고추장 소스 27,600\nPOS 용지 3,960,000\nCable Harness 92,500",
+    )
+
+    assert document.extracted_amount is None
+    assert document.subtotal is None
+    assert document.tax is None
+    assert document.currency is None
+    assert any(issue["code"] == "implausible_document_amount_removed" for issue in issues)
+
+
 def test_receipt_candidates_do_not_trigger_from_item_name_in_manufacturing_document():
     processor = _processor(FakeVLWorker())
     document = _document(document_type=DocumentType.inspection_report, category="inspection_report", tags=["inspection_report"])

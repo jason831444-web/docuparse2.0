@@ -3137,6 +3137,14 @@ class DocumentProcessor:
             ))
             document.review_required = True
 
+        if self._clear_implausible_amount_against_line_totals(document, filtered_items, raw_text):
+            issues.append(self._business_safety_issue(
+                "implausible_document_amount_removed",
+                "품목 금액 합계와 극단적으로 맞지 않는 작은 문서 총액/세액을 확정값에서 제외했습니다.",
+                "extracted_amount,subtotal,tax,currency",
+            ))
+            document.review_required = True
+
         deduped_items: list[dict] = []
         removed_duplicate_rows = 0
         for item in filtered_items:
@@ -3200,6 +3208,41 @@ class DocumentProcessor:
         if filtered_items != line_items:
             document.line_items = sanitize_for_postgres(filtered_items)
         return issues
+
+    def _clear_implausible_amount_against_line_totals(self, document: Document, line_items: list[dict], raw_text: str) -> bool:
+        if document.extracted_amount is None or not line_items:
+            return False
+        doc_type = self._document_type_value(document.document_type)
+        if doc_type not in {"purchase_order", "quotation", "transaction_statement", "invoice", "delivery_note", "packing_list"}:
+            return False
+        line_total_sum = Decimal("0")
+        line_total_count = 0
+        for item in line_items:
+            value = item.get("line_total")
+            if value in (None, "", []):
+                continue
+            try:
+                amount = Decimal(str(value).replace(",", ""))
+            except Exception:
+                continue
+            if amount <= 0:
+                continue
+            line_total_sum += amount
+            line_total_count += 1
+        if line_total_count < 2 or line_total_sum < Decimal("10000"):
+            return False
+        try:
+            document_total = Decimal(str(document.extracted_amount).replace(",", ""))
+        except Exception:
+            return False
+        if document_total <= 0 or document_total >= line_total_sum * Decimal("0.20"):
+            return False
+        for field in ("extracted_amount", "subtotal", "tax"):
+            setattr(document, field, None)
+        if str(document.currency or "").upper() == "USD" and not self.parser._has_strong_usd_currency_signal(raw_text):
+            document.currency = None
+        self._record_party_mapping_source(document, "extracted_amount", "implausible_amount_guard")
+        return True
 
     def _ensure_filename_doc_number_consistency(self, document: Document, raw_text: str) -> bool:
         filename_number = self._doc_number_from_filename(document.original_filename)
@@ -3411,7 +3454,7 @@ class DocumentProcessor:
                 current_role = None
                 wait_for_value_after_key = False
                 continue
-            key_value = re.sub(r"^(상호|회사명|업체명|거래처명|고객사|수신)\s*[:：]?\s*", "", line).strip()
+            key_value = re.sub(r"^(상호|성호|회사명|업체명|거래처명|고객사|수신)\s*[:：]?\s*", "", line).strip()
             if key_value != line:
                 candidate = self._normalize_party_name(key_value)
                 if candidate:
@@ -3442,7 +3485,7 @@ class DocumentProcessor:
         else:
             label = r"(?:공급받는자|거래처|납품처|고객사|수신|buyer|customer|bill\s*to|ship\s*to)"
             stop = r"(?:비고|품목|No\b|문서번호|작성일|발행일)"
-        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|회사명|업체명|거래처명|거래처|납품처)?\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
+        pattern = rf"{label}[\s\S]{{0,80}}?(?:상호|성호|회사명|업체명|거래처명|거래처|납품처)?\s*[:：]?\s*(?P<value>[^\n:：]{{2,40}}?)(?=\s+{stop}|\n|$)"
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if not match:
             return None
@@ -3460,7 +3503,7 @@ class DocumentProcessor:
     def _looks_like_standalone_party_value(self, line: str) -> bool:
         if self._looks_like_non_party_identifier(line):
             return False
-        if re.search(r"(상호|회사명|업체명|거래처명|사업자|등록번호|대표|업태|담당|전화|주소)", line):
+        if re.search(r"(상호|성호|회사명|업체명|거래처명|사업자|등록번호|대표|업태|담당|전화|주소)", line):
             return False
         if re.search(r"(품목|규격|수량|단가|공급가액|세액|합계|비고|문서번호|작성일|발행일)", line):
             return False
@@ -3557,7 +3600,7 @@ class DocumentProcessor:
             return None
         if re.search(r"^(담당|담당자|회계|검사자|작성자|검수자)\s*[:：]", text):
             return None
-        text = re.sub(r"^(상호|업체|거래처명|거래처|납품처|공급자|공급업체|공급받는자|고객사|수신|받는곳)\s*[:：]?\s*", "", text).strip()
+        text = re.sub(r"^(상호|성호|업체|거래처명|거래처|납품처|공급자|공급업체|공급받는자|고객사|수신|받는곳)\s*[:：]?\s*", "", text).strip()
         if self._looks_like_non_party_identifier(text):
             return None
         text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
