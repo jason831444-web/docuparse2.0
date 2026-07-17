@@ -642,6 +642,18 @@ class DocumentProcessor:
             raw_semantic_mapping = SemanticMappingService().map_raw(document, raw_extraction, mapping_source="raw_extraction")
             workflow_metadata["raw_semantic_mapping"] = raw_semantic_mapping
             self._apply_raw_semantic_mapping_to_review_fields(document, raw_semantic_mapping)
+            post_mapping_safety_issues = self._apply_final_business_safety_overrides(document, raw_text)
+            if post_mapping_safety_issues:
+                issues = list(workflow_metadata.get("normalized_review_issues") or [])
+                existing_codes = {issue.get("code") for issue in issues if isinstance(issue, dict)}
+                for issue in post_mapping_safety_issues:
+                    if issue.get("code") not in existing_codes:
+                        issues.append(issue)
+                        existing_codes.add(issue.get("code"))
+                workflow_metadata["normalized_review_issues"] = issues
+                workflow_metadata["review_required"] = True
+                document.review_required = True
+                document.processing_status = ProcessingStatus.needs_review
             workflow_metadata["dictionary_suggestions"] = self.domain_dictionary.suggestions_for_document(db, document, raw_extraction)
             document.workflow_metadata = sanitize_for_postgres(workflow_metadata or None)
             if parser_only:
@@ -2754,18 +2766,26 @@ class DocumentProcessor:
 
         for attr, key in (("vendor_name", "vendor_name"), ("customer_name", "customer_name"), ("currency", "currency")):
             value = text_value(key)
-            if value:
-                setattr(document, attr, sanitize_for_postgres(value))
-                field_sources[attr] = "raw_semantic_mapping"
+            if not value or getattr(document, attr, None):
+                continue
+            if attr in {"vendor_name", "customer_name"}:
+                value = self._normalize_party_name(value)
+                if not value:
+                    continue
+                other = document.customer_name if attr == "vendor_name" else document.vendor_name
+                if other and self.parser._normalized_party_key(other) == self.parser._normalized_party_key(value):
+                    continue
+            setattr(document, attr, sanitize_for_postgres(value))
+            field_sources[attr] = "raw_semantic_mapping"
 
         issue_date = self._vl_date(fields.get("issue_date")) or self._parse_ai_candidate_date(fields.get("issue_date"))
-        if issue_date:
+        if issue_date and not (document.issue_date or document.extracted_date):
             document.issue_date = issue_date
             document.extracted_date = issue_date
             field_sources["issue_date"] = "raw_semantic_mapping"
             field_sources["extracted_date"] = "raw_semantic_mapping"
         due_date = self._vl_date(fields.get("due_date")) or self._parse_ai_candidate_date(fields.get("due_date"))
-        if due_date:
+        if due_date and not document.due_date:
             document.due_date = due_date
             field_sources["due_date"] = "raw_semantic_mapping"
 
@@ -2777,7 +2797,7 @@ class DocumentProcessor:
         for attr, keys in amount_fields:
             for key in keys:
                 amount = self._vl_decimal(fields.get(key))
-                if amount is not None:
+                if amount is not None and getattr(document, attr, None) is None:
                     setattr(document, attr, amount)
                     field_sources[attr] = "raw_semantic_mapping"
                     break
@@ -3059,6 +3079,14 @@ class DocumentProcessor:
             document.low_confidence_fields = sorted(set([*(document.low_confidence_fields or []), "unsupported_pos_settlement"]))
             self._normalize_party_fields(document)
             return issues
+
+        if self._receipt_context_signal(document, raw_text) and self._apply_receipt_parser_amount_summary(document, raw_text):
+            issues.append(self._business_safety_issue(
+                "receipt_amount_summary_reconciled",
+                "영수증의 공급가액/부가세/합계 트리플을 원문 기준으로 다시 맞췄습니다.",
+                "extracted_amount,subtotal,tax",
+            ))
+            document.review_required = True
 
         self._normalize_party_fields(document)
 
@@ -3444,6 +3472,29 @@ class DocumentProcessor:
         manufacturing_signal = bool(re.search(r"(입고\s*검사|검사\s*기록|검사\s*성적|발주서|납품서|견적서|거래\s*명세서|자재\s*이동|incoming\s+inspection|purchase\s+order|delivery\s+note|quotation|transaction\s+statement)", text, flags=re.IGNORECASE))
         return has_receipt_title and has_payment_signal and not manufacturing_signal
 
+    def _apply_receipt_parser_amount_summary(self, document: Document, raw_text: str) -> bool:
+        parsed = self.parser.parse(raw_text or "", document.original_filename or "")
+        if parsed.document_type != DocumentType.receipt or parsed.extracted_amount is None:
+            return False
+        changed = False
+        for attr in ("extracted_amount", "subtotal", "tax"):
+            value = getattr(parsed, attr, None)
+            if value is None:
+                continue
+            if getattr(document, attr, None) != value:
+                setattr(document, attr, value)
+                self._record_party_mapping_source(document, attr, "receipt_parser_amount_summary")
+                changed = True
+        if parsed.currency and document.currency != parsed.currency:
+            document.currency = parsed.currency
+            self._record_party_mapping_source(document, "currency", "receipt_parser_amount_summary")
+            changed = True
+        if document.document_type != DocumentType.receipt:
+            document.document_type = DocumentType.receipt
+            document.ai_document_type = DocumentType.receipt
+            changed = True
+        return changed
+
     def _receipt_top_line_party_candidate(self, raw_text: str) -> str | None:
         for raw_line in str(raw_text or "").splitlines()[:12]:
             line = self._normalize_party_name(raw_line)
@@ -3475,6 +3526,9 @@ class DocumentProcessor:
         text = str(value or "").strip()
         if not text:
             return None
+        cleaned = self.parser._clean_party_candidate(text)
+        if cleaned:
+            text = cleaned
         if self._looks_like_non_party_identifier(text):
             return None
         if re.search(r"^(담당|담당자|회계|검사자|작성자|검수자)\s*[:：]", text):
@@ -3485,6 +3539,7 @@ class DocumentProcessor:
         text = re.sub(r"^(?:\(?주\)?|주식회사)\s*", "", text).strip()
         text = re.sub(r"\s*(?:\(?주\)?|주식회사)$", "", text).strip()
         text = re.sub(r"\s*/\s*(회계팀|구매팀|품질팀|생산관리|담당.*)$", "", text).strip()
+        text = self.parser._apply_party_ocr_corrections(text)
         if self._looks_like_non_party_identifier(text):
             return None
         return text or None

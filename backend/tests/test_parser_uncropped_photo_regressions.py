@@ -97,3 +97,32 @@ def test_missing_footer_purchase_order_recomputes_from_visible_supply_rows():
     assert parsed.subtotal == Decimal("1560180")
     assert parsed.tax == Decimal("156018")
     assert parsed.extracted_amount == Decimal("1716198")
+
+
+def test_split_party_role_rows_keep_customer_role_queue():
+    raw = """
+    문서번호:DOG
+    -081
+    공급자
+    공급받는지
+    상호념
+    주우성기계
+    상호:
+    주코리아맥노리
+    문서번호:DOC-081
+    견적서
+    공급자
+    상호: (주)우성기계
+    작성일:2026.06.05
+    No 품목명 규격/코드 수량 단위 단가 금액
+    1 식자재 감자 20kg POTATO-20K 20 BOX 27,000 540,000
+    공급가액 1,158,960
+    세액 115,896
+    예상 합계 1,274,856
+    """
+
+    parsed = DocumentParser().parse(raw, "DOC-081_quotation_uncropped_photo.pdf")
+
+    assert parsed.vendor_name == "(주)우성기계"
+    assert parsed.customer_name == "(주)코리아팩토리"
+    assert parsed.extracted_amount == Decimal("1274856")

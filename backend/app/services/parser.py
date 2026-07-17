@@ -148,10 +148,23 @@ PARTY_OCR_CORRECTIONS = {
     "대성경공": "대성정공",
     "태광부풍": "태광부품",
     "우리경멸": "우리정밀",
+    "무리정밀": "우리정밀",
     "시흥대아점": "시흥대야점",
+    "시흥대아컴": "시흥대야점",
+    "시홍대야점": "시흥대야점",
+    "시홈대이컴": "시흥대야점",
     "한라오터스": "한라모터스",
     "우성기격": "우성기계",
+    "우성기제": "우성기계",
+    "동전전자": "동진전자",
+    "세옹건설": "세움건설",
+    "세용건설": "세움건설",
     "형무금속": "현무금속",
+    "청우궁속": "청우금속",
+    "신우경멸": "신우정밀",
+    "신우경밀": "신우정밀",
+    "코리아택토리": "코리아팩토리",
+    "코리아맥노리": "코리아팩토리",
 }
 
 
@@ -769,6 +782,7 @@ class DocumentParser:
         if not customer_name:
             customer_name = self._clean_party_candidate(self._extract_labeled_text(text, [
                 "공급받는자", "공급반는자", "고객사", "고객시", "구매처", "발주처", "수신처", "수신", "납품처", "수요처", "구매자",
+                "공급받는지",
                 "받는곳", "받는 곳", "customer", "buyer", "bill to",
             ]))
         if vendor_name and customer_name and self._normalized_party_key(vendor_name) == self._normalized_party_key(customer_name):
@@ -800,6 +814,7 @@ class DocumentParser:
     def _role_party_candidates(self, lines: list[str]) -> dict[str, list[tuple[int, int, str]]]:
         candidates: dict[str, list[tuple[int, int, str]]] = {"vendor": [], "customer": []}
         pending_role: str | None = None
+        pending_roles: list[str] = []
         pending_ttl = 0
         seen_roles: set[str] = set()
         main_header_index = self._main_document_header_index(lines)
@@ -810,17 +825,23 @@ class DocumentParser:
         for index, raw_line in enumerate(lines[:80]):
             if index == main_header_index and index > 0:
                 pending_role = None
+                pending_roles = []
                 pending_ttl = 0
                 seen_roles = set()
             line = str(raw_line or "")
             roles_in_line = self._party_roles_in_line(line)
             values = self._party_values_from_line(line)
+            if not values and pending_roles:
+                standalone = self._clean_party_candidate(line)
+                if standalone and not self._looks_like_business_label(line):
+                    values = [standalone]
             if len(roles_in_line) >= 2 and len(values) >= 2:
                 ordered_roles = [role for _, role in sorted(roles_in_line, key=lambda item: item[0])]
                 for role, value in zip(ordered_roles, values):
                     add_candidate(role, 100, index, value)
                     seen_roles.add(role)
                 pending_role = None
+                pending_roles = []
                 pending_ttl = 0
                 continue
             explicit_role = roles_in_line[0][1] if len(roles_in_line) == 1 else None
@@ -833,6 +854,22 @@ class DocumentParser:
                     for value in extra_values:
                         add_candidate(opposite, 55, index, value)
                         seen_roles.add(opposite)
+                elif pending_roles:
+                    assigned_count = 0
+                    for role, value in zip(pending_roles, values):
+                        add_candidate(role, 82, index, value)
+                        seen_roles.add(role)
+                        assigned_count += 1
+                    pending_roles = pending_roles[assigned_count:]
+                    for value in values[assigned_count:]:
+                        if "vendor" in seen_roles and "customer" not in seen_roles:
+                            inferred_role = "customer"
+                        elif "customer" in seen_roles and "vendor" not in seen_roles:
+                            inferred_role = "vendor"
+                        else:
+                            inferred_role = "vendor" if "vendor" not in seen_roles else "customer"
+                        add_candidate(inferred_role, 60, index, value)
+                        seen_roles.add(inferred_role)
                 elif pending_role:
                     add_candidate(pending_role, 82, index, values[0])
                     seen_roles.add(pending_role)
@@ -850,16 +887,19 @@ class DocumentParser:
                             inferred_role = "vendor" if "vendor" not in seen_roles else "customer"
                         add_candidate(inferred_role, 60, index, value)
                         seen_roles.add(inferred_role)
-                pending_role = None
-                pending_ttl = 0
+                pending_role = pending_roles[0] if pending_roles else None
+                pending_ttl = 5 if pending_roles else 0
                 continue
             if explicit_role:
                 pending_role = explicit_role
+                if explicit_role not in pending_roles:
+                    pending_roles.append(explicit_role)
                 pending_ttl = 5
             elif pending_ttl > 0:
                 pending_ttl -= 1
                 if pending_ttl == 0:
                     pending_role = None
+                    pending_roles = []
         return candidates
 
     def _main_document_header_index(self, lines: list[str]) -> int:
@@ -875,7 +915,7 @@ class DocumentParser:
 
     def _party_roles_in_line(self, line: str) -> list[tuple[int, str]]:
         roles: list[tuple[int, str]] = []
-        for match in re.finditer(r"공급\s*(?:받는|반는)\s*자|고객사|구매처|발주처|수신처|납품처|customer|buyer|bill\s*to", line, flags=re.IGNORECASE):
+        for match in re.finditer(r"공급\s*(?:받는|반는)\s*[자지]|고객사|구매처|발주처|수신처|납품처|customer|buyer|bill\s*to", line, flags=re.IGNORECASE):
             roles.append((match.start(), "customer"))
         for match in re.finditer(r"공급\s*(?:업체|엽체|자)|판매자|매입처|발행처|청구처|vendor|supplier|seller", line, flags=re.IGNORECASE):
             roles.append((match.start(), "vendor"))
@@ -884,6 +924,16 @@ class DocumentParser:
 
     def _party_values_from_line(self, line: str) -> list[str]:
         values: list[str] = []
+        role_value_match = re.match(
+            r"^(?:공급\s*(?:업체|엽체|자)|공급\s*(?:받는|반는)\s*[자지]|고객사|구매처|발주처|수신처|납품처|"
+            r"vendor|supplier|seller|customer|buyer|bill\s*to)\s*[:：]\s*(?P<value>.+)$",
+            str(line or ""),
+            flags=re.IGNORECASE,
+        )
+        if role_value_match:
+            cleaned = self._clean_party_candidate(role_value_match.group("value"))
+            if cleaned:
+                return [cleaned]
         parts = [part.strip() for part in re.split(r"\s*\|\s*|\t+", str(line or "")) if part.strip()]
         if not parts:
             parts = [str(line or "")]
@@ -1016,6 +1066,10 @@ class DocumentParser:
             return None
         if re.fullmatch(r"(?:SKU|Vendor\s*SKU|Item|Item\s*Code|Description|Spec|Specification|Qty|Unit|Subtotal|Tax|Total)", text, flags=re.IGNORECASE):
             return None
+        if len(re.sub(r"[^가-힣A-Za-z0-9]", "", text)) <= 1:
+            return None
+        if re.match(r"^(?:no\.?|no,|item\b|품목|월일)\b", text, flags=re.IGNORECASE):
+            return None
         if re.search(r"[/\\]|uploads|workspace|localhost|127\.0\.0\.1|https?://", text, flags=re.IGNORECASE):
             return None
         if self._looks_like_business_label(text) or self._looks_like_instruction_or_note(text):
@@ -1023,8 +1077,8 @@ class DocumentParser:
         if re.fullmatch(r"(?:영업|회계|구매|품질|생산관리|관리|검사|검수)\s*팀?", text):
             return None
         if re.search(
-            r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery|설치비|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|담당|"
-            r"문서번호|작성일|검사일|유효기간|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
+            r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery|설치비|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|주의|참고|담당|"
+            r"문서번호|작성일|검사일|유효기간|결제\s*조건|지급\s*조건|납기\s*조건|월말|송금|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
             text,
             flags=re.IGNORECASE,
         ):
@@ -1036,7 +1090,7 @@ class DocumentParser:
     def _strip_party_field_prefixes(self, value: str) -> str:
         text = str(value or "").strip(" -:：|")
         text = re.sub(
-            r"^(?:공급\s*(?:업체|엽체|자)|공급\s*(?:받는|반는)\s*자|고객사|구매처|발주처|수신처|납품처|"
+            r"^(?:공급\s*(?:업체|엽체|자)|공급\s*(?:받는|반는)\s*[자지]|고객사|구매처|발주처|수신처|납품처|"
             r"vendor|supplier|seller|customer|buyer|bill\s*to)\s*[:：]?\s*",
             "",
             text,

@@ -123,6 +123,111 @@ def test_final_business_safety_removes_date_fragment_total_amount():
     assert any(issue["code"] == "date_fragment_not_total_amount" for issue in issues)
 
 
+def test_raw_semantic_mapping_does_not_overwrite_confirmed_fields():
+    document = _document(
+        document_type=DocumentType.receipt,
+        vendor_name="대성식자재",
+        customer_name=None,
+        issue_date=date(2026, 6, 7),
+        extracted_amount=Decimal("531320"),
+        subtotal=Decimal("483018"),
+        tax=Decimal("48302"),
+        currency="KRW",
+    )
+    mapping = {
+        "fields": {
+            "vendor_name": "(주)대성경공",
+            "customer_name": "대성식자재",
+            "issue_date": "2026-06-16",
+            "supply_amount": "483018",
+            "tax_amount": "483018",
+            "payment_total": "48302",
+            "currency": "USD",
+        }
+    }
+
+    DocumentProcessor()._apply_raw_semantic_mapping_to_review_fields(document, mapping)
+
+    assert document.vendor_name == "대성식자재"
+    assert document.customer_name is None
+    assert document.issue_date == date(2026, 6, 7)
+    assert document.extracted_amount == Decimal("531320")
+    assert document.subtotal == Decimal("483018")
+    assert document.tax == Decimal("48302")
+    assert document.currency == "KRW"
+
+
+def test_final_business_safety_reconciles_receipt_amount_summary():
+    document = _document(
+        original_filename="DOC-026_receipt_uncropped_photo.jpg",
+        document_type=DocumentType.receipt,
+        vendor_name="대성식자재",
+        extracted_amount=Decimal("48302"),
+        subtotal=Decimal("483018"),
+        tax=Decimal("483018"),
+        currency="KRW",
+    )
+
+    issues = DocumentProcessor()._apply_final_business_safety_overrides(
+        document,
+        """
+        대성식자재
+        영수증번호:
+        IDOC-026
+        일자:
+        20260607
+        PC8
+        Connector
+        SEA X 626
+        12F
+        3100
+        양파
+        15kg
+        180X
+        22900
+        22000
+        POS
+        영수증
+        용지
+        5BOX
+        33000
+        165000
+        HDPE
+        포장필름
+        5ROLL
+        56000
+        280000
+        Cable
+        Harness
+        500
+        2EA:
+        1850
+        3700
+        고추장
+        소스
+        2kg
+        1EA X 9200
+        9200
+        3
+        육각너트
+        1EA
+        18
+        공급가액
+        부가세
+        483018
+        합계
+        48302
+        531320
+        감사합니다
+        """,
+    )
+
+    assert document.extracted_amount == Decimal("531320")
+    assert document.subtotal == Decimal("483018")
+    assert document.tax == Decimal("48302")
+    assert "receipt_amount_summary_reconciled" in {issue["code"] for issue in issues}
+
+
 def test_ai_parsed_store_candidate_fills_receipt_vendor_without_guessing_customer():
     document = _document(document_type=DocumentType.receipt, vendor_name=None, customer_name=None, merchant_name=None)
     metadata = {}
