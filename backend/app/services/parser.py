@@ -161,6 +161,7 @@ PARTY_OCR_CORRECTIONS = {
     "동전전자": "동진전자",
     "세음건설": "세움건설",
     "비주세음건설": "세움건설",
+    "비주세움건설": "세움건설",
     "세옹건설": "세움건설",
     "세용건설": "세움건설",
     "형무금속": "현무금속",
@@ -1108,9 +1109,12 @@ class DocumentParser:
         text = str(value or "")
         compact = re.sub(r"\s+", "", text)
         for wrong, correct in PARTY_OCR_CORRECTIONS.items():
-            if wrong in compact and correct not in compact:
-                text = text.replace(wrong, correct)
-                compact = compact.replace(wrong, correct)
+            if wrong not in compact:
+                continue
+            if len(wrong) < len(correct) and correct in compact:
+                continue
+            text = text.replace(wrong, correct)
+            compact = compact.replace(wrong, correct)
         return text.strip(" -:：|")
 
     def _header_party_candidate(self, lines: list[str], exclude: set[str | None] | None = None) -> str | None:

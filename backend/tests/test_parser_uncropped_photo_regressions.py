@@ -50,6 +50,12 @@ def test_glued_customer_labels_are_trimmed():
 
     assert parsed.vendor_name == "(주)태광부품"
     assert parsed.customer_name == "(주)삼광유통"
+
+    corrected = DocumentParser().parse(
+        "세금계산서\n공급자: (주)태광부품\n공급받는자: 비주세움건설\n합계 10,000",
+        "DOC-019_tax_invoice_uncropped_photo.jpg",
+    )
+    assert corrected.customer_name == "세움건설"
     assert parsed.extracted_amount == Decimal("89100")
 
 
