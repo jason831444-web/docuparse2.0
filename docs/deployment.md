@@ -100,6 +100,19 @@ curl -fsSI http://127.0.0.1/
 
 For a real public domain, replace `http://127.0.0.1` with `PUBLIC_BASE_URL`.
 
+## Automatic GitHub Sync
+
+On the DigitalOcean host, install a systemd timer that runs:
+
+```bash
+/root/docuparse2.0/scripts/deploy-digitalocean.sh
+```
+
+The deploy script checks GitHub `main`, fast-forwards the checkout, rebuilds and
+restarts `backend`, `backend-worker`, `ocr-worker`, and `frontend` only when the
+commit changes, keeps the RunPod TCP forwarder alive, and verifies that the
+backend still reports the VL primary reader without fallback.
+
 ## Persistence Checks
 
 Create a document through the deployed API:

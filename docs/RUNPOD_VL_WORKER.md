@@ -197,6 +197,22 @@ scripts/check-vl-worker.sh http://172.18.0.1:18024
 The backend-visible URL remains `http://172.18.0.1:18024`; the reverse tunnel is
 only one leg of that path.
 
+## Automatic GitHub Sync
+
+For the current RunPod pod, keep a lightweight watcher running:
+
+```bash
+cd /workspace/DocuParse
+nohup scripts/watch-github-deploy.sh runpod \
+  >> /workspace/docuparse-gpu-test/logs/auto-sync-watch.log 2>&1 &
+```
+
+The watcher checks GitHub `main` every minute. When the remote commit changes,
+it runs `scripts/deploy-runpod.sh`, which fast-forwards the repo, restarts the
+RunPod backend/frontend development services, restarts the VL worker API on the
+same llama-server, reopens the reverse tunnel if needed, and verifies health.
+It does not delete models, uploads, logs, or sample files.
+
 ## DigitalOcean Connection
 
 Expose the RunPod worker to the DigitalOcean backend with a network tunnel or
