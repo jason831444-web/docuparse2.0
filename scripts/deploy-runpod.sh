@@ -44,6 +44,7 @@ start_backend() {
   mkdir -p "$LOG_DIR"
   local vl_worker_port="${VL_WORKER_PORT:-8020}"
   (
+    exec 9>&-
     cd "$REPO_DIR/backend"
     DATABASE_URL="${RUNPOD_DATABASE_URL:-postgresql+psycopg://docuparse:docuparse@localhost:5432/docuparse}" \
       ENABLE_PADDLEOCR_VL_GGUF="${ENABLE_PADDLEOCR_VL_GGUF:-true}" \
@@ -70,6 +71,7 @@ start_frontend() {
   fi
   mkdir -p "$LOG_DIR"
   (
+    exec 9>&-
     cd "$REPO_DIR/frontend"
     DOCUPARSE_BACKEND_INTERNAL_URL="${DOCUPARSE_BACKEND_INTERNAL_URL:-http://127.0.0.1:$BACKEND_PORT}" \
       NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-/api}" \
@@ -157,14 +159,14 @@ if [[ "$old_head" != "$new_head" || "${FORCE_RESTART:-0}" == "1" ]]; then
   INSTALL_PYTHON_DEPS="$backend_deps_changed" \
     DOCUPARSE_REPO="$REPO_DIR" \
     RUNPOD_WORKDIR="$RUNPOD_WORKDIR" \
-    "$REPO_DIR/scripts/runpod-bootstrap-vl-stack.sh"
+    "$REPO_DIR/scripts/runpod-bootstrap-vl-stack.sh" 9>&-
 else
   echo "[$(timestamp)] no Git change; checking running services"
 fi
 
 DOCUPARSE_REPO="$REPO_DIR" \
   RUNPOD_WORKDIR="$RUNPOD_WORKDIR" \
-  "$REPO_DIR/scripts/runpod-start-reverse-tunnel.sh"
+  "$REPO_DIR/scripts/runpod-start-reverse-tunnel.sh" 9>&-
 DOCUPARSE_REPO="$REPO_DIR" \
   RUNPOD_WORKDIR="$RUNPOD_WORKDIR" \
   "$REPO_DIR/scripts/runpod-check-reverse-tunnel.sh"
