@@ -162,7 +162,7 @@ scripts/runpod-check-reverse-tunnel.sh
 
 Defaults:
 
-- DigitalOcean SSH host: `104.236.18.111`
+- DigitalOcean SSH host: `162.243.251.204`
 - DigitalOcean SSH user: `root`
 - DigitalOcean tunnel key: `/root/.ssh/docuparse_do_reverse_tunnel`
 - DigitalOcean bind: `127.0.0.1:18020`

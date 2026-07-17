@@ -5,7 +5,7 @@ RUNPOD_WORKDIR="${RUNPOD_WORKDIR:-/workspace/docuparse-gpu-test}"
 LOG_DIR="${LOG_DIR:-$RUNPOD_WORKDIR/logs}"
 
 DO_TUNNEL_USER="${DO_TUNNEL_USER:-root}"
-DO_TUNNEL_HOST="${DO_TUNNEL_HOST:-104.236.18.111}"
+DO_TUNNEL_HOST="${DO_TUNNEL_HOST:-162.243.251.204}"
 DO_TUNNEL_KEY="${DO_TUNNEL_KEY:-/root/.ssh/docuparse_do_reverse_tunnel}"
 DO_TUNNEL_REMOTE_BIND="${DO_TUNNEL_REMOTE_BIND:-127.0.0.1}"
 DO_TUNNEL_REMOTE_PORT="${DO_TUNNEL_REMOTE_PORT:-18020}"
@@ -72,4 +72,3 @@ fi
 
 echo "reverse tunnel PID $(cat "$PID_FILE")"
 echo "log: $LOG_FILE"
-
