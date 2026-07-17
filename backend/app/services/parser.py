@@ -213,6 +213,8 @@ class DocumentParser:
             subtotal = self._extract_labeled_amount(document_scope_text, ["차감 공급가액", "차감공급가액", "공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "금월공급가액", "subtotal total", "subtotal", "supply amount", "supply total"])
             tax = self._extract_labeled_amount(document_scope_text, ["차감 세액", "차감세액", "세액 합계", "세액", "세 액", "부가세", "금월세액", "vat total", "vat", "tax", "w세액"])
             amount = self._extract_labeled_amount(document_scope_text, ["조정 합계", "조정합계", "반품 합계", "반품합계", "크레딧 합계", "크레딧합계", "차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "실 판매금액", "실판매금액", "순 판매금액", "순판매금액", "결제합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            if doc_type == DocumentType.receipt:
+                amount = self._extract_labeled_amount(document_scope_text, ["결제금액", "승인금액", "카드승인금액", "받은금액", "합계", "total"]) or amount
             if option_selection_quote:
                 subtotal = subtotal if subtotal is not None else self._confirmed_line_items_sum(line_items, "supply_amount")
                 tax = tax if tax is not None else self._confirmed_line_items_sum(line_items, "tax_amount")
@@ -265,7 +267,7 @@ class DocumentParser:
             merchant_name=vendor_name or (self._guess_merchant(lines) if doc_type == DocumentType.receipt else None),
             vendor_name=vendor_name,
             customer_name=customer_name,
-            document_number=self._extract_document_number(joined),
+            document_number=self._extract_document_number(joined, doc_type),
             issue_date=issue_date,
             due_date=due_date,
             subtotal=subtotal,
@@ -725,7 +727,7 @@ class DocumentParser:
                     break
         return None
 
-    def _extract_document_number(self, text: str) -> str | None:
+    def _extract_document_number(self, text: str, doc_type: DocumentType | None = None) -> str | None:
         if self._has_return_or_credit_signal(text):
             return_number = self._first_document_number_for_prefix(text, "RTN") or self._first_document_number_for_prefix(text, "RCM")
             if return_number:
@@ -736,11 +738,13 @@ class DocumentParser:
                 return transfer_number
         labels = [
             "발주번호", "발주 번호", "견적번호", "견적 번호", "거래명세서번호", "납품번호", "계산서번호", "인보이스번호", "청구서번호", "문서번호",
-            "영수증번호", "전표번호", "정산번호", "메모번호",
+            "영수증번호", "승인번호", "카드승인번호", "전표번호", "정산번호", "메모번호",
             "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
+            "receipt no", "receipt number", "approval no", "approval number",
         ]
         normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
-        primary_text = self._document_number_search_text(self._strip_reference_number_lines(text))
+        primary_source = text if doc_type == DocumentType.receipt else self._strip_reference_number_lines(text)
+        primary_text = self._document_number_search_text(primary_source)
         lines = [line.strip() for line in primary_text.splitlines()]
         strong = self._best_document_number_from_text(primary_text)
         best_labeled: str | None = None

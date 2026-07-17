@@ -344,7 +344,7 @@ class DocumentProcessor:
             document.extracted_amount = self._nonnegative_document_amount(selected_extracted_amount)
             document.subtotal = self._nonnegative_document_amount(selected_subtotal)
             document.tax = self._nonnegative_document_amount(selected_tax)
-            document.currency = ai_result.currency or parsed.currency
+            document.currency = self._select_document_currency(parsed, ai_result, raw_text)
             document.merchant_name = sanitize_for_postgres(ai_result.merchant_name or parsed.merchant_name)
             document.vendor_name = sanitize_for_postgres((parsed.vendor_name or ai_result.vendor_name) if deterministic_first else (ai_result.vendor_name or parsed.vendor_name) or document.merchant_name)
             document.customer_name = sanitize_for_postgres((parsed.customer_name or ai_result.customer_name) if deterministic_first else (ai_result.customer_name or parsed.customer_name))
@@ -392,6 +392,12 @@ class DocumentProcessor:
                 document.document_type = parsed.document_type
                 document.ai_document_type = parsed.document_type
                 document.document_number = sanitize_for_postgres(parsed.document_number or document.document_number)
+                for attr in ("extracted_amount", "subtotal", "tax"):
+                    value = getattr(parsed, attr, None)
+                    if value is not None:
+                        setattr(document, attr, value)
+                if parsed.currency:
+                    document.currency = parsed.currency
                 if getattr(parsed, "line_items", None):
                     document.line_items = sanitize_for_postgres(
                         self._line_items_for_extraction_method(
@@ -3261,6 +3267,17 @@ class DocumentProcessor:
         document.customer_name = self._normalize_party_name(document.customer_name)
         document.merchant_name = self._normalize_party_name(document.merchant_name)
 
+    def _select_document_currency(self, parsed: object, ai_result: object, raw_text: str) -> str | None:
+        parsed_currency = getattr(parsed, "currency", None)
+        ai_currency = getattr(ai_result, "currency", None)
+        parsed_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
+        if parsed_currency and parsed_type == "receipt" and self._receipt_context_signal_from_text(raw_text):
+            return parsed_currency
+        return ai_currency or parsed_currency
+
+    def _receipt_context_signal_from_text(self, raw_text: str) -> bool:
+        return bool(re.search(r"(영수증|receipt|승인번호|카드사|공급가액|부가세)", str(raw_text or ""), flags=re.IGNORECASE))
+
     def _promote_party_block_candidates(self, document: Document, raw_text: str) -> None:
         if document.vendor_name and document.customer_name:
             return
@@ -3452,7 +3469,13 @@ class DocumentProcessor:
             return True
         if re.search(r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery)", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(담당|당당|검사자|작성자|검수자|회계팀|구매팀|품질팀|품길팀|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액|vendor\s*sku|item\s*code|unit\s*price|line\s*total|\bqty\b|\bspec\b)", text, flags=re.IGNORECASE):
+        if re.search(r"(담당|당당|검사자|작성자|검수자|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액|vendor\s*sku|item\s*code|unit\s*price|line\s*total|\bqty\b|\bspec\b)", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(회계팀|구매팀|품질팀|품길팀)", text, flags=re.IGNORECASE) and not re.search(
+            r"(정공|산업|테크|금속|부품|전자|제조|상사|공업|엔지니어링|솔루션|시스템|마트|LLC|Inc|Co\\.)",
+            text,
+            flags=re.IGNORECASE,
+        ):
             return True
         if re.search(r"(경기도|서울|부산|인천|대구|광주|대전|울산|세종|충청|전라|경상|강원|제주|시흥시|공단로|대로|로\s*\d|번길|주소)", text):
             return True
@@ -3785,13 +3808,27 @@ class DocumentProcessor:
             confirmed_name = self._normalized_layout_identity(item.get("item_name") or item.get("name"))
             confirmed_codes = self._line_item_code_identities(item)
             code_compatible = bool(candidate_codes and confirmed_codes and candidate_codes & confirmed_codes)
+            exact_name_compatible = bool(candidate_name and confirmed_name and candidate_name == confirmed_name)
             name_compatible = self._layout_names_compatible(candidate_name, confirmed_name)
             fuzzy_name_compatible = self._layout_names_fuzzy_compatible(candidate_name, confirmed_name)
             name_overlap = self._layout_names_overlap(candidate_name, confirmed_name)
-            if not (code_compatible or name_compatible or fuzzy_name_compatible or name_overlap):
+            if not (code_compatible or exact_name_compatible or name_compatible or fuzzy_name_compatible or name_overlap):
                 continue
             flags = {str(flag) for flag in candidate.get("review_flags", []) if flag}
-            if (name_compatible or fuzzy_name_compatible or name_overlap) and flags & {"row_boundary_uncertain", "fax_row_boundary_uncertain", "untrusted_ocr_amount"}:
+            if (exact_name_compatible or name_compatible or fuzzy_name_compatible or name_overlap) and flags & {"row_boundary_uncertain", "fax_row_boundary_uncertain", "untrusted_ocr_amount"}:
+                return True
+            if (exact_name_compatible or name_compatible or fuzzy_name_compatible or name_overlap) and self._line_item_amount_identity_compatible(candidate, item):
+                return True
+            if (
+                (exact_name_compatible or name_compatible)
+                and self._line_item_measurements_compatible(
+                    candidate_quantity,
+                    self._vl_decimal(item.get("quantity")),
+                    required=False,
+                )
+                and candidate_unit_price is None
+                and candidate_line_total is None
+            ):
                 return True
             if not self._line_item_measurements_compatible(
                 candidate_quantity,
@@ -3816,13 +3853,11 @@ class DocumentProcessor:
                 continue
             if code_compatible:
                 return True
-            if name_compatible:
+            if exact_name_compatible or name_compatible:
                 return True
             if fuzzy_name_compatible and (candidate_unit_price is not None or candidate_line_total is not None):
                 return True
             if name_overlap and (candidate_unit_price is not None or candidate_line_total is not None):
-                return True
-            if (name_compatible or fuzzy_name_compatible or name_overlap) and self._line_item_amount_identity_compatible(candidate, item):
                 return True
         return False
 

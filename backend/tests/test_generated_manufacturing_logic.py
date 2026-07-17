@@ -57,6 +57,13 @@ def _document(parsed, filename: str, text: str, *, match: bool = False) -> Docum
     )
 
 
+def _document_processor_or_skip():
+    pytest.importorskip("pytesseract")
+    from app.services.document_processor import DocumentProcessor
+
+    return DocumentProcessor()
+
+
 def test_due_request_date_and_comma_table_document_item_code_are_extracted():
     text = _text("purchase_order_due_request.txt")
     parsed = DocumentParser().parse(text, "generated_po.txt")
@@ -1745,3 +1752,118 @@ def test_workflow_does_not_require_line_items_for_pos_settlement_or_item_codes_w
     ]
     assert missing_code_issues
     assert {issue["severity"] for issue in missing_code_issues} == {"warning"}
+
+
+def test_receipt_approval_number_total_and_krw_are_parser_primary_signals():
+    text = "\n".join([
+        "영수증",
+        "시흥공구마트",
+        "거래일시 2026.06.13 14:22",
+        "승인번호 RC-2026-0006",
+        "카드사 국민카드",
+        "품목 수량 금액",
+        "절삭유 4L 2 38,000",
+        "작업장갑 10 15,000",
+        "드릴비트 M6 5 22,500",
+        "공급가액 68,636",
+        "부가세 6,864",
+        "합계 75,500",
+    ])
+
+    parsed = DocumentParser().parse(text, "receipt_photo.jpg")
+    processor = _document_processor_or_skip()
+    ai_result = AIDocumentUnderstandingResult(document_type=DocumentType.receipt, currency="USD")
+
+    assert parsed.document_number == "RC-2026-0006"
+    assert parsed.extracted_amount == Decimal("75500")
+    assert parsed.subtotal == Decimal("68636")
+    assert parsed.tax == Decimal("6864")
+    assert parsed.currency == "KRW"
+    assert processor._select_document_currency(parsed, ai_result, text) == "KRW"
+
+
+def test_party_normalization_keeps_company_with_department_suffix():
+    processor = _document_processor_or_skip()
+
+    assert processor._normalize_party_name("대성정공 구매팀") == "대성정공 구매팀"
+    assert processor._normalize_party_name("구매팀") is None
+
+
+def test_ai_table_duplicate_rows_are_suppressed_by_identity_not_case():
+    processor = _document_processor_or_skip()
+
+    existing = [
+        {
+            "item_name": "AL6061 판재 3T",
+            "specification": "400x600",
+            "quantity": -2,
+            "unit_price": 18000,
+            "supply_amount": -36000,
+            "tax_amount": -3600,
+            "line_total": -39600,
+        },
+        {"item_name": "설치비", "specification": "현장 상황별", "quantity": 1},
+    ]
+
+    assert processor._duplicates_confirmed_line_item(
+        {
+            "source": "ai_parsed_document.table",
+            "item_name": "AL6061 판재",
+            "specification": "3T 400x600",
+            "quantity": "2",
+            "unit_price": "18,000",
+            "supply_amount": "36,000",
+            "tax_amount": "3,600",
+            "line_total": "39,600",
+        },
+        existing,
+    )
+    assert processor._duplicates_confirmed_line_item(
+        {
+            "source": "ai_parsed_document.table",
+            "item_name": "설치비",
+            "specification": "현장 상황별",
+            "quantity": "1",
+            "unit_price": "별도협의",
+        },
+        existing,
+    )
+
+
+def test_ai_merge_skips_return_credit_duplicate_rows_and_preserves_signed_totals():
+    text = "\n".join([
+        "반품/크레딧 메모",
+        "문서번호 RCM-2026-0009",
+        "작성일 2026.06.17",
+        "거래처 신우금속",
+        "원문서 TS-2026-0034",
+        "No 품목 규격 수량 단가 공급가액 세액 합계",
+        "1 AL6061 판재 3T 400x600 -2 18,000 -36,000 -3,600 -39,600",
+        "2 반품 운송비 - 1 5,000 5,000 500 5,500",
+        "조정 합계-34,100",
+    ])
+    parsed = DocumentParser().parse(text, "return_credit.pdf")
+    ai_result = AIDocumentUnderstandingResult(
+        document_type=DocumentType.general_document,
+        category="credit_note",
+        line_items=[
+            {
+                "source": "ai_parsed_document.table",
+                "item_name": "AL6061 판재",
+                "specification": "3T 400x600",
+                "quantity": "2",
+                "unit_price": "18,000",
+                "supply_amount": "36,000",
+                "tax_amount": "3,600",
+                "line_total": "39,600",
+            }
+        ],
+    )
+
+    merged = AIResultMerger().merge(parsed, ai_result).result
+
+    assert parsed.subtotal == Decimal("-31000")
+    assert parsed.tax == Decimal("-3100")
+    assert parsed.extracted_amount == Decimal("-34100")
+    assert len(merged.line_items) == 2
+    assert [item["item_name"] for item in merged.line_items] == ["AL6061 판재 3T", "반품 운송비"]

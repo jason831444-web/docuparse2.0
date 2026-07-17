@@ -353,8 +353,7 @@ class DocumentWorkflowEnrichmentService:
             if match_status == "ambiguous":
                 reasons.append(self._review_reason("internal_item_ambiguous", f"{index}번째 품목 내부 품목코드 후보 확인 필요", "line_items.internal_item_code", index - 1))
             elif match_status == "unmatched":
-                severity = "warning" if document_has_item_code_evidence and item.get("item_code") not in (None, "", []) and not no_price_quantity_doc else "info"
-                reasons.append(self._review_reason("internal_item_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1, severity=severity))
+                reasons.append(self._review_reason("internal_item_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1, severity="info"))
         if any(
             item.get("item_master_match_status") == "skipped_no_item_master" and item.get("item_code") in (None, "", [])
             for item in document.line_items or []

@@ -140,7 +140,7 @@ class AIResultMerger:
             if ai_index in used_ai_indexes:
                 continue
             sanitized = self._sanitize_line_item(ai_item)
-            if self._looks_like_duplicate_code_row(sanitized, merged_items):
+            if self._looks_like_duplicate_code_row(sanitized, merged_items) or self._looks_like_duplicate_line_item(sanitized, merged_items):
                 issues.append(self._issue("duplicate_sku_as_item_name", "AI 결과에서 문서 품목코드가 별도 품목명처럼 감지되어 병합하지 않았습니다.", "line_items", severity="info"))
             elif not merged_items:
                 merged_items.append(sanitized)
@@ -184,6 +184,39 @@ class AIResultMerger:
             if name in codes:
                 return True
         return False
+
+    def _looks_like_duplicate_line_item(self, ai_item: dict, existing_items: list[dict]) -> bool:
+        ai_name = self._normalize_text(ai_item.get("item_name"))
+        if not ai_name:
+            return False
+        ai_spec = self._normalize_text(ai_item.get("specification"))
+        for item in existing_items:
+            item_name = self._normalize_text(item.get("item_name"))
+            if not item_name or not (ai_name in item_name or item_name in ai_name):
+                continue
+            item_spec = self._normalize_text(item.get("specification"))
+            if ai_spec and item_spec and ai_spec not in item_spec and item_spec not in ai_spec:
+                continue
+            if self._line_item_amount_identity_compatible(ai_item, item):
+                return True
+            ai_quantity = self._decimal(ai_item.get("quantity"))
+            item_quantity = self._decimal(item.get("quantity"))
+            if ai_quantity is not None and item_quantity is not None and abs(ai_quantity) == abs(item_quantity):
+                if self._decimal(ai_item.get("unit_price")) is None and self._decimal(ai_item.get("line_total")) is None:
+                    return True
+        return False
+
+    def _line_item_amount_identity_compatible(self, ai_item: dict, existing: dict) -> bool:
+        compared = 0
+        for field in ("quantity", "unit_price", "supply_amount", "tax_amount", "line_total"):
+            left = self._decimal(ai_item.get(field))
+            right = self._decimal(existing.get(field))
+            if left is None or right is None:
+                continue
+            compared += 1
+            if left != right and abs(left) != abs(right):
+                return False
+        return compared >= 2
 
     def _item_key(self, item: dict) -> str:
         code = self._clean_text(item.get("item_code") or item.get("source_item_code"))
