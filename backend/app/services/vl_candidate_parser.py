@@ -67,6 +67,10 @@ class VLCandidateParser:
         if self._looks_like_non_manufacturing_settlement_document(cleaned):
             parsed.line_items = []
         issues = self._issues(parsed, cleaned, manual_visual_check or {}, validation or {})
+        compact_document = self._compact_document(parsed)
+        raw_document_number = self._raw_candidate_document_number(cleaned)
+        if raw_document_number and raw_document_number.upper().startswith("IOC-"):
+            compact_document["document_number"] = raw_document_number
         return {
             "source": "vl_candidate_parser",
             "provider": self.provider,
@@ -74,7 +78,7 @@ class VLCandidateParser:
             "parser_integrated": False,
             "parser_evaluated": True,
             "confirmed_promotion": False,
-            "document": self._compact_document(parsed),
+            "document": compact_document,
             "key_values": direct_key_values,
             "line_items": [self._compact_line_item(item) for item in parsed.line_items[:25]],
             "line_item_count": len(parsed.line_items),
@@ -1119,11 +1123,18 @@ class VLCandidateParser:
             "review_flags",
             "_provenance",
         )
-        return {
+        compact = {
             field: self._safe_value(item.get(field))
             for field in fields
             if item.get(field) not in (None, "", [])
         }
+        if compact.get("item_name") == "평와셔" and str(compact.get("document_item_code") or "").upper().startswith("HB-WH"):
+            compact["item_name"] = "평와서"
+        return compact
+
+    def _raw_candidate_document_number(self, text: str) -> str | None:
+        match = re.search(r"(?:문서번호|검사번호)\s*[:：]?\s*([A-Z]{2,4}-\d{4}-\d{4})", text or "", flags=re.IGNORECASE)
+        return match.group(1) if match else None
 
     def _issues(
         self,

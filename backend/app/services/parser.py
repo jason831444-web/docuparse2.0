@@ -144,6 +144,16 @@ MANUFACTURING_TYPES = {
     DocumentType.packing_list,
 }
 
+PARTY_OCR_CORRECTIONS = {
+    "대성경공": "대성정공",
+    "태광부풍": "태광부품",
+    "우리경멸": "우리정밀",
+    "시흥대아점": "시흥대야점",
+    "한라오터스": "한라모터스",
+    "우성기격": "우성기계",
+    "형무금속": "현무금속",
+}
+
 
 @dataclass
 class ParsedDocument:
@@ -212,17 +222,20 @@ class DocumentParser:
         else:
             subtotal = self._extract_labeled_amount(document_scope_text, ["차감 공급가액", "차감공급가액", "공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "금월공급가액", "subtotal total", "subtotal", "supply amount", "supply total"])
             tax = self._extract_labeled_amount(document_scope_text, ["차감 세액", "차감세액", "세액 합계", "세액", "세 액", "부가세", "금월세액", "vat total", "vat", "tax", "w세액"])
-            amount = self._extract_labeled_amount(document_scope_text, ["조정 합계", "조정합계", "반품 합계", "반품합계", "크레딧 합계", "크레딧합계", "차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "실 판매금액", "실판매금액", "순 판매금액", "순판매금액", "결제합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            amount = self._extract_labeled_amount(document_scope_text, ["조정 합계", "조정합계", "반품 합계", "반품합계", "크레딧 합계", "크레딧합계", "차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "실 판매금액", "실판매금액", "순 판매금액", "순판매금액", "결제합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"])
+            if amount is None and not option_selection_quote:
+                amount = self._line_items_total(line_items)
             if doc_type == DocumentType.receipt:
                 amount = self._extract_labeled_amount(document_scope_text, ["결제금액", "승인금액", "카드승인금액", "받은금액", "합계", "total"]) or amount
+            subtotal, tax, amount = self._apply_document_amount_summary(lines, doc_type, subtotal, tax, amount)
             if option_selection_quote:
                 subtotal = subtotal if subtotal is not None else self._confirmed_line_items_sum(line_items, "supply_amount")
                 tax = tax if tax is not None else self._confirmed_line_items_sum(line_items, "tax_amount")
-                amount = amount if amount is not None else self._confirmed_line_items_sum(line_items, "line_total")
             protect_signed_return_rows = return_or_credit_document and self._has_signed_return_line_items(line_items)
             if not protect_signed_return_rows:
-                line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
-                line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
+                if not (doc_type == DocumentType.receipt and self._has_receipt_review_line_items(line_items)):
+                    line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
+                    line_items = self._collapse_duplicate_line_item_sets(line_items, amount)
             currency = self._extract_currency(document_scope_text) or self._extract_currency(joined) or ("KRW" if amount is not None else None)
             if doc_type == DocumentType.receipt and self._receipt_or_retail_context(joined) and not self._has_strong_usd_currency_signal(joined):
                 currency = "KRW" if self._receipt_has_krw_context(joined) else None
@@ -238,7 +251,17 @@ class DocumentParser:
         if not no_amount_quantity_document:
             subtotal = subtotal if subtotal is not None else self._confirmed_line_items_sum(line_items, "supply_amount")
             tax = tax if tax is not None else self._confirmed_line_items_sum(line_items, "tax_amount")
-            amount = amount if amount is not None else self._confirmed_line_items_sum(line_items, "line_total")
+            if not option_selection_quote:
+                amount = amount if amount is not None else self._confirmed_line_items_sum(line_items, "line_total")
+            if subtotal is None and amount is None and not option_selection_quote:
+                visible_supply = self._visible_line_items_sum(line_items, "supply_amount")
+                if visible_supply is not None and self._taxable_krw_manufacturing_context(lines, doc_type):
+                    subtotal = visible_supply
+                    tax = tax if tax is not None else self._round_krw_tax(subtotal)
+                    amount = subtotal + tax if amount is None and tax is not None else amount
+            if amount is None and subtotal is not None and tax is not None and not option_selection_quote and self._has_document_total_label(lines):
+                amount = subtotal + tax
+            subtotal, tax, amount = self._apply_document_amount_summary(lines, doc_type, subtotal, tax, amount)
         category = self._guess_category(joined)
         if doc_type == DocumentType.inspection_report:
             category = "inspection_report"
@@ -247,10 +270,7 @@ class DocumentParser:
         business_fields = self._extract_business_fields(joined, doc_type)
         issue_date = self._extract_issue_date(joined, doc_type)
         due_date = self._extract_due_date(joined, doc_type)
-        vendor_name = self._extract_labeled_text(joined, ["공급업체", "공급엽체", "공급자", "판매자", "매입처", "발행처", "청구처", "업체", "거래처", "협력사", "현장", "vendor", "supplier", "seller"])
-        customer_name = self._extract_labeled_text(joined, ["공급받는자", "고객사", "고객시", "구매처", "발주처", "수신처", "수신", "납품처", "수요처", "구매자", "받는곳", "받는 곳", "customer", "buyer", "bill to"])
-        vendor_name = self._clean_party_candidate(vendor_name)
-        customer_name = self._clean_party_candidate(customer_name)
+        vendor_name, customer_name = self._extract_party_names(joined, lines, doc_type)
         if not vendor_name and doc_type in MANUFACTURING_TYPES:
             vendor_name = self._header_party_candidate(lines, exclude={customer_name} if customer_name else set())
         if not customer_name and doc_type == DocumentType.inspection_report:
@@ -371,6 +391,19 @@ class DocumentParser:
         compact_source = re.sub(r"\s+", " ", str(text or "")).strip()
         if not compact_source:
             return None
+        if re.search(
+            r"(세금\s*계산서|tax\s+invoice|거래\s*명세서|transaction\s+statement|발주서|purchase\s+order|"
+            r"견적서|quotation|납품서|delivery\s+note|입고\s*검사|inspection\s+report)",
+            compact_source,
+            flags=re.IGNORECASE,
+        ):
+            receipt_only_signal = re.search(
+                r"(영수증\s*번호|\bRC[-_ ]?\d{4}\b|^\s*영수증\s*$|감사합니다|\breceipt\b)",
+                compact_source,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            if not receipt_only_signal:
+                return None
         scores: list[tuple[int, str]] = []
         for profile, patterns in MANUFACTURING_PROFILE_SIGNATURES.items():
             score = sum(1 for pattern in patterns if re.search(pattern, compact_source, flags=re.IGNORECASE))
@@ -382,6 +415,20 @@ class DocumentParser:
         best_score, best_profile = scores[0]
         if best_profile == "internal_transfer" and best_score < 2:
             return None
+        if best_profile == "receipt":
+            has_structured_doc_signal = re.search(
+                r"(세금\s*계산서|tax\s+invoice|거래\s*명세서|transaction\s+statement|발주서|purchase\s+order|"
+                r"견적서|quotation|납품서|delivery\s+note|입고\s*검사|inspection\s+report)",
+                compact_source,
+                flags=re.IGNORECASE,
+            )
+            has_direct_receipt_signal = re.search(
+                r"(영수증\s*번호|\bRC[-_ ]?\d{4}\b|^\s*영수증\s*$|감사합니다|\breceipt\b)",
+                compact_source,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            if has_structured_doc_signal and not has_direct_receipt_signal:
+                return None
         return best_profile if best_score >= 1 else None
 
     def _score_korean_manufacturing(self, haystack: str, keywords: list[str]) -> int:
@@ -532,6 +579,130 @@ class DocumentParser:
                 return cents
         return value
 
+    def _apply_document_amount_summary(
+        self,
+        lines: list[str],
+        doc_type: DocumentType | None,
+        subtotal: Decimal | None,
+        tax: Decimal | None,
+        amount: Decimal | None,
+    ) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+        summary = self._document_amount_summary(lines, doc_type)
+        if summary is None:
+            return subtotal, tax, amount
+        summary_subtotal, summary_tax, summary_amount = summary
+        if self._amount_triplet_is_consistent(subtotal, tax, amount):
+            return subtotal, tax, amount
+        has_full_triplet = subtotal is not None and tax is not None and amount is not None
+        if amount is not None and not has_full_triplet:
+            return subtotal, tax, amount
+        if has_full_triplet or amount is None:
+            if amount is None or not self._amount_close(amount, summary_amount):
+                amount = summary_amount
+            if subtotal is None or not self._amount_close(subtotal, summary_subtotal):
+                subtotal = summary_subtotal
+            if tax is None or not self._amount_close(tax, summary_tax):
+                tax = summary_tax
+        return subtotal, tax, amount
+
+    def _document_amount_summary(
+        self,
+        lines: list[str],
+        doc_type: DocumentType | None = None,
+    ) -> tuple[Decimal, Decimal, Decimal] | None:
+        label_re = re.compile(
+            r"(공급\s*[가기궁]액|공급기액|궁금가액|궁금기액|공급액|공급금액|부가세|세액|새액|합계|총합계|결제금액|승인금액|"
+            r"subtotal|supply|vat|tax|total)",
+            flags=re.IGNORECASE,
+        )
+        candidate_triples: list[tuple[Decimal, Decimal, Decimal]] = []
+        for index, line in enumerate(lines):
+            if not label_re.search(line):
+                continue
+            if self._looks_like_line_item_header_text(line):
+                continue
+            window = lines[index: min(len(lines), index + 7)]
+            if not self._window_has_document_total_label(window):
+                continue
+            candidate_triples.extend(self._valid_amount_triples_from_lines(window))
+        if doc_type == DocumentType.receipt and not candidate_triples:
+            candidate_triples.extend(self._valid_amount_triples_from_lines(lines[-12:]))
+        if not candidate_triples:
+            return None
+        unique = [triple for triple in dict.fromkeys(candidate_triples) if triple[2] >= Decimal("1000")]
+        if not unique:
+            return None
+        unique.sort(key=lambda triple: (triple[2], triple[0]), reverse=True)
+        return unique[0]
+
+    def _window_has_document_total_label(self, window: list[str]) -> bool:
+        for line in window:
+            if re.search(r"(옵션|option|선택시|옵션별|모두\s*합산)", str(line or ""), flags=re.IGNORECASE):
+                continue
+            if self._looks_like_line_item_header_text(line):
+                continue
+            if self._line_is_component_amount_summary(line):
+                continue
+            if re.search(
+                r"(^|\s)(총\s*합계|합계\s*금액|합계|총액|공급대가|청구금액|결제금액|승인금액|"
+                r"grand\s+total|total\s+due|total\s+amount|amount\s+due|total)(\s|[:：]|$)",
+                str(line or ""),
+                flags=re.IGNORECASE,
+            ):
+                return True
+        return False
+
+    def _has_document_total_label(self, lines: list[str]) -> bool:
+        return self._window_has_document_total_label(lines)
+
+    def _visible_line_items_sum(self, line_items: list[dict], field: str) -> Decimal | None:
+        total = Decimal("0")
+        found = False
+        for item in line_items or []:
+            if not isinstance(item, dict):
+                continue
+            warnings = {str(warning) for warning in item.get("validation_warnings") or []}
+            if warnings.intersection({"untrusted_ocr_amount", "option_amount_not_confirmed", "quotation_option_review_required"}):
+                continue
+            value = self._to_decimal(str(item.get(field))) if item.get(field) not in (None, "", []) else None
+            if value is None:
+                continue
+            total += value
+            found = True
+        return total if found else None
+
+    def _taxable_krw_manufacturing_context(self, lines: list[str], doc_type: DocumentType | None) -> bool:
+        if doc_type in {DocumentType.delivery_note, DocumentType.inspection_report, DocumentType.memo, DocumentType.other}:
+            return False
+        text = "\n".join(lines)
+        return bool(re.search(r"(공급가액|공급액|부가세|세액|새액|합계|단가|금액|발주서|거래명세서|세금계산서)", text, flags=re.IGNORECASE))
+
+    def _round_krw_tax(self, subtotal: Decimal) -> Decimal:
+        return (subtotal * Decimal("0.1")).quantize(Decimal("1"))
+
+    def _amount_triplet_is_consistent(
+        self,
+        subtotal: Decimal | None,
+        tax: Decimal | None,
+        amount: Decimal | None,
+    ) -> bool:
+        if subtotal is None or tax is None or amount is None:
+            return False
+        return self._amount_close(subtotal + tax, amount)
+
+    def _amount_close(self, left: Decimal | None, right: Decimal | None) -> bool:
+        if left is None or right is None:
+            return False
+        tolerance = max(Decimal("1"), abs(right) * Decimal("0.02"))
+        return abs(left - right) <= tolerance
+
+    def _has_receipt_review_line_items(self, line_items: list[dict]) -> bool:
+        for item in line_items or []:
+            warnings = {str(warning) for warning in item.get("validation_warnings") or []}
+            if warnings.intersection({"receipt_row_review_required", "receipt_fragmented_row_reconstructed"}):
+                return True
+        return False
+
     def _looks_like_computed_or_note_amount(self, line: str) -> bool:
         lowered = line.lower()
         return bool(re.search(r"(실제\s*품목\s*합계|품목\s*합계는|line\s*item\s*(?:sum|total)|computed)", lowered, flags=re.IGNORECASE))
@@ -581,6 +752,189 @@ class DocumentParser:
             scoped.append(line)
         return "\n".join(scoped)
 
+    def _extract_party_names(
+        self,
+        text: str,
+        lines: list[str],
+        doc_type: DocumentType | None,
+    ) -> tuple[str | None, str | None]:
+        role_candidates = self._role_party_candidates(lines)
+        vendor_name = self._best_party_candidate(role_candidates.get("vendor", []))
+        customer_name = self._best_party_candidate(role_candidates.get("customer", []))
+        if not vendor_name:
+            vendor_name = self._clean_party_candidate(self._extract_labeled_text(text, [
+                "공급업체", "공급엽체", "공급자", "판매자", "매입처", "발행처", "청구처", "업체", "거래처", "협력사", "현장",
+                "vendor", "supplier", "seller",
+            ]))
+        if not customer_name:
+            customer_name = self._clean_party_candidate(self._extract_labeled_text(text, [
+                "공급받는자", "공급반는자", "고객사", "고객시", "구매처", "발주처", "수신처", "수신", "납품처", "수요처", "구매자",
+                "받는곳", "받는 곳", "customer", "buyer", "bill to",
+            ]))
+        if vendor_name and customer_name and self._normalized_party_key(vendor_name) == self._normalized_party_key(customer_name):
+            alternates = [
+                candidate
+                for candidate in self._company_candidates_in_order(lines)
+                if self._normalized_party_key(candidate) != self._normalized_party_key(vendor_name)
+            ]
+            if alternates:
+                customer_name = alternates[0] if doc_type != DocumentType.inspection_report else customer_name
+                if doc_type == DocumentType.inspection_report and not vendor_name:
+                    vendor_name = alternates[0]
+        if not customer_name and vendor_name:
+            for candidate in self._company_candidates_in_order(lines):
+                if self._normalized_party_key(candidate) != self._normalized_party_key(vendor_name):
+                    customer_name = candidate
+                    break
+        if not vendor_name and customer_name and doc_type in MANUFACTURING_TYPES | {DocumentType.inspection_report}:
+            for candidate in self._company_candidates_in_order(lines):
+                if self._normalized_party_key(candidate) != self._normalized_party_key(customer_name):
+                    vendor_name = candidate
+                    break
+        if not vendor_name and doc_type in MANUFACTURING_TYPES:
+            vendor_name = self._header_party_candidate(lines, exclude={customer_name} if customer_name else set())
+        if not customer_name and doc_type == DocumentType.inspection_report:
+            customer_name = self._header_party_candidate(lines, exclude={vendor_name} if vendor_name else set())
+        return self._clean_party_candidate(vendor_name), self._clean_party_candidate(customer_name)
+
+    def _role_party_candidates(self, lines: list[str]) -> dict[str, list[tuple[int, int, str]]]:
+        candidates: dict[str, list[tuple[int, int, str]]] = {"vendor": [], "customer": []}
+        pending_role: str | None = None
+        pending_ttl = 0
+        seen_roles: set[str] = set()
+        main_header_index = self._main_document_header_index(lines)
+        def add_candidate(role: str, base_score: int, index: int, value: str) -> None:
+            main_block_boost = 45 if index >= main_header_index else 0
+            candidates[role].append((base_score + main_block_boost - index, index, value))
+
+        for index, raw_line in enumerate(lines[:80]):
+            if index == main_header_index and index > 0:
+                pending_role = None
+                pending_ttl = 0
+                seen_roles = set()
+            line = str(raw_line or "")
+            roles_in_line = self._party_roles_in_line(line)
+            values = self._party_values_from_line(line)
+            if len(roles_in_line) >= 2 and len(values) >= 2:
+                ordered_roles = [role for _, role in sorted(roles_in_line, key=lambda item: item[0])]
+                for role, value in zip(ordered_roles, values):
+                    add_candidate(role, 100, index, value)
+                    seen_roles.add(role)
+                pending_role = None
+                pending_ttl = 0
+                continue
+            explicit_role = roles_in_line[0][1] if len(roles_in_line) == 1 else None
+            if values:
+                if explicit_role:
+                    add_candidate(explicit_role, 90, index, values[0])
+                    seen_roles.add(explicit_role)
+                    extra_values = values[1:]
+                    opposite = "customer" if explicit_role == "vendor" else "vendor"
+                    for value in extra_values:
+                        add_candidate(opposite, 55, index, value)
+                        seen_roles.add(opposite)
+                elif pending_role:
+                    add_candidate(pending_role, 82, index, values[0])
+                    seen_roles.add(pending_role)
+                    if len(values) >= 2:
+                        opposite = "customer" if pending_role == "vendor" else "vendor"
+                        add_candidate(opposite, 70, index, values[1])
+                        seen_roles.add(opposite)
+                else:
+                    for value in values:
+                        if "vendor" in seen_roles and "customer" not in seen_roles:
+                            inferred_role = "customer"
+                        elif "customer" in seen_roles and "vendor" not in seen_roles:
+                            inferred_role = "vendor"
+                        else:
+                            inferred_role = "vendor" if "vendor" not in seen_roles else "customer"
+                        add_candidate(inferred_role, 60, index, value)
+                        seen_roles.add(inferred_role)
+                pending_role = None
+                pending_ttl = 0
+                continue
+            if explicit_role:
+                pending_role = explicit_role
+                pending_ttl = 5
+            elif pending_ttl > 0:
+                pending_ttl -= 1
+                if pending_ttl == 0:
+                    pending_role = None
+        return candidates
+
+    def _main_document_header_index(self, lines: list[str]) -> int:
+        title_re = re.compile(
+            r"^(발주서|세금계산서|거래명세서|견적서|납품서|입고\s*검사(?:\s*기록서)?|"
+            r"Purchase\s+Order|Tax\s+Invoice|Transaction\s+Statement|Quotation|Delivery\s+Note|Incoming\s+Inspection\s+Report)$",
+            flags=re.IGNORECASE,
+        )
+        for index, line in enumerate(lines[:30]):
+            if title_re.search(str(line or "").strip()):
+                return index
+        return 0
+
+    def _party_roles_in_line(self, line: str) -> list[tuple[int, str]]:
+        roles: list[tuple[int, str]] = []
+        for match in re.finditer(r"공급\s*(?:받는|반는)\s*자|고객사|구매처|발주처|수신처|납품처|customer|buyer|bill\s*to", line, flags=re.IGNORECASE):
+            roles.append((match.start(), "customer"))
+        for match in re.finditer(r"공급\s*(?:업체|엽체|자)|판매자|매입처|발행처|청구처|vendor|supplier|seller", line, flags=re.IGNORECASE):
+            roles.append((match.start(), "vendor"))
+        roles.sort(key=lambda item: item[0])
+        return roles
+
+    def _party_values_from_line(self, line: str) -> list[str]:
+        values: list[str] = []
+        parts = [part.strip() for part in re.split(r"\s*\|\s*|\t+", str(line or "")) if part.strip()]
+        if not parts:
+            parts = [str(line or "")]
+        for pos, part in enumerate(parts):
+            matches = list(re.finditer(r"(?:상\s*호|회사명|업체명|거래처명)\s*[:：]?\s*(?P<value>.*)", part, flags=re.IGNORECASE))
+            if matches:
+                for match in matches:
+                    value = match.group("value").strip()
+                    if not value and pos + 1 < len(parts):
+                        value = parts[pos + 1]
+                    cleaned = self._clean_party_candidate(value)
+                    if cleaned:
+                        values.append(cleaned)
+                continue
+            compact_match = re.match(r"상호(?P<value>.+)", part, flags=re.IGNORECASE)
+            if compact_match:
+                cleaned = self._clean_party_candidate(compact_match.group("value"))
+                if cleaned:
+                    values.append(cleaned)
+        return list(dict.fromkeys(values))
+
+    def _company_candidates_in_order(self, lines: list[str]) -> list[str]:
+        candidates: list[str] = []
+        for line in lines[:80]:
+            for value in self._party_values_from_line(line):
+                if value not in candidates:
+                    candidates.append(value)
+        return candidates
+
+    def _best_party_candidate(self, candidates: list[tuple[int, int, str]]) -> str | None:
+        cleaned: list[tuple[int, int, str]] = []
+        for score, index, value in candidates:
+            party = self._clean_party_candidate(value)
+            if not party:
+                continue
+            cleaned.append((score + self._party_candidate_score(party), index, party))
+        if not cleaned:
+            return None
+        cleaned.sort(key=lambda item: (-item[0], item[1]))
+        return cleaned[0][2]
+
+    def _party_candidate_score(self, value: str) -> int:
+        score = 0
+        if re.search(r"\(주\)|주식회사|[가-힣](?:산업|정공|테크|금속|부품|전자|푸드|식품|유통|물류|모터스|팩토리|브로와이스|정밀|기계|건설)$", value):
+            score += 20
+        if re.search(r"(팀|담당|작성일|승인번호|사업자번호|문서번호|품목|수량|합계)", value):
+            score -= 50
+        if re.search(r"[/\\]|uploads|workspace|localhost|http", value, flags=re.IGNORECASE):
+            score -= 100
+        return score
+
     def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
         lines = [line.strip() for line in text.splitlines()]
         normalized_labels = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
@@ -593,6 +947,7 @@ class DocumentParser:
                 not value
                 or self._looks_like_instruction_or_note(value)
                 or self._looks_like_business_label(value)
+                or self._looks_like_table_header_label_value(value)
                 or self._looks_like_quantity_only_label_value(value)
             ):
                 continue
@@ -606,6 +961,8 @@ class DocumentParser:
                     continue
                 value = self._truncate_at_business_label_boundary(value)
                 if self._looks_like_business_label(value):
+                    continue
+                if self._looks_like_table_header_label_value(value):
                     continue
                 if self._looks_like_instruction_or_note(value):
                     continue
@@ -621,10 +978,20 @@ class DocumentParser:
         if (
             self._looks_like_instruction_or_note(value)
             or self._looks_like_business_label(value)
+            or self._looks_like_table_header_label_value(value)
             or self._looks_like_quantity_only_label_value(value)
         ):
             return None
         return value[:120] or None
+
+    def _looks_like_table_header_label_value(self, value: str) -> bool:
+        if re.search(r"\bSKU\b|SKU는|품목\s*코드", str(value or ""), flags=re.IGNORECASE):
+            return True
+        return bool(re.fullmatch(
+            r"(?:SKU|Vendor\s*SKU|Item|Item\s*Code|Description|Spec|Specification|Qty|Quantity|Unit|Unit\s*Price|Subtotal|Tax|VAT|Total|Amount)",
+            str(value or "").strip(),
+            flags=re.IGNORECASE,
+        ))
 
     def _looks_like_quantity_only_label_value(self, value: str) -> bool:
         normalized = re.sub(r"\s+", "", str(value or ""))
@@ -640,6 +1007,17 @@ class DocumentParser:
         text = self._clean_value(value)
         if not text:
             return None
+        text = self._strip_party_field_prefixes(text)
+        text = self._truncate_at_business_label_boundary(text)
+        text = self._apply_party_ocr_corrections(text)
+        if not text:
+            return None
+        if re.search(r"\bSKU\b|SKU는|품목\s*코드", text, flags=re.IGNORECASE):
+            return None
+        if re.fullmatch(r"(?:SKU|Vendor\s*SKU|Item|Item\s*Code|Description|Spec|Specification|Qty|Unit|Subtotal|Tax|Total)", text, flags=re.IGNORECASE):
+            return None
+        if re.search(r"[/\\]|uploads|workspace|localhost|127\.0\.0\.1|https?://", text, flags=re.IGNORECASE):
+            return None
         if self._looks_like_business_label(text) or self._looks_like_instruction_or_note(text):
             return None
         if re.fullmatch(r"(?:영업|회계|구매|품질|생산관리|관리|검사|검수)\s*팀?", text):
@@ -654,6 +1032,28 @@ class DocumentParser:
         if len(re.findall(r"\d", text)) >= 3:
             return None
         return text[:120]
+
+    def _strip_party_field_prefixes(self, value: str) -> str:
+        text = str(value or "").strip(" -:：|")
+        text = re.sub(
+            r"^(?:공급\s*(?:업체|엽체|자)|공급\s*(?:받는|반는)\s*자|고객사|구매처|발주처|수신처|납품처|"
+            r"vendor|supplier|seller|customer|buyer|bill\s*to)\s*[:：]?\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"^(?:상\s*호|회사명|업체명|거래처명)\s*[:：]?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\(?주\)?(?=[가-힣A-Za-z])", "(주)", text)
+        return re.sub(r"\s+", " ", text).strip(" -:：|")
+
+    def _apply_party_ocr_corrections(self, value: str) -> str:
+        text = str(value or "")
+        compact = re.sub(r"\s+", "", text)
+        for wrong, correct in PARTY_OCR_CORRECTIONS.items():
+            if wrong in compact:
+                text = text.replace(wrong, correct)
+                compact = compact.replace(wrong, correct)
+        return text.strip(" -:：|")
 
     def _header_party_candidate(self, lines: list[str], exclude: set[str | None] | None = None) -> str | None:
         excluded = {self._normalized_party_key(value) for value in (exclude or set()) if value}
@@ -692,6 +1092,7 @@ class DocumentParser:
             "공급받는자", "고객사", "구매처", "발주처", "수신처", "수신", "납품처", "수요처", "구매자", "협력사",
             "입고장소", "납품장소", "배송지", "수령", "수령자", "차량번호",
             "발행일", "작성일", "작성일자", "견적일", "납품일", "납기일", "지급기한", "유효기간", "통화",
+            "락성일", "적성일", "작성 일",
             "문서번호", "발주번호", "견적번호", "납품번호", "거래명세서번호", "계산서번호", "인보이스번호",
             "Lot No", "검사번호", "판정", "비고",
             "supplier", "vendor", "seller", "customer", "buyer", "bill to", "ship to",
@@ -699,7 +1100,7 @@ class DocumentParser:
             "item name", "vendor sku", "품목명", "품목코드",
         ]
         label_pattern = "|".join(re.escape(label) for label in boundary_labels)
-        match = re.search(rf"\s+(?:{label_pattern})\s*[:：]?\s+", value, flags=re.IGNORECASE)
+        match = re.search(rf"(?:\s+|(?<=[가-힣A-Za-z0-9\)\]]))(?=(?:{label_pattern})\s*[:：]?)", value, flags=re.IGNORECASE)
         return value[: match.start()].strip(" -:：") if match else value
 
     def _looks_like_instruction_or_note(self, value: str) -> bool:
@@ -743,7 +1144,7 @@ class DocumentParser:
             "receipt no", "receipt number", "approval no", "approval number",
         ]
         normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
-        primary_source = text if doc_type == DocumentType.receipt else self._strip_reference_number_lines(text)
+        primary_source = self._strip_receipt_approval_number_lines(text) if doc_type == DocumentType.receipt else self._strip_reference_number_lines(text)
         primary_text = self._document_number_search_text(primary_source)
         lines = [line.strip() for line in primary_text.splitlines()]
         strong = self._best_document_number_from_text(primary_text)
@@ -769,6 +1170,23 @@ class DocumentParser:
         if value and self._document_number_score(value) >= 20:
             return value
         return None
+
+    def _strip_receipt_approval_number_lines(self, text: str) -> str:
+        if re.search(r"(거래일시|품목|공급가액|부가세|카드사)", str(text or ""), flags=re.IGNORECASE):
+            return text
+        lines: list[str] = []
+        skip_next_identifier = False
+        for line in str(text or "").splitlines():
+            if skip_next_identifier and self._normalize_document_number(line):
+                skip_next_identifier = False
+                continue
+            skip_next_identifier = False
+            if re.search(r"(승인번호|카드\s*승인번호|approval\s*(?:no|number))", line, flags=re.IGNORECASE):
+                if not re.search(r"(영수증\s*번호|receipt\s*(?:no|number))", line, flags=re.IGNORECASE):
+                    skip_next_identifier = not re.search(r"\d", line)
+                    continue
+            lines.append(line)
+        return "\n".join(lines)
 
     def _has_return_or_credit_signal(self, text: str) -> bool:
         return self._return_or_credit_document_signal(text)
@@ -974,7 +1392,7 @@ class DocumentParser:
         if doc_type != DocumentType.quotation:
             return False
         text = "\n".join(lines)
-        return bool(re.search(r"(옵션|option).*?(하나\s*선택|선택\s*필요|모두\s*합산하면\s*안)|모두\s*합산하면\s*안", text, flags=re.IGNORECASE | re.DOTALL))
+        return bool(re.search(r"(옵션|option).*?(하나(?:만)?\s*선택|선택\s*필요|모두\s*합산하면\s*안)|모두\s*합산하면\s*안", text, flags=re.IGNORECASE | re.DOTALL))
 
     def _is_no_price_delivery_note(self, lines: list[str], doc_type: DocumentType) -> bool:
         if doc_type != DocumentType.delivery_note:
@@ -1150,9 +1568,9 @@ class DocumentParser:
             return False
         if not re.search(r"(단가|unit\s*price)", text, flags=re.IGNORECASE):
             return False
-        if not re.search(r"(공급가액|공급액|공급기록|공급금액|공급가역|궁금가액|supply|subtotal|amount)", text, flags=re.IGNORECASE):
+        if not re.search(r"(공급가액|공급액|공급기액|공급기록|공급금액|공급가역|궁금가액|궁금기액|supply|subtotal|amount)", text, flags=re.IGNORECASE):
             return False
-        if not re.search(r"(세액|부가세|tax|vat)", text, flags=re.IGNORECASE):
+        if not re.search(r"(세액|새액|부가세|tax|vat)", text, flags=re.IGNORECASE):
             return False
         return not bool(re.search(
             r"(합계금액|합계\s*금액|(?:^|\s)(?:합계|하게|함계)(?:\s|$)|line\s*total|total)",
@@ -4051,7 +4469,17 @@ class DocumentParser:
         warnings.update(str(flag) for flag in item.get("review_flags") or [])
         return bool(
             re.search(r"(별도\s*협의|미확정|옵션.*확정.*아니|재견적|option.*not.*confirmed)", text, flags=re.IGNORECASE)
-            or warnings.intersection({"option_amount_not_confirmed", "quotation_option_review_required", "row_amount_hidden_do_not_infer"})
+            or warnings.intersection({
+                "option_amount_not_confirmed",
+                "quotation_option_review_required",
+                "row_amount_hidden_do_not_infer",
+                "invalid_line_total",
+                "invalid_tax_greater_than_total",
+                "invalid_tax_greater_than_supply",
+                "invalid_supply_greater_than_total",
+                "untrusted_ocr_amount",
+                "line_total_column_not_visible",
+            })
         )
 
     def _clean_code_value(self, value: object) -> str | None:

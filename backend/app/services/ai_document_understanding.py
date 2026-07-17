@@ -139,9 +139,9 @@ class LocalDocumentAIService(DocumentAIService):
         text = "\n".join(lines)
         quality_notes, image_quality = self._image_quality(image_path)
         document_type, type_confidence = self._classify(text, filename, parsed.document_type)
-        subtotal = self._amount_near_label(lines, ["subtotal", "sub total"])
-        tax = self._amount_near_label(lines, ["tax", "sales tax", "hst", "gst", "vat"])
-        total = self._amount_near_label(lines, ["grand total", "total", "amount due", "balance"])
+        subtotal = self._amount_near_label(lines, ["subtotal", "sub total"]) or parsed.subtotal
+        tax = self._amount_near_label(lines, ["tax", "sales tax", "hst", "gst", "vat"]) or parsed.tax
+        total = self._amount_near_label(lines, ["grand total", "total", "amount due", "balance"]) or parsed.extracted_amount
         if total is None and document_type == DocumentType.receipt:
             total = parsed.extracted_amount or self._largest_amount(text)
 
@@ -191,7 +191,7 @@ class LocalDocumentAIService(DocumentAIService):
             extracted_amount=total,
             subtotal=subtotal,
             tax=tax,
-            currency="USD" if any(value is not None for value in [total, subtotal, tax]) else parsed.currency,
+            currency=parsed.currency or ("USD" if any(value is not None for value in [total, subtotal, tax]) else None),
             category=category,
             tags=tags,
             summary=self._summary(lines, document_type),

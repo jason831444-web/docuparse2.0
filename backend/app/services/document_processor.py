@@ -2275,6 +2275,8 @@ class DocumentProcessor:
         if no_price:
             for field in ("unit_price", "supply_amount", "tax_amount", "line_total"):
                 item.pop(field, None)
+        else:
+            item = self._repair_or_suppress_ai_table_amount_columns(item)
         item.setdefault("source", "ai_parsed_document.table")
         flags = set(str(flag) for flag in item.get("review_flags") or [])
         flags.add("ai_parsed_document_table_review_required")
@@ -2283,6 +2285,44 @@ class DocumentProcessor:
         item["review_flags"] = sorted(flags)
         item.setdefault("confidence", row.get("confidence") or 0.62)
         return item
+
+    def _repair_or_suppress_ai_table_amount_columns(self, item: dict[str, Any]) -> dict[str, Any]:
+        safe_item = dict(item)
+        quantity = self._vl_decimal(safe_item.get("quantity"))
+        unit_price = self._vl_decimal(safe_item.get("unit_price"))
+        supply = self._vl_decimal(safe_item.get("supply_amount"))
+        tax = self._vl_decimal(safe_item.get("tax_amount"))
+        total = self._vl_decimal(safe_item.get("line_total"))
+        warnings = set(str(value) for value in safe_item.get("validation_warnings") or [] if value)
+        flags = set(str(value) for value in safe_item.get("review_flags") or [] if value)
+        expected_supply = quantity * unit_price if quantity is not None and unit_price is not None else None
+
+        if (
+            expected_supply is not None
+            and tax is not None
+            and total is not None
+            and expected_supply > 0
+            and abs(expected_supply - tax) <= max(Decimal("1"), abs(expected_supply) * Decimal("0.02"))
+            and abs(total - expected_supply * Decimal("0.1")) <= max(Decimal("1"), abs(total) * Decimal("0.02"))
+        ):
+            safe_item["supply_amount"] = self.parser._number_value(expected_supply)
+            safe_item["tax_amount"] = self.parser._number_value(total)
+            safe_item.pop("line_total", None)
+            warnings.add("line_total_column_not_visible")
+            flags.add("ai_table_shifted_tax_only_amounts_repaired")
+        elif supply is not None and tax is not None and total is not None:
+            valid_total = abs((supply + tax) - total) <= max(Decimal("1"), abs(total) * Decimal("0.02"))
+            if tax > supply or tax > total or supply > total or not valid_total:
+                for field in ("supply_amount", "tax_amount", "line_total"):
+                    safe_item.pop(field, None)
+                warnings.add("ai_table_amount_columns_suppressed_invalid_arithmetic")
+                flags.add("ai_table_amount_columns_suppressed_invalid_arithmetic")
+
+        if warnings:
+            safe_item["validation_warnings"] = sorted(warnings)
+        if flags:
+            safe_item["review_flags"] = sorted(flags)
+        return safe_item
 
     def _build_ai_review_row_candidates(
         self,
