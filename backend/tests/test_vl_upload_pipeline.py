@@ -513,6 +513,21 @@ def test_party_sanitizer_blocks_document_titles_and_option_terms():
     assert document.merchant_name is None
 
 
+def test_party_sanitizer_blocks_business_number_ocr_noise():
+    document = _document(
+        document_type=DocumentType.invoice,
+        vendor_name="사자변호",
+        customer_name="사연지변호",
+        merchant_name="사염자번호",
+    )
+
+    _processor(FakeVLWorker())._normalize_party_fields(document)
+
+    assert document.vendor_name is None
+    assert document.customer_name is None
+    assert document.merchant_name is None
+
+
 def test_receipt_candidates_do_not_trigger_from_item_name_in_manufacturing_document():
     processor = _processor(FakeVLWorker())
     document = _document(document_type=DocumentType.inspection_report, category="inspection_report", tags=["inspection_report"])

@@ -984,7 +984,7 @@ class DocumentParser:
         score = 0
         if re.search(r"\(주\)|주식회사|[가-힣](?:산업|정공|테크|금속|부품|전자|푸드|식품|유통|물류|모터스|팩토리|브로와이스|정밀|기계|건설)$", value):
             score += 20
-        if re.search(r"(팀|담당|작성일|승인번호|사업자번호|문서번호|품목|수량|합계)", value):
+        if re.search(r"(팀|담당|작성일|승인번호|사업자번호|사\s*(?:[업엄염연]\s*)?[자지]?\s*[번변]\s*호|문서번호|품목|수량|합계)", value):
             score -= 50
         if re.search(r"[/\\]|uploads|workspace|localhost|http", value, flags=re.IGNORECASE):
             score -= 100
@@ -1083,7 +1083,7 @@ class DocumentParser:
             return None
         if re.search(
             r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery|설치비|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|주의|참고|담당|"
-            r"문서번호|작성일|검사일|유효기간|결제\s*조건|지급\s*조건|납기\s*조건|월말|송금|사[업엄염연][자지]?\s*[번변]\s*호|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
+            r"문서번호|작성일|검사일|유효기간|결제\s*조건|지급\s*조건|납기\s*조건|월말|송금|사\s*(?:[업엄염연]\s*)?[자지]?\s*[번변]\s*호|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
             text,
             flags=re.IGNORECASE,
         ):

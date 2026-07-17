@@ -532,7 +532,7 @@ def _sanitize_party_candidate(value: Any) -> str | None:
         return None
     if re.search(r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery)", text, flags=re.IGNORECASE):
         return None
-    if re.search(r"(담당|당당|검사자|회계팀|구매팀|품질팀|품길팀|연락처|전화|사업자\s*번호|등록번호)", text, flags=re.IGNORECASE):
+    if re.search(r"(담당|당당|검사자|회계팀|구매팀|품질팀|품길팀|연락처|전화|사업자\s*번호|사\s*(?:[업엄염연]\s*)?[자지]?\s*[번변]\s*호|등록번호)", text, flags=re.IGNORECASE):
         return None
     if re.fullmatch(r"(?:I?DOC|PO|INV|DN|RCM|TS|IQC|IOC|MV|QT|PM|POS|RC|RTN|TRF)[-_ ]?[A-Z0-9Oo-]{2,}", text, flags=re.IGNORECASE):
         return None

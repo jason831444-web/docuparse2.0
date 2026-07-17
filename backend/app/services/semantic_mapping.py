@@ -335,7 +335,7 @@ class SemanticMappingService:
             return -100
         if re.fullmatch(r"\d{3}-?\d{2}-?\d{5}", text):
             return -100
-        if re.search(r"(작성일|발행일|거래일자|납기일|승인번호|문서번호|샘플번호|합계|금액|품목|수량)", text):
+        if re.search(r"(작성일|발행일|거래일자|납기일|승인번호|문서번호|샘플번호|합계|금액|품목|수량|사업자\s*번호|사\s*(?:[업엄염연]\s*)?[자지]?\s*[번변]\s*호)", text):
             return -80
         if len(text) > 60:
             return -20

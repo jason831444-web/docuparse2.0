@@ -56,6 +56,11 @@ def test_glued_customer_labels_are_trimmed():
         "DOC-019_tax_invoice_uncropped_photo.jpg",
     )
     assert corrected.customer_name == "세움건설"
+    business_label_noise = DocumentParser().parse(
+        "세금계산서\n공급자\n상호: (주)우성기계\n공급받는자\n사자변호\n상호: (주)대원식품\n합계 10,000",
+        "DOC-023_quotation_uncropped_photo.jpg",
+    )
+    assert business_label_noise.customer_name == "(주)대원식품"
     assert parsed.extracted_amount == Decimal("89100")
 
 
