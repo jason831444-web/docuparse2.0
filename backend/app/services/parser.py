@@ -563,7 +563,7 @@ class DocumentParser:
         ))
 
     def _receipt_has_krw_context(self, text: str) -> bool:
-        return bool(re.search(r"₩|원|[가-힣].*(?:합계|금액|부가세|공급가액|결제|승인|매장|영수증)", str(text or ""), flags=re.IGNORECASE))
+        return bool(re.search(r"₩|원|[가-힣].*(?:합계|금액|부가세|공급가액|결제|승인|매장|영수증)|(?:합계|금액|부가세|공급가액|결제|승인|매장|영수증)", str(text or ""), flags=re.IGNORECASE))
 
     def _document_scope_text(self, lines: list[str]) -> str:
         scoped: list[str] = []
