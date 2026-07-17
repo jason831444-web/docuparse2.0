@@ -204,7 +204,7 @@ class DocumentParser:
                 )
             ):
                 line_items = special_quantity_items
-        if no_amount_quantity_document or option_selection_quote:
+        if no_amount_quantity_document:
             subtotal = None
             tax = None
             amount = None
@@ -212,7 +212,11 @@ class DocumentParser:
         else:
             subtotal = self._extract_labeled_amount(document_scope_text, ["차감 공급가액", "차감공급가액", "공급가액 합계", "공급가액합계", "공급가액", "공급액", "공급 금액", "금월공급가액", "subtotal total", "subtotal", "supply amount", "supply total"])
             tax = self._extract_labeled_amount(document_scope_text, ["차감 세액", "차감세액", "세액 합계", "세액", "세 액", "부가세", "금월세액", "vat total", "vat", "tax", "w세액"])
-            amount = self._extract_labeled_amount(document_scope_text, ["조정 합계", "조정합계", "반품 합계", "반품합계", "크레딧 합계", "크레딧합계", "차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            amount = self._extract_labeled_amount(document_scope_text, ["조정 합계", "조정합계", "반품 합계", "반품합계", "크레딧 합계", "크레딧합계", "차감 합계", "차감합계", "총 합계", "합계금액", "총액", "공급대가", "청구금액", "금월합계", "실 판매금액", "실판매금액", "순 판매금액", "순판매금액", "결제합계", "invoice total", "grand total", "total due", "total amount", "amount due", "total"]) or self._line_items_total(line_items)
+            if option_selection_quote:
+                subtotal = subtotal if subtotal is not None else self._confirmed_line_items_sum(line_items, "supply_amount")
+                tax = tax if tax is not None else self._confirmed_line_items_sum(line_items, "tax_amount")
+                amount = amount if amount is not None else self._confirmed_line_items_sum(line_items, "line_total")
             protect_signed_return_rows = return_or_credit_document and self._has_signed_return_line_items(line_items)
             if not protect_signed_return_rows:
                 line_items = self._repair_line_items_against_document_totals(line_items, amount, subtotal, tax, lines)
@@ -229,6 +233,10 @@ class DocumentParser:
         line_items = self._apply_row_level_safety_overrides(line_items, lines, doc_type)
         if doc_type == DocumentType.inspection_report:
             line_items = self._suppress_incomplete_inspection_quantities(line_items)
+        if not no_amount_quantity_document:
+            subtotal = subtotal if subtotal is not None else self._confirmed_line_items_sum(line_items, "supply_amount")
+            tax = tax if tax is not None else self._confirmed_line_items_sum(line_items, "tax_amount")
+            amount = amount if amount is not None else self._confirmed_line_items_sum(line_items, "line_total")
         category = self._guess_category(joined)
         if doc_type == DocumentType.inspection_report:
             category = "inspection_report"
@@ -574,6 +582,19 @@ class DocumentParser:
     def _extract_labeled_text(self, text: str, labels: list[str]) -> str | None:
         lines = [line.strip() for line in text.splitlines()]
         normalized_labels = {re.sub(r"[\s:：]+", "", label.lower()) for label in labels}
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        pattern = rf"(?:{label_pattern})[ \t]*[:：]?[ \t]*([^\n|]+)"
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            value = re.sub(r"\s+", " ", match.group(1)).strip(" -:：")
+            value = self._truncate_at_business_label_boundary(value)
+            if (
+                not value
+                or self._looks_like_instruction_or_note(value)
+                or self._looks_like_business_label(value)
+                or self._looks_like_quantity_only_label_value(value)
+            ):
+                continue
+            return value[:120] or None
         for index, line in enumerate(lines[:-1]):
             if re.sub(r"[\s:：]+", "", line.lower()) not in normalized_labels:
                 continue
@@ -590,8 +611,6 @@ class DocumentParser:
                     continue
                 return value[:120] or None
 
-        label_pattern = "|".join(re.escape(label) for label in labels)
-        pattern = rf"(?:{label_pattern})\s*[:：]?\s*([^\n|]+)"
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if not match:
             return None
@@ -621,6 +640,8 @@ class DocumentParser:
             return None
         if self._looks_like_business_label(text) or self._looks_like_instruction_or_note(text):
             return None
+        if re.fullmatch(r"(?:영업|회계|구매|품질|생산관리|관리|검사|검수)\s*팀?", text):
+            return None
         if re.search(
             r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery|설치비|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|담당|"
             r"문서번호|작성일|검사일|유효기간|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
@@ -634,19 +655,20 @@ class DocumentParser:
 
     def _header_party_candidate(self, lines: list[str], exclude: set[str | None] | None = None) -> str | None:
         excluded = {self._normalized_party_key(value) for value in (exclude or set()) if value}
-        for raw in lines[:8]:
-            text = self._clean_party_candidate(raw)
-            if not text:
-                continue
-            key = self._normalized_party_key(text)
-            if key in excluded:
-                continue
-            if re.search(r"(견적서|세금계산서|입고\s*검사|거래명세서|납품서|발주서|invoice|quotation)", text, flags=re.IGNORECASE):
-                continue
-            if re.search(r"(https?://|/workspace/|uploads/|경기도|부산|서울|시흥|구로|단원구|사상구|로\s*\d|전화|TEL|031|051)", text, flags=re.IGNORECASE):
-                continue
-            if re.search(r"(팀|산업|정공|테크|금속|부품|전자|제조|LLC|Inc|Co\\.)", text, flags=re.IGNORECASE):
-                return text
+        for raw in lines[:12]:
+            for candidate in [raw, *re.split(r"\s*[|]\s*", raw)]:
+                text = self._clean_party_candidate(candidate)
+                if not text:
+                    continue
+                key = self._normalized_party_key(text)
+                if key in excluded:
+                    continue
+                if re.search(r"(견적서|세금계산서|입고\s*검사|거래명세서|납품서|발주서|invoice|quotation)", text, flags=re.IGNORECASE):
+                    continue
+                if re.search(r"(https?://|/workspace/|uploads/|경기도|부산|서울|시흥|구로|단원구|사상구|로\s*\d|전화|TEL|031|051)", text, flags=re.IGNORECASE):
+                    continue
+                if re.search(r"(팀|산업|정공|테크|금속|부품|전자|제조|LLC|Inc|Co\\.)", text, flags=re.IGNORECASE):
+                    return text
         return None
 
     def _normalized_party_key(self, value: str | None) -> str:
@@ -718,7 +740,7 @@ class DocumentParser:
             "po no", "po number", "purchase order no", "qt no", "quote no", "quotation no", "statement no", "delivery note no", "dn no", "invoice no", "inv no",
         ]
         normalized_labels = {re.sub(r"[\s:：#]+", "", label.lower()) for label in labels}
-        primary_text = self._strip_reference_number_lines(text)
+        primary_text = self._document_number_search_text(self._strip_reference_number_lines(text))
         lines = [line.strip() for line in primary_text.splitlines()]
         strong = self._best_document_number_from_text(primary_text)
         best_labeled: str | None = None
@@ -813,16 +835,16 @@ class DocumentParser:
             r"\bINV[-_ ]?(?:US[-_ ]?)?\d{4}[-_ ]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bDN[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bTS[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
-            r"\b(?:I?QC|IOC|QC)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
+            r"\b(?:I?QC|I[O0]C|QC)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\b(?:RTN|RCM)[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bTRF[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bMV[-_ ]?\d{4}[-_]?\d{3,4}(?:[-_][A-Z0-9]{1,8}){0,2}\b",
             r"\bI?DOC[-_ ]?[0O]?\d{2,4}\b",
-            r"\b(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{3,4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)*(?:[-_][A-Z]{1,10}){0,2}\b",
+            r"\b(?:DOC|PM|P[O0]S|RC|PO|QT|INV|DN|TS|IQC|I[O0]C|QC|RTN|RCM|TRF|MV)(?:[-_][A-Z][A-Z0-9]{1,9})*[-_]\d{3,4}(?:[-_][A-Z0-9]*\d[A-Z0-9]*)*(?:[-_][A-Z]{1,10}){0,2}\b",
             r"\bINV(?:[-_ ]+[A-Z]{2,10}){1,3}[-_ ]+\d{3,4}\b",
         ]
         candidates: list[str] = []
-        compact_text = re.sub(r"(?<=\bINV-\d{4})-\s*-\s*(?=\d)", "-", text, flags=re.IGNORECASE)
+        compact_text = self._document_number_search_text(re.sub(r"(?<=\bINV-\d{4})-\s*-\s*(?=\d)", "-", text, flags=re.IGNORECASE))
         for pattern in patterns:
             candidates.extend(match.group(0) for match in re.finditer(pattern, compact_text, flags=re.IGNORECASE))
         normalized = [self._normalize_document_number(candidate) for candidate in candidates]
@@ -844,6 +866,8 @@ class DocumentParser:
         text = re.sub(r"-{2,}", "-", text)
         text = re.sub(r"^IDOC(?=-)", "DOC", text, flags=re.IGNORECASE)
         text = re.sub(r"^FAXx-", "FAX-", text, flags=re.IGNORECASE)
+        text = re.sub(r"^P[0O]S(?=-)", "POS", text, flags=re.IGNORECASE)
+        text = re.sub(r"^I[O0]C(?=-)", "IQC", text, flags=re.IGNORECASE)
         text = re.sub(r"^PO0-", "PO-", text, flags=re.IGNORECASE)
         text = re.sub(r"^(QC-)", "IQC-", text, flags=re.IGNORECASE)
         if re.match(r"^S-\d{4}-\d{4}-", text, flags=re.IGNORECASE):
@@ -883,6 +907,10 @@ class DocumentParser:
         score = 0
         if re.match(r"^(?:DOC|PM|POS|RC|PO|QT|INV|DN|TS|IQC|IOC|QC|RTN|RCM|TRF|MV|FAX-PO)-", text, flags=re.IGNORECASE):
             score += 40
+        if re.match(r"^IQC-", text, flags=re.IGNORECASE):
+            score += 4
+        if re.match(r"^IOC-", text, flags=re.IGNORECASE):
+            score -= 4
         if re.match(r"^FAX(?:-[A-Z0-9]{2,10})*-PO-", text, flags=re.IGNORECASE):
             score += 40
         if re.search(r"\d{4}", text):
@@ -970,7 +998,7 @@ class DocumentParser:
 
     def _extract_business_fields(self, text: str, doc_type: DocumentType) -> dict:
         fields: dict[str, object] = {}
-        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원문서", "원 문서", "윗문서", "완문서", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        related_document_number = self._extract_labeled_text(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 원 납품서", "관련원납품서", "관련 문서번호", "관련문서번호", "원문서", "원 문서", "윗문서", "완문서", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
         if related_document_number:
             fields["related_document_number"] = self._normalize_document_number(related_document_number) or related_document_number
         if doc_type == DocumentType.quotation:
@@ -3965,6 +3993,28 @@ class DocumentParser:
             value = f"0{value[1:]}"
         return value
 
+    def _confirmed_line_items_sum(self, line_items: list[dict], field: str) -> Decimal | None:
+        total = Decimal("0")
+        found = False
+        for item in line_items or []:
+            if self._line_item_amount_is_unconfirmed(item):
+                continue
+            value = self._to_decimal(str(item.get(field))) if item.get(field) not in (None, "", []) else None
+            if value is None:
+                continue
+            total += value
+            found = True
+        return total if found else None
+
+    def _line_item_amount_is_unconfirmed(self, item: dict) -> bool:
+        text = " ".join(str(item.get(field) or "") for field in ["item_name", "specification", "unit_price", "note", "remarks"])
+        warnings = {str(warning) for warning in item.get("validation_warnings") or []}
+        warnings.update(str(flag) for flag in item.get("review_flags") or [])
+        return bool(
+            re.search(r"(별도\s*협의|미확정|옵션.*확정.*아니|재견적|option.*not.*confirmed)", text, flags=re.IGNORECASE)
+            or warnings.intersection({"option_amount_not_confirmed", "quotation_option_review_required", "row_amount_hidden_do_not_infer"})
+        )
+
     def _clean_code_value(self, value: object) -> str | None:
         cleaned = self._clean_value(value)
         if not cleaned:
@@ -4164,7 +4214,7 @@ class DocumentParser:
             if re.search(r"\bBRK-SUS-[O0]?1\b", code_hint, flags=re.IGNORECASE) and re.search(r"(브라젯|브라겟)", name):
                 name = "스테인리스 브라켓" if re.search(r"(스테인리스|스테인레스|스텐|sus)", name, flags=re.IGNORECASE) else re.sub(r"브라[젯겟]", "브라켓", name)
             if name:
-                item["item_name"] = name
+                item["item_name"] = self._normalize_item_name_ocr_confusions(name)
         code = item.get("item_code") or item.get("document_item_code") or item.get("source_item_code")
         if code:
             normalized_code = self._normalize_document_item_code(str(code))
@@ -4189,6 +4239,16 @@ class DocumentParser:
             if "item_code_name_conflict" not in item["validation_warnings"]:
                 item["validation_warnings"].append("item_code_name_conflict")
         return item
+
+    def _normalize_item_name_ocr_confusions(self, value: str) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if not text:
+            return text
+        text = re.sub(r"(?<=\bSUS\s)불트\b", "볼트", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b불트\b(?=\s*M\d)", "볼트", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b평와서\b", "평와셔", text)
+        text = re.sub(r"\b(SUS\s*)와서\b", r"\1와셔", text, flags=re.IGNORECASE)
+        return text
 
     def _normalize_document_item_code(self, value: str) -> str:
         code = value.strip()
@@ -4698,6 +4758,12 @@ class DocumentParser:
 
     def _normalize_raw_text_lines(self, raw_text: str) -> str:
         return re.sub(r"\\n", "\n", str(raw_text or ""))
+
+    def _document_number_search_text(self, text: str) -> str:
+        normalized = str(text or "")
+        normalized = re.sub(r"\bP[0O]S(?=[-_ ]?\d{4})", "POS", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\bI[O0]C(?=[-_ ]?\d{4})", "IQC", normalized, flags=re.IGNORECASE)
+        return normalized
 
     def _normalize_specification_value(self, value: object) -> str | None:
         cleaned = self._clean_value(value)

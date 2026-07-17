@@ -19,6 +19,21 @@ MANUFACTURING_TYPES = {
     DocumentType.delivery_note,
     DocumentType.invoice,
     DocumentType.packing_list,
+    DocumentType.inspection_report,
+}
+
+MANUFACTURING_CATEGORIES = {
+    "purchase_order",
+    "quotation",
+    "transaction_statement",
+    "delivery_note",
+    "invoice",
+    "packing_list",
+    "inspection_report",
+    "internal_transfer",
+    "return_note",
+    "credit_note",
+    "pos_daily_settlement",
 }
 
 NUMERIC_LINE_FIELDS = {"quantity", "unit_price", "supply_amount", "tax_amount", "line_total"}
@@ -36,7 +51,7 @@ class AIResultMerger:
     """Conservative merge policy for deterministic parser and AI correction."""
 
     def merge(self, parsed: ParsedDocument, ai_result: AIDocumentUnderstandingResult) -> AIMergeResult:
-        if parsed.document_type not in MANUFACTURING_TYPES:
+        if not self._should_merge(parsed):
             return AIMergeResult(result=ai_result)
         merged = copy.deepcopy(ai_result)
         issues: list[dict[str, Any]] = []
@@ -58,7 +73,11 @@ class AIResultMerger:
             value, issues = self._merge_amount_field(field_name, parser_value, ai_value, issues)
             setattr(merged, field_name, value)
 
-        merged.line_items, line_issues = self._merge_line_items(parsed.line_items, merged.line_items)
+        if self._line_items_optional(parsed):
+            merged.line_items = list(parsed.line_items or [])
+            line_issues = []
+        else:
+            merged.line_items, line_issues = self._merge_line_items(parsed.line_items, merged.line_items)
         issues.extend(line_issues)
         if issues:
             merged.low_confidence_fields = list(dict.fromkeys(list(merged.low_confidence_fields or []) + [issue["code"] for issue in issues]))
@@ -66,6 +85,16 @@ class AIResultMerger:
             merged.review_required = True
         merged.merge_strategy = "deterministic_parser_first_ai_gap_fill"
         return AIMergeResult(result=merged, review_issues=issues)
+
+    def _should_merge(self, parsed: ParsedDocument) -> bool:
+        if parsed.document_type in MANUFACTURING_TYPES:
+            return True
+        values = {str(parsed.category or "").casefold(), *(str(tag or "").casefold() for tag in parsed.tags or [])}
+        return bool(values.intersection(MANUFACTURING_CATEGORIES))
+
+    def _line_items_optional(self, parsed: ParsedDocument) -> bool:
+        values = {str(parsed.category or "").casefold(), *(str(tag or "").casefold() for tag in parsed.tags or [])}
+        return bool(values.intersection({"pos_daily_settlement", "settlement_summary", "daily_sales_settlement"}))
 
     def _merge_text_field(self, field: str, parser_value: Any, ai_value: Any, issues: list[dict[str, Any]]):
         parser_text = self._clean_text(parser_value)

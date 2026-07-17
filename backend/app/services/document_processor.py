@@ -2781,7 +2781,10 @@ class DocumentProcessor:
                     review_flags.append(suppression_code)
                 safe_item["review_flags"] = sorted(set(review_flags))
             safe_items.append(safe_item)
-        return safe_items
+        try:
+            return self.parser._dedupe_line_items(safe_items)
+        except Exception:
+            return safe_items
 
     def _vl_line_item_has_hidden_amount_review_signal(
         self,
@@ -3819,7 +3822,22 @@ class DocumentProcessor:
                 return True
             if name_overlap and (candidate_unit_price is not None or candidate_line_total is not None):
                 return True
+            if (name_compatible or fuzzy_name_compatible or name_overlap) and self._line_item_amount_identity_compatible(candidate, item):
+                return True
         return False
+
+    def _line_item_amount_identity_compatible(self, candidate: dict, existing: dict) -> bool:
+        comparable_fields = ("quantity", "unit_price", "supply_amount", "tax_amount", "line_total")
+        compared = 0
+        for field in comparable_fields:
+            left = self._vl_decimal(candidate.get(field))
+            right = self._vl_decimal(existing.get(field))
+            if left is None or right is None:
+                continue
+            compared += 1
+            if left != right and abs(left) != abs(right):
+                return False
+        return compared >= 2
 
     def _layout_names_compatible(self, left: str, right: str) -> bool:
         if not left or not right or len(left) < 4 or len(right) < 4:
@@ -4415,7 +4433,7 @@ class DocumentProcessor:
             *(getattr(parsed, "tags", None) or []),
         ]
         semantic_text = " ".join(str(value or "") for value in semantic_values)
-        return bool(re.search(r"\b(?:internal_transfer|return_note|credit_note)\b", semantic_text, flags=re.IGNORECASE))
+        return bool(re.search(r"\b(?:internal_transfer|return_note|credit_note|pos_daily_settlement)\b", semantic_text, flags=re.IGNORECASE))
 
     def _normalize_manufacturing_dates(self, parsed: object, issue_date, due_date) -> tuple:
         doc_type = getattr(getattr(parsed, "document_type", None), "value", str(getattr(parsed, "document_type", "") or ""))
@@ -4567,8 +4585,12 @@ class DocumentProcessor:
         taxonomy = self.taxonomy.classify(document, document.raw_text or "")
         no_price_quantity_doc = self._is_no_price_quantity_document(document) or taxonomy.amount_required is False
         party_optional_doc = no_price_quantity_doc or taxonomy.party_required is False
+        document_has_item_code_evidence = self._document_has_item_code_evidence(document)
         low_confidence = list(document.low_confidence_fields or [])
         if not document.line_items:
+            if self._line_items_optional_document_for_review(document, taxonomy):
+                document.low_confidence_fields = sorted(set(low_confidence))
+                return bool(low_confidence)
             low_confidence.append("missing_line_items")
             document.low_confidence_fields = sorted(set(low_confidence))
             return True
@@ -4582,12 +4604,12 @@ class DocumentProcessor:
                 low_confidence.append(f"missing_price_or_total{code_suffix}")
             if self._line_item_warnings_require_amount_review(item.get("validation_warnings") or []):
                 low_confidence.append(f"invalid_line_amount{code_suffix}")
-            if item.get("item_code") in (None, "", []) and item.get("internal_item_code") in (None, "", []):
+            if document_has_item_code_evidence and not no_price_quantity_doc and item.get("item_code") in (None, "", []) and item.get("internal_item_code") in (None, "", []):
                 low_confidence.append(f"missing_item_code{code_suffix}")
             match_status = item.get("item_master_match_status")
             if match_status == "skipped_no_item_master" and item.get("item_code") in (None, "", []):
                 low_confidence.append("item_matching_skipped")
-            elif match_status in {"ambiguous", "needs_review", "unmatched"}:
+            elif match_status in {"ambiguous", "needs_review"}:
                 low_confidence.append(f"item_master_match_required{code_suffix}")
         if self._manufacturing_total_mismatch(document):
             low_confidence.append("amount_mismatch")
@@ -4602,10 +4624,36 @@ class DocumentProcessor:
             ]
         if doc_type == "purchase_order" and not document.due_date:
             low_confidence.append("missing_due_date")
-        if doc_type == "invoice" and not document.due_date:
+        profile_values = {str(value) for value in [taxonomy.document_profile, *(taxonomy.document_profiles or [])] if value}
+        if doc_type == "invoice" and "tax_document" not in profile_values and not document.due_date:
             low_confidence.append("missing_payment_due_date")
         document.low_confidence_fields = sorted(set(low_confidence))
         return bool(document.low_confidence_fields)
+
+    def _line_items_optional_document_for_review(self, document: Document, taxonomy) -> bool:
+        values = {
+            str(value).casefold()
+            for value in [
+                document.category,
+                *(document.tags or []),
+                getattr(taxonomy, "document_subtype", None),
+                getattr(taxonomy, "document_profile", None),
+                *(getattr(taxonomy, "document_profiles", None) or []),
+            ]
+            if value
+        }
+        return bool(values.intersection({"pos_daily_settlement", "settlement_summary", "daily_sales_settlement"}))
+
+    def _document_has_item_code_evidence(self, document: Document) -> bool:
+        for item in document.line_items or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("item_code") not in (None, "", []) or item.get("document_item_code") not in (None, "", []) or item.get("source_item_code") not in (None, "", []):
+                return True
+        text = str(document.raw_text or "")
+        if re.search(r"(?:문서\s*)?품목\s*코드|item\s*code|part\s*(?:no|number)|부품\s*번호", text, flags=re.IGNORECASE):
+            return True
+        return False
 
     def _vl_structured_candidate_is_amountless(self, structured: dict) -> bool:
         candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}

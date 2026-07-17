@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.document import Document, DocumentType
+from app.services.ai_document_understanding import AIDocumentUnderstandingResult
+from app.services.ai_merge import AIResultMerger
 from app.services.item_master_matcher import ItemMasterMatcher, parse_item_master_csv
 from app.services.parser import DocumentParser
 from app.services.document_taxonomy import DocumentTaxonomyService
@@ -1579,3 +1581,167 @@ def test_commercial_invoice_converted_total_row_is_not_line_item():
     names = " ".join(item.get("item_name", "") for item in parsed.line_items)
     assert "TOTAL" not in names.upper()
     assert "KRW" not in names.upper()
+
+
+def test_vl_ocr_confusions_are_normalized_for_business_identifiers_and_item_names():
+    parser = DocumentParser()
+
+    delivery = parser.parse(
+        "\n".join([
+            "납품서",
+            "문서번호 DN-2026-0003",
+            "No 품목명 규격 수량 단위 비고",
+            "1 SUS 불트 M5X20 1,000 EA 정상",
+            "2 평와서 M5 2,000 EA 정상",
+        ]),
+        "delivery_ocr_confusions.txt",
+    )
+    assert [item["item_name"] for item in delivery.line_items] == ["SUS 볼트", "평와셔"]
+
+    pos = parser.parse(
+        "\n".join([
+            "쿠팡 POS 메인포스",
+            "정산번호P0s-2026-0004",
+            "일정산 2026.06.09",
+            "실판매금액 955,900",
+            "결제합계 955,900",
+        ]),
+        "pos_settlement_ocr_number.txt",
+    )
+    assert pos.category == "pos_daily_settlement"
+    assert pos.document_number == "POS-2026-0004"
+    assert pos.extracted_amount == Decimal("955900")
+
+    inspection = parser.parse(
+        "\n".join([
+            "입고 검사 기록서",
+            "문서번호",
+            "IQC-2026-0007",
+            "문서번호",
+            "IOC-2026-0007",
+            "No 품목 규격 입고수량 합격 불량 판정",
+            "1 S45C PIN 8X60 300 300 0 합격",
+        ]),
+        "inspection_ocr_number.txt",
+    )
+    assert inspection.document_number == "IQC-2026-0007"
+
+
+def test_option_quotation_derives_totals_from_confirmed_priced_rows_only():
+    text = "\n".join([
+        "견적서",
+        "문서번호 QT-2026-0005",
+        "견적일 2026.06.15",
+        "수신 대성정공",
+        "선택 품목 규격 수량 단가 공급가액 세액 합계",
+        "A 산업용 센서 SN-240 10 38,000 380,000 38,000 418,000",
+        "B 컨트롤 박스 CB-9 2 210,000 420,000 42,000 462,000",
+        "옵션 설치비 현장 상황별 1 별도협의",
+        "옵션 항목은 확정 금액이 아니므로 발주 전 재견적 필요",
+    ])
+
+    parsed = DocumentParser().parse(text, "quotation_with_unpriced_option.txt")
+
+    assert parsed.extracted_amount == Decimal("880000")
+    assert parsed.subtotal == Decimal("800000")
+    assert parsed.tax == Decimal("80000")
+    assert [item["item_name"] for item in parsed.line_items] == ["A 산업용 센서", "B 컨트롤 박스"]
+
+
+def test_party_extraction_prefers_inline_value_over_stacked_table_header():
+    text = "\n".join([
+        "거래명세서",
+        "문서번호 TS-2026-0008",
+        "공급자",
+        "공급받는자",
+        "신우금속",
+        "경기 화성시 팔탄면 제조로 12",
+        "거래일 2026.06.10",
+        "공급자 신우금속",
+        "공급받는자 대성정공",
+        "No 품목 규격 수량 단가 공급가액 세액 합계",
+        "1 포장비 - 1 15,000 15,000 1,500 16,500",
+        "합계 16,500",
+    ])
+
+    parsed = DocumentParser().parse(text, "transaction_statement_party_header.txt")
+
+    assert parsed.vendor_name == "신우금속"
+    assert parsed.customer_name == "대성정공"
+
+
+def test_ai_merge_uses_parser_for_general_business_profiles_without_promoting_summary_rows():
+    parsed = DocumentParser().parse(
+        "\n".join([
+            "쿠팡 POS 메인포스",
+            "정산번호P0s-2026-0004",
+            "일정산 2026.06.09",
+            "실판매금액 955,900",
+            "결제합계 955,900",
+        ]),
+        "pos_settlement_photo.txt",
+    )
+    ai_result = AIDocumentUnderstandingResult(
+        document_type=DocumentType.general_document,
+        category="pos_daily_settlement",
+        extracted_amount=Decimal("955900"),
+        line_items=[{"item_name": "결제합계", "line_total": 955900}],
+    )
+
+    merged = AIResultMerger().merge(parsed, ai_result).result
+
+    assert merged.document_number == "POS-2026-0004"
+    assert merged.category == "pos_daily_settlement"
+    assert merged.line_items == []
+
+
+def test_workflow_does_not_require_line_items_for_pos_settlement_or_item_codes_when_column_absent():
+    pos_document = Document(
+        original_filename="pos.jpg",
+        stored_file_path="/tmp/pos.jpg",
+        mime_type="image/jpeg",
+        document_type=DocumentType.general_document,
+        category="pos_daily_settlement",
+        tags=["pos_daily_settlement"],
+        document_number="POS-2026-0004",
+        extracted_amount=Decimal("955900"),
+        raw_text="일정산\n실판매금액 955,900\n결제합계 955,900",
+    )
+    workflow = DocumentWorkflowEnrichmentService().enrich(pos_document, pos_document.raw_text)
+    assert "missing_line_items" not in {issue["code"] for issue in workflow.workflow_metadata["normalized_review_issues"]}
+
+    invoice_document = Document(
+        original_filename="tax-invoice.txt",
+        stored_file_path="/tmp/tax-invoice.txt",
+        mime_type="text/plain",
+        document_type=DocumentType.invoice,
+        category="invoice",
+        document_number="INV-2026-0002",
+        issue_date=date(2026, 6, 12),
+        vendor_name="동해산업",
+        customer_name="대성정공",
+        extracted_amount=Decimal("801900"),
+        subtotal=Decimal("729000"),
+        tax=Decimal("72900"),
+        line_items=[
+            {"item_name": "PCB Connector", "quantity": 200, "unit_price": 1250, "supply_amount": 250000, "tax_amount": 25000},
+            {"item_name": "Cable Harness", "quantity": 80, "unit_price": 2800, "supply_amount": 224000, "tax_amount": 22400},
+        ],
+        raw_text="세금계산서\n공급자 동해산업\n공급받는자 대성정공",
+    )
+    workflow = DocumentWorkflowEnrichmentService().enrich(invoice_document, invoice_document.raw_text)
+    missing_code_issues = [
+        issue for issue in workflow.workflow_metadata["normalized_review_issues"]
+        if issue["code"] == "missing_document_item_code"
+    ]
+    assert missing_code_issues
+    assert {issue["severity"] for issue in missing_code_issues} == {"info"}
+
+    invoice_document.raw_text = "세금계산서\n품목코드 품목명 수량 단가 합계\n공급자 동해산업\n공급받는자 대성정공"
+    workflow = DocumentWorkflowEnrichmentService().enrich(invoice_document, invoice_document.raw_text)
+    missing_code_issues = [
+        issue for issue in workflow.workflow_metadata["normalized_review_issues"]
+        if issue["code"] == "missing_document_item_code"
+    ]
+    assert missing_code_issues
+    assert {issue["severity"] for issue in missing_code_issues} == {"warning"}

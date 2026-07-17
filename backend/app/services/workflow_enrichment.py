@@ -233,7 +233,7 @@ class DocumentWorkflowEnrichmentService:
 
     def _manufacturing_business_fields(self, document: Document, text: str, doc_type: str) -> dict[str, str | list[str]]:
         fields: dict[str, str | list[str]] = {}
-        related_document_number = self._extract_labeled_text_multiline(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 문서번호", "관련문서번호", "원 납품서", "원납품서", "related delivery note", "related document", "source document"])
+        related_document_number = self._extract_labeled_text_multiline(text, ["관련납품서", "관련 원문서", "관련원문서", "관련 원 납품서", "관련원납품서", "관련 문서번호", "관련문서번호", "원문서", "원 문서", "원 납품서", "원납품서", "original document", "related delivery note", "related document", "source document"])
         if related_document_number:
             fields["related_document_number"] = related_document_number
         if doc_type == "purchase_order":
@@ -264,9 +264,18 @@ class DocumentWorkflowEnrichmentService:
         reasons: list[dict[str, Any]] = []
         doc_type = getattr(document.document_type, "value", str(document.document_type or ""))
         taxonomy = taxonomy or self.taxonomy.classify(document, "")
+        profile_values = {
+            str(value)
+            for value in [
+                taxonomy.document_profile,
+                *(taxonomy.document_profiles or []),
+            ]
+            if value
+        }
         no_price_quantity_doc = self._is_no_price_quantity_document(document) or taxonomy.amount_required is False
         option_quote_doc = self._is_option_quote_document(document, business_fields, taxonomy)
         party_optional_doc = no_price_quantity_doc or taxonomy.party_required is False
+        document_has_item_code_evidence = self._document_has_item_code_evidence(document)
         if "return_document" in set(taxonomy.document_profiles or []):
             reasons.append(self._review_reason(
                 "amount_direction_requires_review",
@@ -290,7 +299,7 @@ class DocumentWorkflowEnrichmentService:
             reasons.append(self._review_reason("missing_issue_date", f"{self._manufacturing_issue_label(doc_type)} 미확인", "issue_date"))
         if doc_type == "purchase_order" and not document.due_date:
             reasons.append(self._review_reason("missing_due_date", "납기일 미확인", "due_date"))
-        if doc_type == "invoice" and not business_fields.get("payment_due_date"):
+        if doc_type == "invoice" and "tax_document" not in profile_values and not business_fields.get("payment_due_date"):
             reasons.append(self._review_reason("missing_payment_due_date", "지급기한 미확인", "due_date"))
         if doc_type == "transaction_statement" and business_fields.get("statement_balance_summary_present"):
             reasons.append(self._review_reason(
@@ -304,7 +313,7 @@ class DocumentWorkflowEnrichmentService:
                 "옵션 견적서: 최종 합계는 옵션 선택 후 확정 필요",
                 "total_amount",
             ))
-        if not document.line_items:
+        if not document.line_items and not self._line_items_optional_document(document, taxonomy):
             reasons.append(self._review_reason("missing_line_items", "품목 정보가 추출되지 않았습니다.", "line_items"))
         for index, item in enumerate(document.line_items or [], start=1):
             if item.get("item_name") in (None, "", []):
@@ -338,13 +347,14 @@ class DocumentWorkflowEnrichmentService:
                     reasons.append(self._review_reason("item_code_name_conflict", f"{index}번째 품목명과 품목코드 매칭이 충돌합니다.", "line_items.internal_item_code", index - 1))
             internal_code = item.get("internal_item_code")
             if item.get("item_code") in (None, "", []):
-                severity = "info" if internal_code not in (None, "", []) else "warning"
+                severity = "warning" if document_has_item_code_evidence and internal_code in (None, "", []) and not no_price_quantity_doc else "info"
                 reasons.append(self._review_reason("missing_document_item_code", f"{index}번째 품목 문서 품목코드 미확인", "line_items.item_code", index - 1, severity=severity))
             match_status = item.get("item_master_match_status")
             if match_status == "ambiguous":
                 reasons.append(self._review_reason("internal_item_ambiguous", f"{index}번째 품목 내부 품목코드 후보 확인 필요", "line_items.internal_item_code", index - 1))
             elif match_status == "unmatched":
-                reasons.append(self._review_reason("internal_item_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1))
+                severity = "warning" if document_has_item_code_evidence and item.get("item_code") not in (None, "", []) and not no_price_quantity_doc else "info"
+                reasons.append(self._review_reason("internal_item_unmatched", f"{index}번째 품목 내부 품목코드 미매칭", "line_items.internal_item_code", index - 1, severity=severity))
         if any(
             item.get("item_master_match_status") == "skipped_no_item_master" and item.get("item_code") in (None, "", [])
             for item in document.line_items or []
@@ -413,6 +423,34 @@ class DocumentWorkflowEnrichmentService:
                 or bool(re.search(r"(옵션|option).*?(선택|확정|합산하면\s*안)|선택\s*후\s*확정", text, flags=re.IGNORECASE | re.DOTALL))
             )
         )
+
+    def _line_items_optional_document(self, document: Document, taxonomy: DocumentTaxonomy) -> bool:
+        values = {
+            str(value).casefold()
+            for value in [
+                document.category,
+                *(document.tags or []),
+                taxonomy.document_subtype,
+                taxonomy.document_profile,
+                *(taxonomy.document_profiles or []),
+            ]
+            if value
+        }
+        if values.intersection({"pos_daily_settlement", "settlement_summary", "daily_sales_settlement"}):
+            return True
+        text = " ".join(values)
+        return bool(re.search(r"(pos[_ -]?daily[_ -]?settlement|settlement[_ -]?summary)", text, flags=re.IGNORECASE))
+
+    def _document_has_item_code_evidence(self, document: Document) -> bool:
+        for item in document.line_items or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("item_code") not in (None, "", []) or item.get("document_item_code") not in (None, "", []) or item.get("source_item_code") not in (None, "", []):
+                return True
+        text = str(document.raw_text or "")
+        if re.search(r"(?:문서\s*)?품목\s*코드|item\s*code|part\s*(?:no|number)|부품\s*번호", text, flags=re.IGNORECASE):
+            return True
+        return False
 
     def _suppress_user_facing_amount_warning(
         self,
