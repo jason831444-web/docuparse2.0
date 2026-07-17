@@ -729,6 +729,7 @@ class DocumentProcessor:
             "text": text,
             "promoted": bool((metadata.get("vl_candidate_summary") or {}).get("promotion_applied")),
             "has_structured_candidate": has_structured_candidate,
+            "source_suffix": stored_path.suffix.casefold(),
         }
 
     def _select_vl_input_variant(self, stored_path: Path, document: Document) -> dict[str, Any]:
@@ -1211,6 +1212,9 @@ class DocumentProcessor:
             return False
         provider_metadata = metadata.get("vl_provider_metadata") if isinstance(metadata.get("vl_provider_metadata"), dict) else {}
         table_count = int(provider_metadata.get("table_count") or 0)
+        image_suffixes = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+        if attempt.get("source_suffix") in image_suffixes and self._vl_primary_text_is_usable(attempt.get("text")):
+            return True
         if summary.get("gate_decision") == "reject":
             return False
         if summary.get("promotion_applied") or summary.get("promotion_mode") in {"full", "partial"}:
@@ -1220,6 +1224,20 @@ class DocumentProcessor:
         if self._vl_primary_structured_candidate(attempt):
             return summary.get("gate_decision") not in {"review_required", "reject"}
         return False
+
+    def _vl_primary_text_is_usable(self, text: Any) -> bool:
+        cleaned = self._clean_vl_raw_text(str(text or ""))
+        if len(cleaned) < 20:
+            return False
+        if re.search(r"(unable to|cannot|can't|sorry|no text|no readable|not able)", cleaned, flags=re.IGNORECASE):
+            return False
+        useful_lines = [
+            line
+            for line in cleaned.splitlines()
+            if re.search(r"[가-힣A-Za-z0-9]", line)
+            and not self._looks_like_generated_upload_path_line(line)
+        ]
+        return len(useful_lines) >= 3
 
     def _apply_vl_structured_candidate_to_parsed(self, parsed: Any, structured: dict) -> None:
         candidate_doc = structured.get("document") if isinstance(structured.get("document"), dict) else {}

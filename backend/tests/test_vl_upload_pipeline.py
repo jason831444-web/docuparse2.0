@@ -2497,6 +2497,51 @@ def test_process_uses_partial_vl_primary_and_skips_ppocr_ingestion_for_review_ca
     assert summary["fallback_used"] is False
 
 
+def test_process_uses_usable_vl_text_even_when_structured_gate_rejects(tmp_path):
+    path = tmp_path / "purchase-order.jpg"
+    _write_test_image(path)
+    text = """
+    문서번호:DOC-006
+    발주서
+    공급자 상호: (주)미래테크
+    공급받는자 상호: (주)시흥대야점
+    No 품목명 품목코드 수량 단위 단가 공급가액
+    1 AL6061 환봉 AL6061-10 20 KG 7,200 144,000
+    합계 158,400
+    """
+    document = Document(
+        original_filename="purchase-order.jpg",
+        stored_file_path=str(path),
+        mime_type="image/jpeg",
+        processing_status=ProcessingStatus.uploaded,
+    )
+    processor = _processor(
+        FakeVLWorker(
+            {
+                "ok": True,
+                "provider": "paddleocr_vl_1_6_gguf",
+                "classification": "warn",
+                "text": text,
+                "validation": {"status": "reject", "ok": False},
+            }
+        )
+    )
+
+    class BrokenIngestion:
+        document_quality = processor.ingestion.document_quality
+
+        def ingest(self, *args, **kwargs):
+            raise AssertionError("PP-OCRv4 ingestion should be skipped when VL text is usable")
+
+    processor.ingestion = BrokenIngestion()
+
+    result = processor.process(FakeSession(document), document)
+
+    assert result.extraction_method == "paddleocr_vl_1_6_gguf_primary_reader"
+    assert result.vendor_name == "미래테크"
+    assert result.customer_name == "시흥대야점"
+
+
 def test_process_uses_official_table_without_text_and_skips_ppocr_ingestion(tmp_path):
     path = tmp_path / "incoming-inspection.png"
     path.write_bytes(b"fake image")
