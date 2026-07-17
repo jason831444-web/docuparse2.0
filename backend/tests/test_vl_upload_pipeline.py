@@ -228,6 +228,29 @@ def test_final_business_safety_reconciles_receipt_amount_summary():
     assert "receipt_amount_summary_reconciled" in {issue["code"] for issue in issues}
 
 
+def test_final_business_safety_clears_duplicate_or_identifier_customer():
+    duplicate = _document(
+        document_type=DocumentType.quotation,
+        vendor_name="태광부",
+        customer_name="태광부품",
+        line_items=[{"item_name": "PCB Connector 12P", "quantity": 3}],
+    )
+    identifier = _document(
+        document_type=DocumentType.invoice,
+        vendor_name="세진푸드",
+        customer_name="사염자번호",
+        line_items=[{"item_name": "PCB Connector 12P", "quantity": 3}],
+    )
+
+    processor = DocumentProcessor()
+    processor._apply_final_business_safety_overrides(duplicate, "견적서")
+    processor._apply_final_business_safety_overrides(identifier, "세금계산서")
+
+    assert duplicate.vendor_name == "태광부품"
+    assert duplicate.customer_name is None
+    assert identifier.customer_name is None
+
+
 def test_ai_parsed_store_candidate_fills_receipt_vendor_without_guessing_customer():
     document = _document(document_type=DocumentType.receipt, vendor_name=None, customer_name=None, merchant_name=None)
     metadata = {}
@@ -526,7 +549,7 @@ def test_supplier_customer_block_promotes_labeled_party_candidates():
         "공급받는자\n상호: (주)신우정밀\n품목 수량 단가",
     )
 
-    assert document.vendor_name == "삼광유동"
+    assert document.vendor_name == "삼광유통"
     assert document.customer_name == "신우정밀"
     assert document.field_sources["vendor_name"] == "raw_text_party_block"
     assert document.field_sources["customer_name"] == "raw_text_party_block"

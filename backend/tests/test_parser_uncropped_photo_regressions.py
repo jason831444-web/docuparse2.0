@@ -126,3 +126,27 @@ def test_split_party_role_rows_keep_customer_role_queue():
     assert parsed.vendor_name == "(주)우성기계"
     assert parsed.customer_name == "(주)코리아팩토리"
     assert parsed.extracted_amount == Decimal("1274856")
+
+
+def test_party_ocr_dictionary_corrects_common_truncated_names():
+    raw = """
+    거래명세서
+    공급자
+    상호:
+    주태광부
+    공급받는자
+    상호:
+    주삼광유동
+    문서번호:DOC-010
+    작성일:2026.06.13
+    No 품목명 규격/코드 수량 단위 단가 합계금액
+    1 식자재 감자 20kg POTATO-20K 3 BOX 27,000 81,000
+    공급가액 81,000
+    부가세 8,100
+    총합계 89,100
+    """
+
+    parsed = DocumentParser().parse(raw, "DOC-010_transaction_statement_uncropped_photo.pdf")
+
+    assert parsed.vendor_name == "(주)태광부품"
+    assert parsed.customer_name == "(주)삼광유통"

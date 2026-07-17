@@ -3334,6 +3334,12 @@ class DocumentProcessor:
         document.vendor_name = self._normalize_party_name(document.vendor_name)
         document.customer_name = self._normalize_party_name(document.customer_name)
         document.merchant_name = self._normalize_party_name(document.merchant_name)
+        if (
+            document.vendor_name
+            and document.customer_name
+            and self.parser._normalized_party_key(document.vendor_name) == self.parser._normalized_party_key(document.customer_name)
+        ):
+            document.customer_name = None
 
     def _select_document_currency(self, parsed: object, ai_result: object, raw_text: str) -> str | None:
         parsed_currency = getattr(parsed, "currency", None)
@@ -3564,7 +3570,7 @@ class DocumentProcessor:
             return True
         if re.search(r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery)", text, flags=re.IGNORECASE):
             return True
-        if re.search(r"(담당|당당|검사자|작성자|검수자|사업자\s*번호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액|vendor\s*sku|item\s*code|unit\s*price|line\s*total|\bqty\b|\bspec\b)", text, flags=re.IGNORECASE):
+        if re.search(r"(담당|당당|검사자|작성자|검수자|사업자\s*번호|사[업엄염연][자지]?\s*[번변]\s*호|등록번호|합계|공급가액|세액|부가세|품목|수량|단가|금액|vendor\s*sku|item\s*code|unit\s*price|line\s*total|\bqty\b|\bspec\b)", text, flags=re.IGNORECASE):
             return True
         if re.search(r"(회계팀|구매팀|품질팀|품길팀)", text, flags=re.IGNORECASE) and not re.search(
             r"(정공|산업|테크|금속|부품|전자|제조|상사|공업|엔지니어링|솔루션|시스템|마트|LLC|Inc|Co\\.)",

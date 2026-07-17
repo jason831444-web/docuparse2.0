@@ -147,6 +147,8 @@ MANUFACTURING_TYPES = {
 PARTY_OCR_CORRECTIONS = {
     "대성경공": "대성정공",
     "태광부풍": "태광부품",
+    "태광부": "태광부품",
+    "삼광유동": "삼광유통",
     "우리경멸": "우리정밀",
     "무리정밀": "우리정밀",
     "시흥대아점": "시흥대야점",
@@ -157,6 +159,8 @@ PARTY_OCR_CORRECTIONS = {
     "우성기격": "우성기계",
     "우성기제": "우성기계",
     "동전전자": "동진전자",
+    "세음건설": "세움건설",
+    "비주세음건설": "세움건설",
     "세옹건설": "세움건설",
     "세용건설": "세움건설",
     "형무금속": "현무금속",
@@ -1078,7 +1082,7 @@ class DocumentParser:
             return None
         if re.search(
             r"(옵션|별도\s*협의|미확정|긴급\s*납품\s*옵션|fast[-_\s]*delivery|설치비|상황별|품목|규격|수량|단가|공급가액|세액|합계|비고|주의|참고|담당|"
-            r"문서번호|작성일|검사일|유효기간|결제\s*조건|지급\s*조건|납기\s*조건|월말|송금|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
+            r"문서번호|작성일|검사일|유효기간|결제\s*조건|지급\s*조건|납기\s*조건|월말|송금|사[업엄염연][자지]?\s*[번변]\s*호|Lot\s*No|영수증번호|internal\s+transfer|delivery\s+note|tax\s+invoice)",
             text,
             flags=re.IGNORECASE,
         ):
@@ -1104,7 +1108,7 @@ class DocumentParser:
         text = str(value or "")
         compact = re.sub(r"\s+", "", text)
         for wrong, correct in PARTY_OCR_CORRECTIONS.items():
-            if wrong in compact:
+            if wrong in compact and correct not in compact:
                 text = text.replace(wrong, correct)
                 compact = compact.replace(wrong, correct)
         return text.strip(" -:：|")
