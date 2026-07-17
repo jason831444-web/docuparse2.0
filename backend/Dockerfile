@@ -12,7 +12,11 @@ RUN apt-get update \
         tesseract-ocr \
         libgl1 \
         libglib2.0-0 \
-        $([ "$INSTALL_LLAMA_CPP_DEPS" = "true" ] && echo "build-essential cmake") \
+        $([ "$INSTALL_LLAMA_CPP_DEPS" = "true" ] && echo "build-essential cmake musl") \
+    && if [ "$INSTALL_LLAMA_CPP_DEPS" = "true" ] && [ -f /lib/ld-musl-x86_64.so.1 ]; then \
+        ln -sf /lib/ld-musl-x86_64.so.1 /usr/lib/libc.musl-x86_64.so.1; \
+        ldconfig; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-constraints.txt requirements-ocr.txt requirements-ai.txt requirements-llama.txt ./

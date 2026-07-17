@@ -120,6 +120,31 @@ const remoteWorker = providerHealthLabel({
 assert.equal(remoteWorker.label, "VL Reader 정상 · Remote GPU · Multipart Upload");
 assert.match(remoteWorker.detail, /remote-gateway/);
 
+const remoteWorkerHealthOnly = providerHealthLabel({
+  providers: {
+    ocr_engine: "PP-OCRv4",
+    ocr_model: "PP-OCRv4",
+    primary_provider: "paddleocr_vl_1_6_gguf",
+    primary_provider_available: false,
+    primary_reader_available: false,
+    fallback_provider: "paddleocr_ppocrv4",
+    paddleocr_vl_gguf: {
+      status: "remote_primary_reader_candidate",
+      worker_location: "remote",
+      worker_transport: "multipart_upload",
+      worker_url_host: "remote-gateway",
+      model_file: "PaddleOCR-VL-1.6-GGUF.gguf",
+      worker_health: {
+        status: "ok",
+        last_success_at: "2026-07-16T06:11:18+00:00",
+      },
+    },
+  },
+});
+
+assert.equal(remoteWorkerHealthOnly.label, "VL Reader 정상 · Remote GPU · Multipart Upload");
+assert.equal(remoteWorkerHealthOnly.tone, "primary");
+
 const loading = providerHealthLabel(null);
 assert.equal(loading.label, "OCR 상태 확인 중");
 assert.equal(loading.tone, "fallback");

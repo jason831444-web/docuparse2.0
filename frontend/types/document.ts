@@ -284,6 +284,11 @@ export interface ProviderHealth {
       model_file?: string | null;
       mmproj_file?: string | null;
       smoke_passed?: boolean | null;
+      worker_health?: {
+        status?: string | null;
+        last_success_at?: string | null;
+        last_error?: string | null;
+      } | null;
     } | null;
   };
 }

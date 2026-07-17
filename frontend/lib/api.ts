@@ -70,7 +70,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: async () => {
-    const response = await fetch(HEALTH_URL, { cache: "no-store" });
+    const separator = HEALTH_URL.includes("?") ? "&" : "?";
+    const response = await fetch(`${HEALTH_URL}${separator}_=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) throw new Error("OCR 상태를 불러오지 못했습니다");
     return response.json() as Promise<ProviderHealth>;
   },

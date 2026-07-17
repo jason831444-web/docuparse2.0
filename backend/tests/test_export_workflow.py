@@ -1,5 +1,6 @@
-import json
 import csv
+import html
+import json
 from decimal import Decimal
 from datetime import date
 from io import BytesIO, StringIO
@@ -88,12 +89,13 @@ def test_excel_export_applies_template_headers_and_party_tabs():
 
     with ZipFile(BytesIO(documents_to_excel(docs, sheet_mode="party_tabs", template=template))) as archive:
         xml_payload = "\n".join(archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".xml"))
+    decoded_payload = html.unescape(xml_payload)
 
-    assert "네오팩토리" in xml_payload
-    assert "오성테크" in xml_payload
-    assert "품목명" in xml_payload
-    assert "없는필드" in xml_payload
-    assert "거래처 탭" not in xml_payload
+    assert "네오팩토리" in decoded_payload
+    assert "오성테크" in decoded_payload
+    assert "품목명" in decoded_payload
+    assert "없는필드" in decoded_payload
+    assert "거래처 탭" not in decoded_payload
 
 
 def test_excel_export_can_split_by_party_tabs():
